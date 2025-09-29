@@ -57,3 +57,13 @@ DeepSeekV3 一经发布，便在学术界和工业界引发了广泛关注，其
 
 
 因此，选题一经发布，看到大模型量化选题，我感觉既熟悉又兴奋，因此毫不犹豫地选择了这一选题，希望我能学有所获~
+
+### 学习资源
+
+[HDU的课程资料Wiki](https://hdu-cs.wiki/3.AI%E6%A8%A1%E5%9D%97/3.10%E3%80%90LLM%E3%80%91%E5%A4%A7%E8%AF%AD%E8%A8%80%E6%A8%A1%E5%9E%8B/3.10.5LLM%E5%AE%9E%E6%93%8D%E9%A1%B9%E7%9B%AE/3.10.5.6Huggingface%E7%9A%84%E9%87%8F%E5%8C%96%E5%9F%BA%E7%A1%80.html)
+
+[B站上一个Up](https://space.bilibili.com/18235884/lists/2887562?type=season)
+
+[知乎一个专栏](https://zhuanlan.zhihu.com/p/557859725)
+
+[知乎另一个专栏-奶龙](https://zhuanlan.zhihu.com/p/29140505773)
