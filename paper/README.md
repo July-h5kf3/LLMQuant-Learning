@@ -38,7 +38,7 @@
 
 这部分是一些综述，从综述入手一个领域是一个很Nice的选择，不一定要是paper可以是中文期刊甚至博客~
 
-A Survey on Model Compression for Large Language Model(TACL 2023)
+- [ ] A Survey on Model Compression for Large Language Model(TACL 2023)
 
 
 
