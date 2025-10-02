@@ -48,6 +48,7 @@
 
 Awesome系类：[pprp/Awesome-LLM-Quantization: Awesome list for LLM quantization](https://github.com/pprp/Awesome-LLM-Quantization)
 
+[混合精度量化的paper\ List](https://zhuanlan.zhihu.com/p/365272572)(年代比较久远，挑一些顶会的来看吧)
 
 
 
