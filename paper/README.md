@@ -34,6 +34,8 @@
 
 这部分更多收集一些arXiv上比较好的工作以及一些会议的Spotlight和Oral以及Best Paper
 
+- [ ] [视频生成模型的量化]ViDiT-Q: Efficient and Accurate Quantization of Diffusion Transformer(ICLR'2025)
+
 ### 前沿
 
 这部分更多是收集一些大模型厂商的Technical Report，个人认为在资本趋利性下，对显存的”压榨“会做到极致
