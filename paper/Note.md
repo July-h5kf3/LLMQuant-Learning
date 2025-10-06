@@ -1,6 +1,9 @@
+
+
 <center>
     <h1>阅读笔记</h1>
 </center>
+
 
 ### 基础知识
 
@@ -155,6 +158,75 @@ E[模拟量化+反量化]-->C
 F[fp32输入]-->E
 ```
 
+**Hessian矩阵(根据AdaRound论文补充)**
+
+模型的量化前后精度损失在本质上是由于对模型权重$w_i$上加一个小的扰动$\Delta w_i$:
+$$
+\hat w_i = w_i + \Delta w_i
+$$
+而我们关心的是量化前后的损失变化，我们由泰勒展开有:
+$$
+L(w + \Delta w)\approx L(w) + \nabla L(w)^\top \Delta w + \frac{1}{2}\Delta w^{\top} H(w)\Delta w\\
+\Delta L \approx \nabla L^{\top}\Delta w + \frac{1}{2}\Delta w^\top H\Delta w
+$$
+其中第一项为线性近似，由于在训练结束时梯度近似为0因此，影响不大，因此量化的损失的敏感性主要由Hessian项描述，其中H为Hessian矩阵。
+
+
+
+下面对Hessian矩阵的一些性质以及计算做一些简单介绍
+
+
+
+Hessian矩阵被定义为:
+$$
+H = [\frac{\part^2 L}{\part w_i\part w_j}]_{i,j}
+$$
+由于对于连续二阶可微函数，满足混合偏导数相等，因此Hession矩阵是一个对称矩阵
+
+
+
+想要计算Hessian矩阵是困难的，这是因为这是一个$O(W^2)$的过程，但是在模型参数数量一般是M级别的，因此在实际中，我们通常采用近似计算办法。
+
+
+
+- 对角近似
+
+  我们只保留Hessian矩阵的对角线元素$H_{i,i}$，把非对角线元素置为0.(这个方法在很大程度可以可以方便求逆)
+
+  
+
+  对于神经网络中的第j个神经元的输入$a_j$对应权重为$w_{ji}$:
+  $$
+  \frac{\part^2 E_n}{\part w_{ji}^2} = \frac{\part^2 E_n}{\partial a_j^2}z_i^2
+  $$
+  其中$z_i$是上一层神经元的输出。
+
+  而$\frac{\partial^2 E_n}{\part a_j^2}$可以通过链式法则递归计算(类似于反向传播):
+  $$
+  \frac{\part^2 E_n}{\part a_j^2} = \underbrace{\frac{\part}{\part a_j}[h'(a_j)\sum_{k}w_{kj}\frac{\part E_n}{\part a_k}]}_{链式法则}=h'(a_j)^2 \sum_{k,k'}w_{kj}w_{k'j}\frac{\part^2 E_n}{\part w_k\part w_{k'}} + h''(a_j)\sum_k w_{kj}\frac{\part E_n}{\part a_n}
+  $$
+  忽略二阶导中的非对角线项$k\neq k'$:
+  $$
+  \frac{\part^2 E_n}{\part a_j^2}\approx \underbrace{h'(a_j)^2\sum_k w_{kj}^2 \frac{\part^2 E_n}{\part a_k^2}}_{链式法则} + \underbrace{h''(a_j)\sum_{k}w_{kj}\frac{\part E_n}{\part a_k}}_{链式法则}
+  $$
+  从而一次反向传播便可以计算出来，时间复杂度为$O(W)$
+
+- 外积近似
+
+​	在神经网络应用于回归问题时，通常采用下面形式的平方和误差
+$$
+E = \frac{1}{2}\sum_{n=1}^N(y_n-t_n)^2
+$$
+​	那么Hessian矩阵可以写成如下形式:
+$$
+H = \nabla\nabla E = \nabla(\sum_{n=1}^N (y_n-t_n)\nabla y_n) = \sum_{n = 1}^N \nabla y_n(\nabla y_n)^\top + \sum_{n=1}^N(y_n-t)\nabla\nabla y_n
+$$
+​	在网络已经训练好的情况下，输出$y_n$与$t_n$接近，因此第二项可以忽略，由此我们得到了Hessian矩阵的外积近似
+$$
+H\approx \sum_{n=1}^N b_n b_n^\top
+$$
+​	其中，$b_n = \nabla y_n = \nabla a_n$(输出单元的激活函数就是恒等函数)。这种方法中的Hessian矩阵可以跟随反向传播算法在$O(W)$个步骤内高效地求出误差函数地一阶导数。再通过简单地乘法就可以在$O(W^2)$步骤内求出矩阵元素。
+
 ### 论文阅读
 
 **AdaQuant：Accurate Post Training Quantization With Small Calibration Sets**
@@ -207,6 +279,8 @@ $$
 
 
 
+
+
 为了在性能和精度之间做权衡，在量化时我们往往会给不同层的网络分配不同的bit精度。AdaQuant在此思想上，提出了采用整数规划(PI)的方式。
 
 
@@ -236,6 +310,7 @@ Subject\ to\ \sum_{l}\Delta L_{l}\leq \Delta L\\
 $$
 
 
+
 BatchNormalization在部署时，通常会与前面的卷积/全连接层进行融合，这样可以减少推理时的计算量。(这是因为BN的线性变换乘$\gamma/\sqrt{\sigma^2+\epsilon}$，加$\beta-\gamma\mu/\sqrt{\sigma^2+\epsilon}$可以直接合并到权重和偏置中)
 
 然而当网络量化后，会导致激活值的分布发生偏移，即统计量均值$\mu$和方差$\sigma^2$会偏离在全精度模型中应有的值。但是由于BN层已经被融合到了前面的层中，这个偏移无法被校准。基于此，作者采用了一个名为Para-Normalization(PN)的方法来更新BN的统计量，以补偿这种偏差。
@@ -255,3 +330,93 @@ $$
 $$
 W_i' = W_i\frac{\gamma_r}{\sigma};b_i' = \frac{\gamma_r}{\sigma}(b_i - \mu) + \beta_r;\Delta_{w_i}' = \frac{\gamma_r}{\sigma}\Delta_{w_i}
 $$
+**AdaRound:**Up or Down? Adaptive Rounding for Post-Training Quantization
+
+**总结**:本篇文章作者首先从数学角度证明了在模型量化过程中，直接将浮点数进行四舍五入round到最近定点数的方法并不是精度最优的。并且通过了一个简单的实验验证了猜想，随后基于此作者进行一系列的数学推导和数学近似推导除了最终的优化目标:最小化由于量化在预激活值中引入的均方误差，从而提出了自适应的Round方法:AdaRound.这种方法在进行量化时，自适应地决定将浮点值转到最近右定点还是左定点值。AdaRound可以在不需要QAT or finetune的情况下仅使用少量无标签的校准数据在精度上达到SOTA，甚至4bit量化也可以保留较好的精度。
+
+<div style="background-color:#f9f9f9; padding:8px; border-radius:6px;">
+    <b>个人评价</b>:这篇文章的行文流惯，公式推导顶级，从完全理论的方式推导出了大部分量化论文中量化目标函数。
+</div>
+
+首先作者将量化过程定义为了一个对预训练模型权重w的微小扰动$\Delta w$.我们的目标为最小化这个扰动对损失函数$L(w)$造成的影响，即最小化$E[L(w+\Delta w)-L(w)]$,为了近似这个损失，采用了二阶泰勒展开有:
+$$
+L(w + \Delta w)\approx L(w) + \nabla L(w)^\top \Delta w + \frac{1}{2}\Delta w^{\top} H(w)\Delta w\\
+\Delta L \approx \nabla L^{\top}\Delta w + \frac{1}{2}\Delta w^\top H\Delta w
+$$
+由于模型经过预训练损失函数的梯度很小，可以忽略，而高阶项只要扰动$\Delta w$不是特别大，二阶近似往往就是准确的。对于4-bit或更高精度而言这个是成立的。
+
+因此我们可以认为影响模型精度的主要是$\Delta w$以及损失函数的曲率$H(w)$相关。
+
+
+
+令$\Delta w^\top = [\Delta w_1,\Delta w_2]$,$H^{(w)} = \begin{bmatrix}1 & 0.5\\0.5 &1\end{bmatrix} $,那么由此我们可以计算出，量化导致的损失为:
+$$
+\Delta w^\top H^{(w)}\Delta w = \Delta w_1^2 + \Delta w_2^2 + \Delta w_1\Delta w_2
+$$
+对于对角线项$\Delta w_1^2,\Delta w_2^2$而言四舍五入是最优的，最小化了误差，但是对于非对角线项$\Delta w_1\Delta w_2$采用四舍五入就不一定最优了。例如若二者符号取反乘积为负就可以抵消一部分损失的增量。
+
+因此从理论上分析出了四舍五入方法的局限性。后续也从实验上进行了论证，作者采用四舍五入，全部向上，全部向下，随机舍入进行比较，发现在随机舍入中存在比四舍五入高出10%的取舍法，说明在取舍办法中，存在更优的方法。
+
+
+
+这个取舍办法的选取可以通过如下问题描述。
+
+
+
+假设每层权重量化，量化后的权重为$\hat w_i^{(l)}$
+$$
+\hat w_i^{(l)}\in \{w_i^{(l),floor},w_i^{(l),ceil}\}
+$$
+$\Delta w_i^{(l)} = w^{(l)} - \hat w_i^{(l)}$,由此，最优的舍入过程可以描述为以下二元优化问题:
+$$
+\arg \min_{\Delta w} \mathbb{E}[L(x,y,w+\Delta w) - L(x,y,w)]
+$$
+直接对这个式子进行优化并不现实，因为，每次调整$\Delta w$都需要进行一次前向传播，计算成本太高，我们采用前面理论分析时的泰勒展开近似。此外，忽略属于不同层之间权重的交互。优化目标近似为：
+$$
+\arg \min_{\Delta w^{(l)}} \mathbb{E}[\Delta w^{(l)}H^{(w^{(l)})}\Delta w^{(l)}] 
+$$
+但是这个优化过程受限于Hessian矩阵的计算困难以及问题本身是一个NP-Hard问题。因此无法将这个作为最终的优化目标。
+
+我们从Hessian矩阵计算的复杂性来分析
+$$
+\frac{\part^2 L}{\part W^{(l)}_{i,j}\part W^{(l)}_{m,o}} = \frac{\part}{\part W_{m,o}^{(l)}}[\frac{\part L}{\part z_i^{(l)}}\cdot x_j^{(l-1)}] = \frac{\part^2 L}{\part z^{(l)}_i\part z_m^{(l)}}\cdot x_j^{(l-1)}x_i^{(l-1)}
+$$
+写作矩阵的形式
+$$
+H(w^{(l)}) = \mathbb{E}[x^{(l-1)} x^{(l-1)\top}⊗ \nabla^2_{z^{(l)}}L]
+$$
+其中⊗为Kronecker积。由此看出Hessian矩阵的复杂性主要来于二阶导的求取，它需要通过网路的后续层反向传播二阶导数(见对角近似)。
+
+为了解决这个问题，我们采用Hessian矩阵的对角近似，即将其近似为对角矩阵，记作$diag(\Delta^2_{z^{(l)}}L)$。
+$$
+H(w^{(l)}) = \mathbb{E}[x^{(l-1)} x^{(l-1)\top}⊗ diag(\nabla^2_{z^{(l)}}L)]
+$$
+将这个近似带入优化方程中有：
+$$
+\arg \min_{\Delta W_{k,:}^{(l)}} \mathbb{E}[\nabla^2_{z^{(l)}}L_{k,k}\cdot \Delta W_{k,:}^{(l)}x^{(l-1)}x^{(l-1)\top}\Delta W_{k,:}^{(l)\top}]\\
+=\arg\min_{\Delta W_{k,:}^{(l)}} \Delta W_{k,:}^{(l)}\mathbb{E}[x^{(l-1)}x^{(l-1)\top}]\Delta W_{k,:}^{(l)\top}\\
+=\arg \min_{\Delta W_{k,:}^{(l)}} \mathbb{E}[(\Delta W_{k,:}^{(l)}x^{(l-1)})^2]
+$$
+这里是认为$\nabla^2_{z^{(l)}}L_{i,i}$是一个与输入样本数据无关的常量结果。
+
+由此我们推导出，我们只要最小化由于量化而在激活函数$z^{(l)}$中引入的均方误差。这与大部分量化的论文中的结论一致（如AdaQuant）
+
+
+
+想要通过直接求解上面的优化方程仍然是一件困难的事情，因为它是NP-Hard的，因此作者将优化目标放宽为如下形式
+$$
+\arg \min_{V}||Wx-\hat Wx||^2_{F}+\lambda f_{reg}(V)
+$$
+其中$||\cdot||^2_F$为F范数，$\hat W$为优化的软量化权重
+$$
+\hat W = s\cdot clip([\frac{W}{s}] + h(V),n,p)
+$$
+$h(V_{i,j})$可以是任何在0和1之间取值的可微函数，$f_{reg}(V)$是一个可微正则项，用于鼓励$h(V_{i,j})$收敛到0或1.
+
+
+
+但是这个方法存在一个缺陷，无法避免量化误差的不断积累且没有考虑到激活函数，所以做了进一步优化
+$$
+\arg \min_{V}||f_a(Wx)-f_a(\hat W\hat x)||_F^2 + \lambda f_{reg}(V)
+$$
+其中$fa(\cdot)$为激活函数$\hat x$为当前层的反量化输入，x为当前层的浮点输入 
