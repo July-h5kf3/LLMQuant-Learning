@@ -420,3 +420,11 @@ $$
 \arg \min_{V}||f_a(Wx)-f_a(\hat W\hat x)||_F^2 + \lambda f_{reg}(V)
 $$
 其中$fa(\cdot)$为激活函数$\hat x$为当前层的反量化输入，x为当前层的浮点输入 
+
+**ZeroQuant: Efficient and Affordable Post-Training Quantization for Large-Scale Transformers**
+
+
+
+
+
+**总结**：

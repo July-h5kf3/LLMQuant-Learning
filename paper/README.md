@@ -12,15 +12,15 @@
 
 这部分论文无法选作文献汇报
 
-- [x] **AdaRound**:Up or Down? Adaptive Rounding for Post-Training Quantization (ICML 2020)
+- [x] [模型量化,PTQ]**AdaRound**:Up or Down? Adaptive Rounding for Post-Training Quantization (ICML 2020)
 
 ​	本篇文章作者首先从数学角度证明了在模型量化过程中，直接将浮点数进行四舍五入round到最近定点数的方法并不是精度最优的。并且通过了一个简单的实验验证了猜想，随后基于此作者进行一系列的数学推导和数学近似推导除了最终的优化目标:最小化由于量化在预激活值中引入的均方误差，从而提出了自适应的Round方法:AdaRound.这种方法在进行量化时，自适应地决定将浮点值转到最近右定点还是左定点值。AdaRound可以在不需要QAT or finetune的情况下仅使用少量无标签的校准数据在精度上达到SOTA，甚至4bit量化也可以保留较好的精度。
 
-- [ ] **ZeroQuant**:Zeroquant: Efficient and affordable post-training quantization for large-scale transformers (NeurIPS 2022）
+- [ ] [大语言模型量化,PTQ]**ZeroQuant**:Zeroquant: Efficient and affordable post-training quantization for large-scale transformers (NeurIPS 2022）
 
 - [ ] **GPTQ**:Gptq: Accurate post-training quantization for generative pre-trained transformers (ICLR 2023)
 
-- [x] **AdaQuant**:Accurate post training quantization with small calibration sets (ICML 2021)
+- [x] [模型量化,PTQ]**AdaQuant**:Accurate post training quantization with small calibration sets (ICML 2021)
 
 ​	本篇文章的主要贡献在于提出了一个基于小数据集（校验集）的训练后量化方法AdaQuant，AdaQuant通过提出一个block/layer-wise的损失函数，通过在校验集上的训练学习量化参数(重点包括了一个最优的权重扰动，类似于AdaRound来避免四舍五入的不足),实现了减少量化的精度损失；提出了基于PI(整数规划)的bit精度分配方案，但是并没有解释精确损失的累加合理性；提出量化对BN融合造成的统计量偏移问题，并提出了PN(Para-Normalization)来解决这个问题。并在Bert-base网络上实现了不到1%的损失(4-8bit)
 
