@@ -16,13 +16,10 @@
 
 ​	本篇文章作者首先从数学角度证明了在模型量化过程中，直接将浮点数进行四舍五入round到最近定点数的方法并不是精度最优的。并且通过了一个简单的实验验证了猜想，随后基于此作者进行一系列的数学推导和数学近似推导除了最终的优化目标:最小化由于量化在预激活值中引入的均方误差，从而提出了自适应的Round方法:AdaRound.这种方法在进行量化时，自适应地决定将浮点值转到最近右定点还是左定点值。AdaRound可以在不需要QAT or finetune的情况下仅使用少量无标签的校准数据在精度上达到SOTA，甚至4bit量化也可以保留较好的精度。
 
-<<<<<<< HEAD
 - [ ] [大语言模型量化,PTQ]**ZeroQuant**:Zeroquant: Efficient and affordable post-training quantization for large-scale transformers (NeurIPS 2022）
-=======
 - [x] [大语言模型量化,PTQ，硬件适配]**ZeroQuant**:Zeroquant: Efficient and affordable post-training quantization for large-scale transformers (NeurIPS 2022）
 
   ​	这篇文章指出，低比特量化在大型 Transformer 架构模型中精度受限的主要原因是激活值和权重矩阵的值分布方差较大。针对这一问题，提出了 ZeroQuant 方案。该方案主要包括：对权重采用 Group-wise 量化、对激活值采用 Token-wise 量化，这种方法既能适配硬件架构，又能保持较高的精度；同时，通过 Layer-wise 知识蒸馏方法来减少量化带来的精度损失。但是存在实验模型规模较小的问题。
->>>>>>> 46630de (	new file:   README.md)
 
 - [ ] **GPTQ**:Gptq: Accurate post-training quantization for generative pre-trained transformers (ICLR 2023)
 
@@ -46,15 +43,12 @@
 
 - [ ] [大语言模型的量化]OWQ: Outlier-Aware Quantization for Efficient Fine-tuning and Inference of Large Language Models(AAAI 2024 Oral)
 
-<<<<<<< HEAD
-=======
 - [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-V2: Exploring Post-training Quantization in LLMs from Comprehensive Study to Low Rank Compensation
 
 - [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-FP: A Leap Forward in LLMs Post-Training W4A8 Quantization Using Floating-Point Formats
 
 - [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-HERO: Hardware-Enhanced Robust Optimized Post-Training Quantization Framework for W8A8 Transformers
 
->>>>>>> 46630de (	new file:   README.md)
 ### 前沿
 
 这部分更多是收集一些大模型厂商的Technical Report，个人认为在资本趋利性下，对显存的”压榨“会做到极致
