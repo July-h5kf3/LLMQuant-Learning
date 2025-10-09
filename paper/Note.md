@@ -158,8 +158,6 @@ E[模拟量化+反量化]-->C
 F[fp32输入]-->E
 ```
 
-<<<<<<< HEAD
-=======
 **量化的粒度**
 
 我们通过模型量化的粒度来描述模型**每层**量化参数(缩放因子s和zero-point)被共享的范围。
@@ -176,7 +174,6 @@ F[fp32输入]-->E
 
 ​	将整个tensor中不同的通道进行分组，各组内采用同样的量化参数。
 
->>>>>>> 46630de (	new file:   README.md)
 **Hessian矩阵(根据AdaRound论文补充)**
 
 模型的量化前后精度损失在本质上是由于对模型权重$w_i$上加一个小的扰动$\Delta w_i$:
@@ -442,13 +439,6 @@ $$
 
 **ZeroQuant: Efficient and Affordable Post-Training Quantization for Large-Scale Transformers**
 
-<<<<<<< HEAD
-
-
-
-
-**总结**：
-=======
 <div style="background-color:#f9f9f9; padding:8px; border-radius:6px;">
 <b>评价:</b> 这篇文章比较Solid，考虑了硬件适配的问题，这是模型量化中一个老大难的问题尤其是混合精度。但是实验的模型都是参数规模较小的模型，在大模型上的效果有待考究。
 </div>
@@ -525,4 +515,3 @@ x --> A((LN/GeLU + Quantize))
 A --> B[GeMM + DeQuantize]
 ```
 
->>>>>>> 46630de (	new file:   README.md)
