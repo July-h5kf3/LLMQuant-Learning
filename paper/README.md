@@ -41,6 +41,8 @@
 
 - [ ] [视频生成模型的量化]ViDiT-Q: Efficient and Accurate Quantization of Diffusion Transformer(ICLR'2025)
 
+- [ ] [视觉生成模型的量化]PAROAttention: Pattern-Aware ReOrdering for Efficient Sparse and Quantized Attention in Visual Generation Models
+ 
 - [ ] [大语言模型的量化]OWQ: Outlier-Aware Quantization for Efficient Fine-tuning and Inference of Large Language Models(AAAI 2024 Oral)
 
 - [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-V2: Exploring Post-training Quantization in LLMs from Comprehensive Study to Low Rank Compensation
@@ -48,6 +50,9 @@
 - [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-FP: A Leap Forward in LLMs Post-Training W4A8 Quantization Using Floating-Point Formats
 
 - [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-HERO: Hardware-Enhanced Robust Optimized Post-Training Quantization Framework for W8A8 Transformers
+
+- [ ] [大语言模型的量化,量化框架,PTQ]OmniQuant: Omnidirectionally Calibrated Quantization for Large Language Models(ICLR'2024 Spotlight)
+
 
 ### 前沿
 
@@ -60,6 +65,10 @@
 这部分是一些综述，从综述入手一个领域是一个很Nice的选择，不一定要是paper可以是中文期刊甚至博客~
 
 - [ ] A Survey on Model Compression for Large Language Model(TACL 2023)
+
+- [ ] Scaling Laws for Precision
+
+- [ ] Scaling Laws for Floating Point Quantization Training(腾讯混元)
 
 
 
