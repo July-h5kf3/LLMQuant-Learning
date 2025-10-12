@@ -18,7 +18,8 @@ def Get_args():
     parser = argparse.ArgumentParser(description='Pytorch MNIST QUANTIZE Training')
     parser.add_argument('--lr',default=0.1,type = float)
     parser.add_argument('--type',choices=['fp32','PTQ','PAQ'])
-    parser.add_argument('--resume','-r',action='store_true',help='use HistogramObserver to quantizate')
+    parser.add_argument('--resume','-r',action='store_true')
+    parser.add_argument('--Histogram',action='store_ture',help='use HistogramObserver to quantizate')
     #HistogramObserver是PyTorch中用于量化模型的观察器模块之一。它通过记录输入的张量的值分布(直方图)来计算量化参数
     parser.add_argument('--level',default='L',choices=['L','C'],help="per_channel or per_tensor")
     parser.add_argument('--path',default='./checkpoint/')
@@ -208,15 +209,17 @@ def main():
     for epoch in range(start_epoch,start_epoch + train_epoches):
         if epoch == start_epoch:
             enable_calibrate(net)
-            calibrate()
+            calibrate(net,TrainDataLoader,device,criterion)
             disable_calibrate(net)
             if args.adaround:
                 calibrate_adaround(net,args.adaround_iter,args.b_start, args.b_end, args.warmup,TrainDataLoader, device)
-            test(args,epoch,net,TesstDataLoader,device)
+            test(args,epoch,net,TesstDataLoader,device,optimizer,criterion)
             if args.type == "PTQ":
                 break
         else:
-            train(epoch,net,TrainDataLoader,device)
-            test(args,epoch,net,TesstDataLoader,device)
+            train(epoch,net,TrainDataLoader,device,optimizer,criterion)
+            test(args,epoch,net,TesstDataLoader,device,optimizer,criterion)
             scheduler.step()
+if __name__ == "__main__":
+    main()
             
