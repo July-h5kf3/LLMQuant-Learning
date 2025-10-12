@@ -59,18 +59,28 @@ class LinearTempDecay:
 
 def calibrate_adaround(module,adaround_iter,b_start,b_end,warmup,TrainDataLoader,device):
     opt_params = []
+
     for name,child in module.named_modules():
         if isinstance(child,AdaRoundQuantizer):
-            opt_params += [child.alpha]
+            # 只有当alpha已经被初始化时才添加到优化参数中
+            if child.alpha is not None and isinstance(child.alpha, torch.nn.Parameter):
+                opt_params.append(child.alpha)
+
+    if len(opt_params) == 0:
+        print("No AdaRoundQuantizer found, skipping AdaRound calibration.")
+        return module
+
     optimizer = torch.optim.AdamW(opt_params)
     scheduler = None
 
     temp_decay = LinearTempDecay(adaround_iter, rel_start_decay=warmup,
                                           start_b=b_start, end_b=b_end)
     
+    print(f"Starting AdaRound calibration with {adaround_iter} iterations...")
     for j in range(adaround_iter):
         b = temp_decay(j)
         for batch_idx,(inputs,targets) in enumerate(TrainDataLoader):
+            # print(f"AdaRound Progress: [{j+1}/{adaround_iter}] ({100*(j+1)/adaround_iter:.1f}%)")
             if batch_idx == 10:break
             inputs,targets = inputs.to(device),targets.to(device)
             outputs = module(inputs)
@@ -79,16 +89,28 @@ def calibrate_adaround(module,adaround_iter,b_start,b_end,warmup,TrainDataLoader
             for name, child in module.named_modules():
                 if isinstance(child,AdaRoundQuantizer):
                     round_vals = child.get_soft_targets()
-                    round_loss += (1 - ((round_vals - .5).abs() * 2).pow(b)).sum()#正则化项
+                    # 打印调试信息
+                    # if j == 0 and batch_idx == 0:  # 只在第一次打印
+                        # print(f"Debug - round_vals range: [{round_vals.min().item():.3f}, {round_vals.max().item():.3f}]")
+                        # print(f"Debug - b value: {b}")
+                    round_loss += (1 - ((round_vals - .5).abs() * 2).pow(b)).sum()#论文中的正则化项
                     #这里有点问题就是round_loss不止这一些还需要更改
             optimizer.zero_grad()
             round_loss.backward()
-            optimizer.step()   
+            optimizer.step()
+
+        # 显示进度
+        if (j + 1) % max(1, adaround_iter // 100) == 0 or j + 1 == adaround_iter:
+            progress_pct = 100 * (j + 1) / adaround_iter
+            print(f"AdaRound Progress: [{j+1:3d}/{adaround_iter:3d}] ({progress_pct:5.1f}%) - Loss: {round_loss.item():.6f}")
+
+    print("AdaRound calibration completed!")
+
+    # 在校准完成后关闭soft_targets
     for name, child in module.named_modules():
         if isinstance(child, AdaRoundQuantizer):
             child.soft_targets = False
 term_width=80
-
 TOTAL_BAR_LENGTH = 65.
 last_time = time.time()
 begin_time = last_time
@@ -124,10 +146,11 @@ def format_time(seconds):
         f = '0ms'
     return f
 
-def inplace_linear(linear,ptq,level,adaround):
+def inplace_linear(linear,ptq,level,adaround,bit=8):
     new_layer = QLinear(ptq,level,adaround,
                         linear.in_features,linear.out_features,
-                        True if linear.bias is not None else False
+                        True if linear.bias is not None else False,
+                        bit
                         )
     new_layer.weight = linear.weight
     if linear.bias is not None:
@@ -161,7 +184,12 @@ def inplace_quantize_layers(module,total_steps,ptq,level,adaround):
     last_conv_name = None
 
     for name,child in module.named_children():
-        if isinstance(child,(nn.modules.batchnorm._BatchNorm)):
+        if isinstance(child, nn.Conv2d):
+            last_conv = child
+            last_conv_name = name
+            last_conv_flag = 1
+
+        elif isinstance(child,(nn.modules.batchnorm._BatchNorm)):
             if last_conv is None:
                 continue
             fused_qconv = inplace_conv_bn(last_conv,child,total_steps,ptq,level,adaround)
@@ -169,18 +197,22 @@ def inplace_quantize_layers(module,total_steps,ptq,level,adaround):
             module._modules[name] = nn.Identity()
             last_conv = None
             last_conv_flag = 0
-        if last_conv_flag == 1:
+
+        elif last_conv_flag == 1:
             qconv = inplace_conv(last_conv,ptq,level,adaround)
             module._modules[last_conv_name] = qconv
             last_conv = None
             last_conv_flag = 0
-        
-        if isinstance(child,nn.Linear):
+
+        if isinstance(child, nn.Linear):
             Qlinear = inplace_linear(child,ptq,level,adaround)
             module._modules[name] = Qlinear
-        else:
+
+        # 递归处理非叶子模块
+        elif not isinstance(child, (nn.Conv2d, nn.BatchNorm2d, nn.ReLU, nn.Identity)):
             inplace_quantize_layers(child,total_steps,ptq,level,adaround)
-        return module
+
+    return module
 
 def progress_bar(current, total, msg=None):
     global last_time, begin_time

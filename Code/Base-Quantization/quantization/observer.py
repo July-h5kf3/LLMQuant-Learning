@@ -18,6 +18,9 @@ class ObserverBase(nn.Module):
             input = torch.flatten(input,start_dim=1)
             min_val = torch.min(input,1)[0]
             max_val = torch.max(input,1)[0]
+        elif self.level == "FC":  # channel级(fc_weight)
+            min_val = torch.min(input, 1, keepdim=True)[0]
+            max_val = torch.max(input, 1, keepdim=True)[0]
         
         self.update_range(min_val,max_val)
 
@@ -40,6 +43,13 @@ class MinMaxObserver(ObserverBase):
             self.register_buffer(
                 "max_val", torch.zeros((out_channels, 1, 1, 1), dtype=torch.float32)
             )
+        elif self.level == "FC":
+            self.register_buffer(
+                "min_val", torch.zeros((out_channels, 1), dtype=torch.float32)
+            )
+            self.register_buffer(
+                "max_val", torch.zeros((out_channels, 1), dtype=torch.float32)
+            )
     def update_range(self, min_val_cur, max_val_cur):
         if self.level == "C":
             min_val_cur.resize_(self.min_val.shape)
@@ -61,7 +71,7 @@ class EMAMinMaxObserver(ObserverBase):
         self.level = level
         self.num_flag = 0
         self.out_channels = out_channels
-        if self.level == 'L':
+        if self.level == "L":
             self.register_buffer("min_val", torch.zeros((1), dtype=torch.float32))
             self.register_buffer("max_val", torch.zeros((1), dtype=torch.float32))
         elif self.level == "C":
