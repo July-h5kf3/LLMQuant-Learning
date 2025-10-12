@@ -19,11 +19,11 @@ class QLinear(nn.Linear):
             self.fc_level = "FC"
         
         if adaround:
-            self.weight_quantizer = AdaRoundQuantizer(bit=bit,observer=MinMaxObserver(out_features,level),ptq=ptq,sign=sign)
-            self.input_quantizer = AsymmetricQuanizer(bit=bit,observer=EMAMinMaxObserver(out_features,"L"),ptq=ptq,sign=sign)
+            self.weight_quantizer = AdaRoundQuantizer(bit=bit,observer=MinMaxObserver(out_features,level = self.fc_level),ptq=ptq,sign=sign)
+            self.input_quantizer = AsymmetricQuanizer(bit=bit,observer=EMAMinMaxObserver(1,"L"),ptq=ptq,sign=sign)
         else:
-            self.weight_quantizer = AsymmetricQuanizer(bit=bit,observer=MinMaxObserver(out_features,level),ptq=ptq,sign=sign)
-            self.input_quantizer = AsymmetricQuanizer(bit=bit,observer=EMAMinMaxObserver(out_features,"L"),ptq=ptq,sign=sign)
+            self.weight_quantizer = AsymmetricQuanizer(bit=bit,observer=MinMaxObserver(out_features,level = self.fc_level),ptq=ptq,sign=sign)
+            self.input_quantizer = AsymmetricQuanizer(bit=bit,observer=EMAMinMaxObserver(1,"L"),ptq=ptq,sign=sign)
     
     def forward(self, input):
         input = self.input_quantizer(input)

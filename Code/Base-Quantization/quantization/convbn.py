@@ -31,10 +31,10 @@ class Qconv2dBn(nn.Conv2d):
         self.ptq = ptq
         if adaround:
             self.weight_quantizer = AdaRoundQuantizer(bit=bit,observer=MinMaxObserver(out_channels,level),ptq=ptq,sign=sign)
-            self.input_quantizer = AsymmetricQuanizer(bit=bit,observer=EMAMinMaxObserver(out_channels,"L"),ptq=ptq,sign=sign)
+            self.input_quantizer = AsymmetricQuanizer(bit=bit,observer=EMAMinMaxObserver(1,"L"),ptq=ptq,sign=sign)
         else:
             self.weight_quantizer = AsymmetricQuanizer(bit=bit,observer=MinMaxObserver(out_channels,level),ptq=ptq,sign=sign)
-            self.input_quantizer = AsymmetricQuanizer(bit=bit,observer=EMAMinMaxObserver(out_channels,"L"),ptq=ptq,sign=sign)
+            self.input_quantizer = AsymmetricQuanizer(bit=bit,observer=EMAMinMaxObserver(1,"L"),ptq=ptq,sign=sign)
     
     def forward(self,input):
         if self.training:
