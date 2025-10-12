@@ -9,6 +9,10 @@ from collections import OrderedDict
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from quantization.quantizer import Quantizer,AdaRoundQuantizer
+from quantization.observer import EMAMinMaxObserver,MinMaxObserver
+from quantization.conv import QConv2d
+from quantization.convbn import Qconv2dBn
+from quantization.linear import QLinear
 
 def enable_calibrate(module):
     for name,child in module.named_children():
@@ -51,6 +55,7 @@ class LinearTempDecay:
         else:
             rel_t = (t - self.start_decay) / (self.t_max - self.start_decay)
             return self.end_b + (self.start_b - self.end_b) * max(0.0, (1 - rel_t))
+
 
 def calibrate_adaround(module,adaround_iter,b_start,b_end,warmup,TrainDataLoader,device):
     opt_params = []
@@ -118,6 +123,65 @@ def format_time(seconds):
     if f == '':
         f = '0ms'
     return f
+
+def inplace_linear(linear,ptq,level,adaround):
+    new_layer = QLinear(ptq,level,adaround,
+                        linear.in_features,linear.out_features,
+                        True if linear.bias is not None else False
+                        )
+    new_layer.weight = linear.weight
+    if linear.bias is not None:
+        new_layer.bias = linear.bias
+    return new_layer
+def inplace_conv(conv,ptq,level,adaround):
+    new_layer = QConv2d(ptq,level,adaround,
+                        conv.in_channels, conv.out_channels, conv.kernel_size, conv.stride,
+                        conv.padding, conv.dilation, conv.groups,
+                        True if conv.bias is not None else False
+                        )
+    new_layer.weight = conv.weight
+    if conv.bias is not None:
+        new_layer.bias = conv.bias
+    return new_layer
+
+def inplace_conv_bn(conv,bn,total_steps,ptq,level,adaround):
+    new_layer = Qconv2dBn(ptq,level,adaround,total_steps,bn,
+                          conv.in_channels,conv.out_channels,conv.kernel_size,conv.stride,
+                          conv.padding,conv.dilation,conv.groups,
+                          True if conv.bias is not None else False
+                          )
+    new_layer.weight = conv.weight
+    if conv.bias is not None:
+        new_layer.bias = conv.bias
+    return new_layer
+
+def inplace_quantize_layers(module,total_steps,ptq,level,adaround):
+    last_conv_flag = 0
+    last_conv = None
+    last_conv_name = None
+
+    for name,child in module.named_children():
+        if isinstance(child,(nn.modules.batchnorm._BatchNorm)):
+            if last_conv is None:
+                continue
+            fused_qconv = inplace_conv_bn(last_conv,child,total_steps,ptq,level,adaround)
+            module._modules[last_conv_name] = fused_qconv
+            module._modules[name] = nn.Identity()
+            last_conv = None
+            last_conv_flag = 0
+        if last_conv_flag == 1:
+            qconv = inplace_conv(last_conv,ptq,level,adaround)
+            module._modules[last_conv_name] = qconv
+            last_conv = None
+            last_conv_flag = 0
+        
+        if isinstance(child,nn.Linear):
+            Qlinear = inplace_linear(child,ptq,level,adaround)
+            module._modules[name] = Qlinear
+        else:
+            inplace_quantize_layers(child,total_steps,ptq,level,adaround)
+        return module
+
 def progress_bar(current, total, msg=None):
     global last_time, begin_time
     if current == 0:

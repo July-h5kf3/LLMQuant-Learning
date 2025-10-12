@@ -26,6 +26,54 @@ class Quantizer(nn.Module):
         fake_quant_tensor = (quant_tensor - self.zero_point) * self.scale
         return fake_quant_tensor
 
+class AsymmetricQuanizer(Quantizer):
+    """
+    非对称量化
+    """
+    def __init__(self, bit, observer, ptq, sign=False):
+        super(Quantizer,self).__init__()
+        self.bit = bit
+        self.observer = observer
+        self.ptq = ptq
+
+        if self.observer.level == "L":
+            self.register_buffer("scale", torch.ones((1), dtype=torch.float32))
+            self.register_buffer("zero_point", torch.zeros((1), dtype=torch.float32))
+        elif self.observer.level == "C":
+            self.register_buffer(
+                "scale",
+                torch.ones((self.observer.out_channels, 1, 1, 1), dtype=torch.float32),
+            )
+            self.register_buffer(
+                "zero_point",
+                torch.zeros((self.observer.out_channels, 1, 1, 1), dtype=torch.float32),
+            )
+        elif self.observer.level == "FC":
+            self.register_buffer(
+                "scale",
+                torch.ones((self.observer.out_channels, 1), dtype=torch.float32),
+            )
+            self.register_buffer(
+                "zero_point",
+                torch.zeros((self.observer.out_channels, 1), dtype=torch.float32),
+            )
+        self.register_buffer("quant_min",
+                              torch.tensor((-(1 << (self.bit - 1))), dtype=torch.float32),
+                            )
+
+        self.register_buffer("quant_max",
+                              torch.tensor(((1 << (self.bit - 1)) - 1), dtype=torch.float32),
+                            )
+        self.register_buffer("eps", 
+                              torch.tensor((torch.finfo(torch.float32).eps), dtype=torch.float32)
+                            )
+    def update_qparams(self, inputs):
+        scale = (self.observer.max_val - self.observer.min_val) / (self.quant_max - self.quant_min)
+        zero_point = (torch.round(self.quant_min - self.observer.min_val / scale) - (self.quant_min - self.observer.min_val / scale)).detach() + \
+                        (self.quant_min - self.observer.min_val / scale)
+        self.scale.copy_(scale)
+        self.zero_point.copy_(zero_point)
+        
 class AdaRoundQuantizer(Quantizer):
     def __init__(self,bit,observer,ptq,sign=False,round_mode = 'learned_hard_sigmoid'):
         super(Quantizer,self).__init__()
@@ -99,7 +147,7 @@ class AdaRoundQuantizer(Quantizer):
             x_int = torch.round(inputs / scale)
         elif self.round_mode == "learned_hard_sigmoid":
             x_floor = torch.floor(inputs / scale)
-            if self.soft_targets:
+            if self.get_soft_targets:
                 x_int = x_floor + self.get_soft_target()
             else:
                 print('test test test')

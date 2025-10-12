@@ -11,6 +11,8 @@ import sys
 import argparse
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from uttils import progress_bar,add_module_dict,enable_calibrate,disable_calibrate,calibrate_adaround,inplace_quantize_layers
+from models.VGG import VGG
 
 def Get_args():
     parser = argparse.ArgumentParser(description='Pytorch MNIST QUANTIZE Training')
