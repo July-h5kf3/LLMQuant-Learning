@@ -16,7 +16,6 @@
 
 ​	本篇文章作者首先从数学角度证明了在模型量化过程中，直接将浮点数进行四舍五入round到最近定点数的方法并不是精度最优的。并且通过了一个简单的实验验证了猜想，随后基于此作者进行一系列的数学推导和数学近似推导除了最终的优化目标:最小化由于量化在预激活值中引入的均方误差，从而提出了自适应的Round方法:AdaRound.这种方法在进行量化时，自适应地决定将浮点值转到最近右定点还是左定点值。AdaRound可以在不需要QAT or finetune的情况下仅使用少量无标签的校准数据在精度上达到SOTA，甚至4bit量化也可以保留较好的精度。
 
-- [ ] [大语言模型量化,PTQ]**ZeroQuant**:Zeroquant: Efficient and affordable post-training quantization for large-scale transformers (NeurIPS 2022）
 - [x] [大语言模型量化,PTQ，硬件适配]**ZeroQuant**:Zeroquant: Efficient and affordable post-training quantization for large-scale transformers (NeurIPS 2022）
 
   ​	这篇文章指出，低比特量化在大型 Transformer 架构模型中精度受限的主要原因是激活值和权重矩阵的值分布方差较大。针对这一问题，提出了 ZeroQuant 方案。该方案主要包括：对权重采用 Group-wise 量化、对激活值采用 Token-wise 量化，这种方法既能适配硬件架构，又能保持较高的精度；同时，通过 Layer-wise 知识蒸馏方法来减少量化带来的精度损失。但是存在实验模型规模较小的问题。
@@ -32,6 +31,7 @@
 - [ ] **SpinQuant**: Spinquant: Llm quantization with learned rotations (ICLR 2025)
 
 - [ ] **Q-dit:Q-dit**: Accurate post-training quantization for diffusion transformers (CVPR 2025)
+
 - [ ] **SVDQuant:Svdquant**: Absorbing outliers by low-rank components for 4-bit diffusion models (ICLR 2025)
 - [ ] **Mpq-dm:Mpq-dm**: Mixed precision quantization for extremely low bit diffusion models (AAAI 2025)
 
@@ -53,18 +53,21 @@
 
 - [ ] [大语言模型的量化,量化框架,PTQ]OmniQuant: Omnidirectionally Calibrated Quantization for Large Language Models(ICLR'2024 Spotlight)
 
+- [ ] [大语言模型的量化,量化框架,3Bit量化]TEQUILA: TRAPPING-FREE TERNARY QUANTIZA TION FOR LARGE LANGUAGE MODEL
+
 
 ### 前沿
 
 这部分更多是收集一些大模型厂商的Technical Report，个人认为在资本趋利性下，对显存的”压榨“会做到极致
 
 - [ ] **DeepSeekV3**：DeepSeek-V3 Technical Report
+- [ ] **HunYuan**: AngelSlim
 
 ### 综述
 
 这部分是一些综述，从综述入手一个领域是一个很Nice的选择，不一定要是paper可以是中文期刊甚至博客~
 
-- [ ] A Survey on Model Compression for Large Language Model(TACL 2023)
+- [ ] A White Paper on Neural Network Quantization(这个是Begining of Begining 是高通写的量化过程描述，从这个开始is best)
 
 - [ ] Scaling Laws for Precision
 
