@@ -466,7 +466,7 @@ $$
 
 我们从Hessian矩阵计算的复杂性来分析
 $$
-\frac{\part^2 L}{\part W^{(l)}_{i,j}\part W^{(l)}_{m,o}} = \frac{\part}{\part W_{m,o}^{(l)}}[\frac{\part L}{\part z_i^{(l)}}\cdot x_j^{(l-1)}] = \frac{\part^2 L}{\part z^{(l)}_i\part z_m^{(l)}}\cdot x_j^{(l-1)}x_i^{(l-1)}
+\frac{\partial^2 L}{\partial W^{(l)}_{i,j}\partial W^{(l)}_{m,o}} = \frac{\partial}{\partial W_{m,o}^{(l)}}[\frac{\partial L}{\partial z_i^{(l)}}\cdot x_j^{(l-1)}] = \frac{\partial^2 L}{\partial z^{(l)}_i\partial z_m^{(l)}}\cdot x_j^{(l-1)}x_i^{(l-1)}
 $$
 写作矩阵的形式
 $$
@@ -676,5 +676,72 @@ $$
 
 具体而言，这个微调方案会将OWQ的量化模型进行微调但只对Weak Column进行参数更新。因为weak column的数量很少，所以总体微调参数量很少，同时又因为weak column的权重使用fp16进行存储，因此微调空间较大，能够实现较好的微调效果。
 
+**GPTQ: accurate post-trainning quantization for generative pre-trained transformers**
 
 
+这个文章是OWQ的前身，借着对这篇文章的分析，我们梳理一下这一系列的文章的intuition。
+大概的分析顺序为:
+$$
+\text{OBD} \to \text{OBS} \to \text{OBC} \to \text{GPTQ} \to \text{OWQ} 
+$$
+
+首先是OBD，这是由Yann LeCun在1990年提出的神经网络剪枝算法。该算法基于二阶导数信息，旨在通过去除目标函数影响较小的参数来降低模型复杂度，提高泛化能力。
+
+具体而言，就是希望去除目标函数对目标函数E(即Loss)影响小的参数，我们记去除了若干参数的模型的参数为$\hat W = W + \Delta w$,有:
+$$
+\Delta E = L(x,y,W) - L(x,y,W + \Delta w) = 
+\sum_{i}g_i \Delta w_i + \frac{1}{2}\sum_{i}h_{i,i}\Delta w_{i}^2 + \frac{1}{2}\sum_{i\neq j}h_{i,j}\Delta w_i\Delta w_j + O(\Delta w^3)
+$$
+其中$g_i = \nabla L$,$h_{i,j}$为Hessian矩阵$H_{L}$的一个元素
+
+其中由于剪枝发生在对于已经训练好的神经网络，因此一阶导项可以忽略不计，而高阶项由于模型会进行归一化，因此$\Delta w$较小，可以忽略不计。
+
+此外，OBD做了一个有争议的假设，即删除任意一个参数后，其他参数对目标函数的影响不变，也就是说每个参数对目标函数的影响是独立的，因此可以忽略交叉项:
+
+那么我们可以得到简化后的公式:
+$$
+\Delta E = \frac{1}{2}\sum_{i}h_{i,i}\Delta w_i^2
+$$
+因此，对神经网络进行剪枝，删除参数时，参数对目标函数的影响可以通过海森矩阵的对角项进行衡量。我们只需要在剪枝时求出海森矩阵，按对角项从小到大排序，即可确定参数剪枝的次序。
+
+可以注意到，OBD的这个认为参数对目标函数的影响是独立的假设是很强的。OBS认为参数之间的独立性不成立，如果考虑交叉项，可以写作矩阵形式
+$$
+\Delta E = \frac{1}{2}\Delta w^\top H\Delta w
+$$
+OBS希望在W每次迭代找到一个位置q(即准备剪枝的位置，后续会将该位置的$w_q = 0$),以及在获得位置q的同时，计算处一个与之相关的$\Delta w$对w进行补偿，使得$L(w+\Delta w)-L(w)$尽量小。
+
+那么这个流程可以描述为一个带约束的凸优化问题:
+$$
+\arg \min_q \frac{1}{2}\Delta w^\top H \Delta w\\
+s.t.\ e_q^\top\Delta w + w_q = 0
+$$
+这里$e^\top_q$是第q个值为1的列向量。
+
+采用Lagrange乘子法进行求解:
+$$
+\mathcal{L} = \frac{1}{2}\Delta w^\top H \Delta w + \lambda(e^\top_q \Delta w + w_q)
+$$
+对$\lambda$并置为0得到:
+$$
+e_q^\top \Delta w + w_q = 0\\
+\Delta w^\top e_q + w_q = 0
+$$
+对$\Delta w$求导并置为0有:
+$$
+\Delta w^\top H + \lambda e^\top_q = 0\\
+\Delta w^\top H H^{-1} + \lambda e_q^\top H^{-1}=0\\
+\Delta w^\top + \lambda e^\top_q H^{-1} = 0
+$$
+有
+$$
+w_q = \lambda e_q^\top H^{-1} e_q\\
+\lambda = \frac{w_q}{[H^{-1}]_{qq}}
+$$
+其中用到了等式$e_q^\top H^{-1}e_q = [H^{-1}]_{qq}$
+
+将$\lambda = \frac{w_q}{[H^{-1}]_{qq}}$带入等式$\Delta w^\top H + \lambda e_q^\top = 0$,得到
+$$
+\Delta w^{\top} = -\frac{w_q}{[H^{-1}]_{qq}}e_{q}^\top H^{-1}\\
+\Delta w = -\frac{w_q}{[H^{-1}]_{qq}}H_{:,q}^{-1}
+$$
+其中$H_{:,q}^{-1}$表示$H^{-1}$的第q列
