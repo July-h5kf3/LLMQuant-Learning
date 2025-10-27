@@ -197,7 +197,7 @@ $$
 
 Hessian矩阵被定义为:
 $$
-H = [\frac{\part^2 L}{\part w_i\part w_j}]_{i,j}
+H = [\frac{\partial^2 L}{\partial w_i\partial w_j}]_{i,j}
 $$
 由于对于连续二阶可微函数，满足混合偏导数相等，因此Hession矩阵是一个对称矩阵
 
@@ -215,17 +215,17 @@ $$
 
   对于神经网络中的第j个神经元的输入$a_j$对应权重为$w_{ji}$:
   $$
-  \frac{\part^2 E_n}{\part w_{ji}^2} = \frac{\part^2 E_n}{\partial a_j^2}z_i^2
+  \frac{\partial^2 E_n}{\partial w_{ji}^2} = \frac{\partial^2 E_n}{\partial a_j^2}z_i^2
   $$
   其中$z_i$是上一层神经元的输出。
 
-  而$\frac{\partial^2 E_n}{\part a_j^2}$可以通过链式法则递归计算(类似于反向传播):
+  而$\frac{\partial^2 E_n}{\partial a_j^2}$可以通过链式法则递归计算(类似于反向传播):
   $$
-  \frac{\part^2 E_n}{\part a_j^2} = \underbrace{\frac{\part}{\part a_j}[h'(a_j)\sum_{k}w_{kj}\frac{\part E_n}{\part a_k}]}_{链式法则}=h'(a_j)^2 \sum_{k,k'}w_{kj}w_{k'j}\frac{\part^2 E_n}{\part w_k\part w_{k'}} + h''(a_j)\sum_k w_{kj}\frac{\part E_n}{\part a_n}
+  \frac{\partial^2 E_n}{\partial a_j^2} = \underbrace{\frac{\partial}{\partial a_j}[h'(a_j)\sum_{k}w_{kj}\frac{\partial E_n}{\partial a_k}]}_{链式法则}=h'(a_j)^2 \sum_{k,k'}w_{kj}w_{k'j}\frac{\partial^2 E_n}{\partial w_k\partial w_{k'}} + h''(a_j)\sum_k w_{kj}\frac{\partial E_n}{\partial a_n}
   $$
   忽略二阶导中的非对角线项$k\neq k'$:
   $$
-  \frac{\part^2 E_n}{\part a_j^2}\approx \underbrace{h'(a_j)^2\sum_k w_{kj}^2 \frac{\part^2 E_n}{\part a_k^2}}_{链式法则} + \underbrace{h''(a_j)\sum_{k}w_{kj}\frac{\part E_n}{\part a_k}}_{链式法则}
+  \frac{\partial^2 E_n}{\partial a_j^2}\approx \underbrace{h'(a_j)^2\sum_k w_{kj}^2 \frac{\partial^2 E_n}{\partial a_k^2}}_{链式法则} + \underbrace{h''(a_j)\sum_{k}w_{kj}\frac{\partial E_n}{\partial a_k}}_{链式法则}
   $$
   从而一次反向传播便可以计算出来，时间复杂度为$O(W)$
 
@@ -771,7 +771,7 @@ $$
 $$
 其中$\hat W$表示经过量化/剪枝后的参数。
 
-OBS将这个损失函数进行了按行拆分，即认为删掉某个权重$w_{ij}$只影响该行的输出，行与行之间的Hessian矩阵元素是没有耦合的。(这两个都是对按行拆分合理性的解释，前者是直观解释，后者是数学解释)
+OBC将这个损失函数进行了按行拆分，即认为删掉某个权重$w_{ij}$只影响该行的输出，行与行之间的Hessian矩阵元素是没有耦合的。(这两个都是对按行拆分合理性的解释，前者是直观解释，后者是数学解释)
 
 对于第一点，我们知道，改变某个权重$w_{ij}$它只会对输出的某一行的结果产生影响，即$Y_{i,:} = W_{i,:}X$,那么既然只对某一行的输出产生影响,那么对于整体误差而言,也只对这一行的误差产生影响,而误差是可以按行拆分的:
 $$
@@ -840,4 +840,96 @@ $$
   GPTQ则是对OBQ进行了改进，GPTQ发现，在对权重的每一行量化时，按照贪心策略选择量化的q和按照任意固定顺序来量化每一行的权重最终的误差是相差不大的，那么可以直接让所有行都按照列序(0 $\rightarrow$ col),这样可以提高计算效率与存储效率。
 
   这样做的另一个好处在于：每行的顺序一样，那么每一行对应的Hessian矩阵都是相同的，每次Hessian矩阵的逆只需要计算一次！
+
+  在固定量化顺序的前提下，我们不再需要求解$q = \arg\min_q$只需要关心$\Delta w$,此时$\Delta w$的更新公式为:
+  $$
+  \Delta w = -\frac{w_q - \text{quant}(w_q)}{[H_{q:,q:}]^{-1}_{0,0}}([H_{q:,q:}]^{-1}_{:,0})^\top
+  $$
+  这个式子我们对比在贪心策略下的式子便不难发现，这个式子就是贪心策略式子在每次删除当前候选集里的第一个q时的式子的等价形式，同样地我们也能给出Hessian矩阵的逆的更新形式:
+  $$
+  [H_{q:,q:}]^{-1} = ([H_{q-1:,q-1:}]^{-1} - \frac{1}{[H_{q-1:,q-1:}^{-1}]_{0,0}}[H^{-1}_{q-1:,q-1:}]_{:,0}[H_{q-1:,q-1:}^{-1}]_{0,:})_{1:,1:}
+  $$
+  从矩阵的角度来看我们在做的是这样一个变换:
+  $$
+  (H^{-1})^{(k)} = 
+  \left[
+    \begin{matrix}
+    I_{k-1} & 0 & 0^\top\\
+    0 & a_{k,k} & b_{k}^\top\\
+    0 & b_k & B'^{(k)}
+    \end{matrix}
+  \right]\to (H^{-1})^{(k+1)} = 
+  \left[
+\begin{matrix}
+I_{k} & 0 & 0\\
+0 & a_{k+1,k+1} & b_{k+1}^\top\\
+0 & b_{k+1} & B''^{(k+1)} 
+\end{matrix}
+  \right]
+  $$
   
+  
+  若我们不断更新Hessian的逆总会产生非正定的Hessian逆矩阵,其原因可能是由于数值误差的累积。为了解决这个问题，作者注意到每次从$H^{(-1)}$中删除一行一列，本质上和对称正定矩阵的Cholesky分解的逐步过程类似，因此作者对初始的$H^{-1}$进行了Cholesky分解，得到了一个上三角矩阵$T$。
+
+Cholesky分解:假设一个正定矩阵$A\in \mathbb{R}^{n\times n}$是正定对称矩阵，那么必然存在一个对角元素为正数的下三角矩阵$L\in \mathbb{R}^{n\times n}$满足$A = LL^\top$
+
+我们尝试模拟一次这个分解过程:
+$$
+A = \left[
+  \begin{matrix}
+  a_{11} & A_{21}^\top\\
+  A_{21} & A_{22}
+  \end{matrix}
+\right],L = \left[
+\begin{matrix}
+l_{11} & 0\\
+L_{21} & L_{22}
+\end{matrix}
+\right],L^\top = \left[
+  \begin{matrix}
+  l_{11} & L_{21}^\top\\
+  0 & L_{22}^\top
+  \end{matrix}
+\right]
+$$
+由于$A = LL^\top$,我们有:
+$$
+l_{11} = \sqrt{a_{11}},L_{21} = \frac{1}{l_{11}}A_{21},L_{22}L_{22}^\top = A_{22} - L_{21}L_{21}^\top
+$$
+
+于是我们可以惊奇地发现$L_{22}L_{22}^\top$就是我们想要的$H_{q:,q:}^{-1}$!因此我们可以认为删去$[H_{q:,q:}^{-1}]$的第一行和第一列的过程与对该矩阵进行一次Cholesky分解是等价的。因为我们进行Cholesky分解得到的$L_{22}$恰好是更新了之后的$H^{-1}$进行Cholesky分解得到的下三角矩阵。
+
+进一步地，GPTQ对初始的Hessian矩阵的逆进行了Cholesky分解得到一个上三角矩阵$L^\top$,这个矩阵还有一个特点在于，它的每一行刚好就等于逆矩阵每次更新迭代后的第一行乘以一个常数:
+$$
+C_qL_{q,q:}^\top = [H_{q:,q:}]^{-1}_{0,:}
+$$
+这个我们可以通过Cholesky分解的式子知道，因为分解得到的$L$是一个下三角矩阵，那么它的第一行就只有一个常数，而这个常数乘以$L^\top$便可以得到A的第一行。
+
+而恰好我们发现，$\Delta w$的更新公式只需要用到当前Hessian矩阵的逆的第一行，那么我们有:
+$$
+\Delta w = -\frac{w_{:,q}- \text{quant}(w_{:,q})}{C_q T_{qq}}C_qT_{q,q:}
+$$
+其中常数可以直接约掉:
+$$
+\Delta w = -\frac{w_{:,q} - \text{quant}(w_{:,q})}{T_{qq}}T_{q,q:}
+$$
+因此我们在进行量化时不用每次都更新Hessian矩阵的逆，而是直接对$H^{-1}$进行Cholesky分解，得到它的每一行便可以进行参数的量化。
+
+此外，如果每行的量化并行计算，那么每次更新都要读写一次参数矩阵。若参数矩阵的维度为$d_{row}\times d_{col}$，那么量化这个参数矩阵就要读写$d_{col}$次参数，总共的读写量高达$d_{row}\times d_{col}^2$.(因为我们量化第i列的时候，后面的列相应地也要补偿更新)
+
+那这样大量的IO开销将会成为瓶颈，因此GPTQ采用了Lazy Batch-Update技术。我们注意到对于列i，最终的量化决策并不会受到尚未更新的列的影响。这使得我们可以将后续列的更新推迟到后续步骤中，从而减少不必要的内存操作。
+
+具体步骤如下:
+
+- 每次处理B列的一个小块，限制该列更新的补偿更新只影响块内的列
+
+- 当前块的权重会在量化过程中被更新，而其影响暂时不传播到矩阵的其他部分
+
+- 对当前块中的每一列进行量化，同时计算误差并更新当前块剩余的列
+
+- 这些更新仅在当前块内进行，而不会影响整个矩阵
+
+- 当一个块内的所有列完成量化后，将该块的更新结果批量应用到矩阵的剩余部分
+
+这部分通过语言可能难以描述清楚，可以见下图:
+<img src="figure\lazy batch-update.jpg" alt="OWQ" style="zoom:80%;" />
