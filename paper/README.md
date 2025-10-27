@@ -29,7 +29,9 @@
 
   ​	这篇文章指出，低比特量化在大型 Transformer 架构模型中精度受限的主要原因是激活值和权重矩阵的值分布方差较大。针对这一问题，提出了 ZeroQuant 方案。该方案主要包括：对权重采用 Group-wise 量化、对激活值采用 Token-wise 量化，这种方法既能适配硬件架构，又能保持较高的精度；同时，通过 Layer-wise 知识蒸馏方法来减少量化带来的精度损失。但是存在实验模型规模较小的问题。
 
-- [ ] **GPTQ**:Gptq: Accurate post-training quantization for generative pre-trained transformers (ICLR 2023)
+- [x] **GPTQ**:Gptq: Accurate post-training quantization for generative pre-trained transformers (ICLR 2023)
+
+神作。本篇文章对OBC中提出的OBQ方法进行了优化，提出了贪心地对权重进行量化不能带来明显增益且加大了计算存储开销，因此采用了顺序量化地方法，并针对这个方法采用了更加高效的Hessian矩阵求逆方法，并采用Cholesky分解稳定数值。并提出了lazy batch-update方法解决IO带来的瓶颈问题。
 
 - [x] [模型量化,PTQ]**AdaQuant**:Accurate post training quantization with small calibration sets (ICML 2021)
 
