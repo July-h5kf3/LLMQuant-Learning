@@ -9,7 +9,7 @@
 更加详细的论文阅读笔记以及思考见Note.md以及博客
 
 ### 博客填坑
-- [ ] Hessian矩阵系列串讲
+- [x] Hessian矩阵系列串讲
 
 - [ ] 线性代数基础(进阶)
 
@@ -53,26 +53,19 @@
 - [ ] [视频生成模型的量化]ViDiT-Q: Efficient and Accurate Quantization of Diffusion Transformer(ICLR'2025)
 
 - [ ] [视觉生成模型的量化]PAROAttention: Pattern-Aware ReOrdering for Efficient Sparse and Quantized Attention in Visual Generation Models
- 
+
 - [x] [大语言模型的量化,PTQ，基于Hessian矩阵的权重感知]OWQ: Outlier-Aware Quantization for Efficient Fine-tuning and Inference of Large Language Models(AAAI 2024 Oral)
 
 本文提出了一个异常感知的权重量化方法OWQ，利用LLMs中的异常激活值挑选出Weak Column，对其采用全精度的方式在牺牲很小的性能的情况下提升了巨大的精度。此外为进一步提升其性能做了一定的硬件适配并提出了一个基于OWQ的WTC方案，简单来说就是在OWQ量化模型上微调只更新Weak Column的参数。
 
-- [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-V2: Exploring Post-training Quantization in LLMs from Comprehensive Study to Low Rank Compensation
-
-- [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-FP: A Leap Forward in LLMs Post-Training W4A8 Quantization Using Floating-Point Formats
-
 - [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-HERO: Hardware-Enhanced Robust Optimized Post-Training Quantization Framework for W8A8 Transformers
-
 - [ ] [大语言模型的量化,量化框架,PTQ]OmniQuant: Omnidirectionally Calibrated Quantization for Large Language Models(ICLR'2024 Spotlight)
-
 - [ ] [大语言模型的量化,量化框架,3Bit量化]TEQUILA: TRAPPING-FREE TERNARY QUANTIZA TION FOR LARGE LANGUAGE MODEL
-
 - [ ] [RWKV架构的量化] RWKVQuant: Quantizing the RWKV Family with Proxy Guided Hybrid of Scalar and Vector Quantization(ICML'2025)
-
 - [ ] [MoE架构的量化] MoEQuant: Enhancing Quantization for Mixture-of-Experts Large Language Models via Expert-Balanced Sampling and Affinity Guidance(ICML'2025)
-
 - [ ] [大语言模型量化] OSTQuant: Refining Large Language Models via Optimizing Data Distribution(ICLR'2025)
+- [ ] [大语言模型量化,基于Hessian矩阵分析的权重感知]HAWQV3: Dyadic Neural Network Quantization(ICML'2021)
+- [ ] [大语言模型量化,华为盘古"小模型"]CBQ: Cross-Block Quantization for Large Language Models(ICLR'2025)
 
 
 ### 前沿
