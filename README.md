@@ -4,7 +4,7 @@
 
 本仓库为NKU2025年秋人工智能实践课，大模型量化选题个人仓库
 
-博客地址:https://bearblog.dev/lorn3/dashboard/posts/
+博客地址:[https://bearblog.dev/lorn3/dashboard/posts/](https://lorn3.bearblog.dev/)
 
 ### 课程总要求（课程评分 = 60平时作业+ 40期末答辩）
 
