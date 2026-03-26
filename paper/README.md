@@ -2,11 +2,11 @@
     <h1>论文阅读笔记综述</h1>
 </center>
 
-这里是论文阅读的List，分为入门，进阶，前沿，综述三个板块,每篇文章阅读后，我会简单做一些小的介绍和笔记~
+这里主要保留论文阅读清单、阅读笔记与配图资料。
 
-后续会更加细粒度的对文章内容进行区分，类似于Awesome系列~
+PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库内仅维护阅读进度、摘要与思考，便于持续同步与版本管理。
 
-更加详细的论文阅读笔记以及思考见Note.md以及博客
+更加详细的论文阅读笔记以及思考见 `Note.md` 以及博客。
 
 ### 博客填坑
 - [x] Hessian矩阵系列串讲
@@ -92,6 +92,5 @@
 Awesome系类：[pprp/Awesome-LLM-Quantization: Awesome list for LLM quantization](https://github.com/pprp/Awesome-LLM-Quantization)
 
 [混合精度量化的paper\ List](https://zhuanlan.zhihu.com/p/365272572)(年代比较久远，挑一些顶会的来看吧)
-
 
 
