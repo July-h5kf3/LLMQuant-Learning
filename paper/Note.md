@@ -9,7 +9,7 @@
 
 
 
-#### 概念:
+#### 基础概念:
 
 **量化**：把Float类型(FP32,FP16)的模型参数和激活值，用整数(Int8,Int4)来代替，同时尽可能减少量化后模型推理的误差
 $$
@@ -58,9 +58,7 @@ $$
 
 
 
-**神经网络量化**：
-
-
+#### 神经网络量化
 
 首先解释一下为什么量化对神经网络精度影响不大：
 
@@ -245,7 +243,7 @@ H\approx \sum_{n=1}^N b_n b_n^\top
 $$
 ​	其中，$b_n = \nabla y_n = \nabla a_n$(输出单元的激活函数就是恒等函数)。这种方法中的Hessian矩阵可以跟随反向传播算法在$O(W)$个步骤内高效地求出误差函数地一阶导数。再通过简单地乘法就可以在$O(W^2)$步骤内求出矩阵元素。
 
-**硬件基础**
+#### 硬件基础
 
 下图展示了在神经网络加速器中是如何计算矩阵-向量乘法$y = \mathbf{W}x+b$的。这是一切神经网路的基础。该NN加速器的两个基本组件是处理单元$C_{n,m}$和累加器$A_n$.
 
@@ -268,6 +266,8 @@ $$
 <img src="figure\NN加速器_quant.png" alt="NN加速器_quant" style="zoom:80%;" />
 
 存储在累加器中的激活值需要在下一层使用之前写入内存。为了减少数据传输的开销，激活值往往会被量化位8bit,因此这里需要一个新的量化操作。
+
+#### 常见量化策略
 
 **Batch Normalization（BN）折叠**
 
@@ -316,9 +316,7 @@ Concat：被连接的两个向量通常不共享量化参数，因此反量化�
 
 ### 论文阅读
 
-**AdaQuant：Accurate Post Training Quantization With Small Calibration Sets**
-
-
+#### AdaQuant：Accurate Post Training Quantization With Small Calibration Sets
 
 **总结**：本篇文章的主要贡献在于提出了一个基于小数据集（校验集）的训练后量化方法AdaQuant，AdaQuant通过提出一个block/layer-wise的损失函数，通过在校验集上的训练学习量化参数(重点包括了一个最优的权重扰动，类似于AdaRound来避免四舍五入的不足),实现了减少量化的精度损失；提出了基于PI(整数规划)的bit精度分配方案，但是并没有解释精确损失的累加合理性；提出量化对BN融合造成的统计量偏移问题，并提出了PN(Para-Normalization)来解决这个问题。并在Bert-base网络上实现了不到1%的损失(4-8bit)
 
@@ -417,7 +415,7 @@ $$
 $$
 W_i' = W_i\frac{\gamma_r}{\sigma};b_i' = \frac{\gamma_r}{\sigma}(b_i - \mu) + \beta_r;\Delta_{w_i}' = \frac{\gamma_r}{\sigma}\Delta_{w_i}
 $$
-**AdaRound:**Up or Down? Adaptive Rounding for Post-Training Quantization
+#### AdaRound:Up or Down? Adaptive Rounding for Post-Training Quantization
 
 **总结**:本篇文章作者首先从数学角度证明了在模型量化过程中，直接将浮点数进行四舍五入round到最近定点数的方法并不是精度最优的。并且通过了一个简单的实验验证了猜想，随后基于此作者进行一系列的数学推导和数学近似推导除了最终的优化目标:最小化由于量化在预激活值中引入的均方误差，从而提出了自适应的Round方法:AdaRound.这种方法在进行量化时，自适应地决定将浮点值转到最近右定点还是左定点值。AdaRound可以在不需要QAT or finetune的情况下仅使用少量无标签的校准数据在精度上达到SOTA，甚至4bit量化也可以保留较好的精度。
 
@@ -508,7 +506,7 @@ $$
 $$
 其中$fa(\cdot)$为激活函数$\hat x$为当前层的反量化输入，x为当前层的浮点输入 
 
-**ZeroQuant: Efficient and Affordable Post-Training Quantization for Large-Scale Transformers**
+#### ZeroQuant: Efficient and Affordable Post-Training Quantization for Large-Scale Transformers
 
 <div style="background-color:#f9f9f9; padding:8px; border-radius:6px;">
 <b>评价:</b> 这篇文章比较Solid，考虑了硬件适配的问题，这是模型量化中一个老大难的问题尤其是混合精度。但是实验的模型都是参数规模较小的模型，在大模型上的效果有待考究。
@@ -586,7 +584,7 @@ x --> A((LN/GeLU + Quantize))
 A --> B[GeMM + DeQuantize]
 ```
 
-**OWQ:Outlier-Aware Weight Quantization for Efficient Fine-Tuning and Inference of Large Language Models**
+#### OWQ:Outlier-Aware Weight Quantization for Efficient Fine-Tuning and Inference of Large Language Models
 
 **总结**：本文提出了一个异常感知的权重量化方法OWQ，利用LLMs中的异常激活值挑选出Weak Column，对其采用全精度的方式在牺牲很小的性能的情况下提升了巨大的精度。此外为进一步提升其性能做了一定的硬件适配并提出了一个基于OWQ的WTC方案，简单来说就是在OWQ量化模型上微调只更新Weak Column的参数。
 
@@ -676,7 +674,7 @@ $$
 
 具体而言，这个微调方案会将OWQ的量化模型进行微调但只对Weak Column进行参数更新。因为weak column的数量很少，所以总体微调参数量很少，同时又因为weak column的权重使用fp16进行存储，因此微调空间较大，能够实现较好的微调效果。
 
-**GPTQ: accurate post-trainning quantization for generative pre-trained transformers**
+#### GPTQ: accurate post-trainning quantization for generative pre-trained transformers
 
 
 这个文章是OWQ的前身，借着对这篇文章的分析，我们梳理一下这一系列的文章的intuition。
@@ -936,67 +934,84 @@ $$
 
 <img src="figure\lazy batch-update.jpg" alt="OWQ" style="zoom:80%;" />
 
-**SpinQuant**:LLM quantization with learned rotation
+****
 
-在OWQ中我们有提到在大语言模型中在中间激活中表现出一些异常值，其值显著大于其他值，并且这些异常值集中在特定的特征维度上。如果我们忽略这些异常值那么量化后的模型会出现巨大的量化误差，从而显著影响量化后的模型的性能，主要是因为会拉伸量化范围，使得大多数数值的有效位数减少。除了OWQ中通过Hessian-aware的方式，此外还可以通过随机旋转的方式解决。
+#### TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate
+<div style="background-color:#f9f9f9; padding:8px; border-radius:6px;">
+    <b>个人评价</b>:这篇文章主要是针对大模型的KV-Cache的压缩，虽然是同一作者不同方法的浓缩（PolarQuant+QJL），但是补充了在结合方法下的量化误差上下界。目前实验停留在纯语言模型阶段，也许可以拓广到多模态阶段。
+</div>
 
+总结：本文主要介绍了一种针对高维向量量化的创新方法，旨在通过大幅度压缩数据规模来优化AI模型推理，KV Cache管理以及向量数据库检索的效率。其核心在于结合了随机旋转技术和最优标量量化器，能在极低的比特位宽下实现接近理论极限的MSE。针对内积检索中的偏置问题，作者设计了一个两阶段架构，利用 1-比特 QJL 变换补偿余数，从而确保了内积估算的无偏性。实验数据表明，该算法在 Llama-3.1 等大语言模型的长文本测试中，仅需 2.5 至 3.5 比特即可保持与全精度近乎一致的性能。此外，相较于传统的乘积量化 (PQ) 技术，TurboQuant在保持高召回率的同时，将索引构建时间降低至接近于零，展现出卓越的加速器友好性。
 
-
-简单介绍一下随机旋转矩阵的方式以及它为什么可以解决异常值对量化的影响：
-具体而言，在进入量化之前，对输入向量(或矩阵)乘以一个正交矩阵R:
+简单来说，进行向量量化（VQ）的目的是最小化下列两个误差：
 $$
-x' = Rx
+D_{MSE} = \mathbb{E}_{Q}[||x-Q^{-1}(Q(x))||_2^2]\tag{1}
 $$
-量化后再乘回逆旋转($R^\top = R^{-1}$)
+
 $$
-\hat x = R^\top Q(Rx)
+D_{prod} = \mathbb{E}_Q[|<y,x>-<y,Q^{-1}(Q(x))>|^2]\tag{2}
 $$
-其中Q为量化算子。由于正交变换保持内积与欧几里得范数不变(也就是不会改变向量的夹角和距离)，这对全精度网络的数学表达几乎等价。
 
-而我们直到LLM激活中的异常值集中在少数特定方向。当我们对激活值进行旋转变换后，直观来说“随机旋转就像把尖锐的能量峰打散，使得每个通道承担一点异常值的能量。”
-
-这在数学上等价于：对一个协方差矩阵 $Σ=\mathbb{E}[xx^\top]$，乘以 R 后协方差变为 $RΣR⊤$。如果$ \Sigma $是高度非对角的（少数特征值极大），随机旋转后对角分量的方差会更加均匀。
-
-在之前的研究中，往往会采用随机旋转矩阵的方式，例如使用随机的正交矩阵或Hadamard矩阵。但是这种方法在量化下带来的误差的方差很大，不具有鲁棒性。基于这个现象，作者团队提出了SpinQuant，在该方法中使用的旋转矩阵为通过学习得到的最优旋转矩阵。
-
-具体而言，作者将用到的旋转矩阵分为了四类，每个类型有其对应的处理方式
-
-![](figure/SpinQuant.png)
-
-- R1:位于Residual Stream入口，每当输入X(Embedding层输出)后将其乘以旋转矩阵$R_1$得到旋转激活值，在进入下一层前再乘回$R_1^{-1}$,此外残差连接需要保证残差和主干在同一个坐标系中相加，从而保持模型输入不变。
-- $R_2$:位于Attention计算中的Value投影计算处，并在最后进行投影前乘回其逆矩阵
-- $R_3$:在线旋转矩阵，采用Hadamard随机矩阵，一般用于低比特的KV Cache
-- $R_4$:位于FFN中，同样也是Hadamard随机矩阵
-
-一般情况下只会采用$R_1+R_2$(可学习矩阵 no had)，在极端低比特量化场景下则会加入$R_3+R_4$(had)
-
-
-
-这里我们提到$R_1,R_2$是可学习的矩阵，这个矩阵需要保证其正交性，但是一般的反向传播算法难以保证其正交性，因此作者采用Cayley变换保证学习到的矩阵始终是正交的。
-
-我们从数学的角度来描述这个过程。
-
-简单来说，我们的矩阵$R\in O(n) = \{R \in \mathbb{R}^{n\times n}|R^\top R = I\}$
-
-想要更新后的矩阵仍在正交空间上，微小更新$\Delta R$就必须满足：
+此外，对于内积量化，在大模型推理中我们更希望向量的内积是无偏的，即满足：
 $$
-(R + \epsilon \Delta R)^\top(R + \epsilon \Delta R) = I + O(\epsilon^2)
+\mathbb{E}_Q[<y,Q^{-1}(Q(x))>]=<y,x>\tag{3}
 $$
-忽略$\epsilon^2$项，展开得到:
+而这两个优化目标是难以兼顾的，因此在VQ中通常会设计两个Quantizer，分别是$Q_{MSE}$,$Q_{prod}$。对应到KV-Cache量化场景下就是对K向量用$Q_{prod}$，对V向量用$Q_{MSE}$。
+
+对于$Q_{MSE}$，我们的目标就是最小化公式(1)。在此之前，我们有如下假设:
+
+待量化向量满足$||x||^2 = 1$，即$x\in \mathbb{S}^{d-1}$,即分布在d维球面上。若不满足这个条件，在实际中可以通过存储L2范数进行Scale使向量满足条件。
+
+我们有如下引理（Lemma 1）：
+
+若$x\in \mathbb{S}^{d-1}$,是在单位超球面上均匀分布的**随机变量**，那么对任意$j\in [d]$,坐标$x_j$服从（缩放/平移后的）Beta型分布：
 $$
-R^\top\Delta R + (\Delta R)^\top R = 0
+x_j ～ f_X(x)=\frac{\Gamma(\frac{d}{2})}{\sqrt{\pi}\Gamma(\frac{d-1}{2})}(1-x^2)^{\frac{d-3}{2}},\quad x\in[-1,1]
 $$
-令$A = R^\top \Delta R$，那么有:
+在高维情况下， 该分布收敛到正态分布：
 $$
-A + A^\top = 0
+f_X(.)\to N(0,\frac{1}{d})
 $$
-即$A = -A^\top$,也就是说，所有合法方向$\Delta R$必须可以写成:
+证明略.
+
+High-Level层面上可以理解为固定球上一点的一个坐标相当于用一个平面去截这个高维球面，那么此时其余坐标构成的截面是一个维度为d-2，半径为$\sqrt{1-x^2}$的球面。（可以想象一下三维球面被平面截得到圆），那么这个分布自然就是中间多（x=0），两边少（$x=\pm 1$）.
+
+
+
+在这个引理的支持下，我们对原始的向量x乘以一个随机的旋转矩阵$\Pi $（**这里相当于做了一个极坐标变换**），使其成为在单位超球面上均匀分布的随机变量$z = \Pi x$。那么此时根据Lemma 1，z的每个坐标都可以认为符合上述Beta型分布，且在高维情况下收敛为正态分布。此外，在高维下，z不同坐标之间会变得近似独立，因此我们可以对每个坐标独立地应用最优标量量化器。于是我们的问题转变为：
+
+为服从如下分布的随机变量设计一个标量量化器。
 $$
-\Delta R = RA,A^\top = -A
+x_j ～ f_X(x)=\frac{\Gamma(\frac{d}{2})}{\sqrt{\pi}\Gamma(\frac{d-1}{2})}(1-x^2)^{\frac{d-3}{2}},\quad x\in[-1,1]
 $$
-在SpinQuant中我们通过如下方式获得这个斜对称矩阵A:
+在随机变量分布给定的情况下的最优标量量化问题可以表述为一个一维连续K-means问题。更具体而言，我们希望把区间[-1,1]划分为$2^b$个簇。最优解需要满足：当所有质心按照升序排序时，区间边界应当是相邻质心的中间。因此，若记这些升序排序的质心为$c_i$那么，该标量量化问题可以描述为如下k-means优化问题：
 $$
-\hat G = GR^\top - \frac{1}{2}RR^\top GR^\top\\
-A = \hat G - \hat G^\top
+C(f_x,b) = \min_{-1 \leq c_1\leq c_2\leq \dots \leq c_{2^b}\leq 1}\sum_{1}^{2^b}|x-c_i|^2f_x(x)dx\tag{4}
 $$
-其中$\hat G$是把G投影到R的坐标系中
+该问题可以通过迭代数值方法进行求解（Lloyd-Max量化器，本质和K-means相似，可以看作一维的K-means）。此外，我们只需要针对一组实际有效的bit-width b离线求解一次，然后把结果存储下来，供量化器之后重复使用。
+
+至此，$Q_{MSE}$的做法很明确：先计算$z=\Pi x$,然后对z的每个坐标找到最近的质心，并存储该质心的索引。对应的反量化流程则通过读取这些索引对应的质心来重建旋转后的向量，再乘以$\Pi^\top$从而得到原始向量。
+
+论文中还给出了该量化器损失的上界，理解起来并不困难，这里不做过多赘述。
+
+
+
+之所以$Q_{MSE}$需要与$Q_{prod}$不能统一，是因为前者不满足内积无偏性的特性，即式(3)。（论文中给出了证明）
+
+为了保证$Q_{prod}$的内积无偏性，作者提出了将$Q_{MSE}$与QJL相结合的方案。具体而言，设$Q_{MSE}$是对应于位宽 b−1 的$ Q_{mse} $的量化映射。对于任意$x\in \mathbb{S}^{d-1}$，我们定义残差向量：
+$$
+r := x - Q_{mse}^{-1}(Q_{mse}(x))
+$$
+其L2范数很小，即在期望意义下(见式（4）)
+$$
+\mathbb{E}[||r||]=\sqrt{C(f_X,b-1)}
+$$
+随后，我们可将QJL 的量化映射 $Q_{QJL}$ 应用于该残差向量，从而使总体位宽达到 b，并得到如下无偏内积估计器：
+$$
+<y,Q^{-1}_{MSE}(Q_{MSE}(x))> + ||r||^2\cdot<y,Q^{-1}_{qjl}(Q_{qjl}(r))>
+$$
+更形式化的来说，我们可以定义：
+$$
+Q_{prod}(x) = [Q_{MSE}(x),Q_{qjl}(x-Q^{-1}_{MSE}(Q_{MSE}(x))),||x-Q^{-1}_{MSE}(Q_{MSE}(x))||_2]
+$$
+论文还对该方法的误差下界进行了估计，具体的参考原文。
