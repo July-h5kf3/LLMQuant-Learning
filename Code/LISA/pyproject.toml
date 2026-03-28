@@ -1,0 +1,14 @@
+[project]
+name = "lisa"
+version = "0.1.0"
+description = "Inference-focused LISA reproduction workspace"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "einops>=0.8.2",
+    "torch==2.11.0",
+    "transformers==5.4.0",
+]
+
+[tool.uv]
+package = false
