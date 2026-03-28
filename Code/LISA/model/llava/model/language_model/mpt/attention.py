@@ -6,7 +6,7 @@ import warnings
 from einops import rearrange
 
 from .flash_attn_triton import flash_attn_func
-from .norm import LPLaterNorm
+from .norm import LPLayerNorm
 def _reset_is_causal(
         num_query_tokens: int, num_key_tokens: int, original_is_causal: bool
 ):
@@ -233,3 +233,69 @@ class MultiheadAttention(nn.Module):
             needs_weights=needs_weights,
         )
         return (self.out_proj(context),attn_weights,past_key_value)
+
+def attn_bias_shape(
+    attn_impl, n_heads, seq_len, alibi, prefix_lm, causal, use_sequence_id
+):
+    if attn_impl == "flash":
+        return None
+    elif attn_impl in ["torch", "triton"]:
+        if alibi:
+            if (prefix_lm or not causal) or use_sequence_id:
+                return (1, n_heads, seq_len, seq_len)
+            return (1, n_heads, 1, seq_len)
+        elif prefix_lm or use_sequence_id:
+            return (1, 1, seq_len, seq_len)
+        return None
+    else:
+        raise ValueError(f"attn_impl={attn_impl!r} is an invalid setting.")
+    
+def build_attn_bias(
+    attn_impl, attn_bias, n_heads, seq_len, causal=False, alibi=False, alibi_bias_max=8
+):
+    if attn_impl == "flash":
+        return None
+    elif attn_impl in ["torch", "triton"]:
+        if alibi:
+            (device, dtype) = (attn_bias.device, attn_bias.dtype)
+            attn_bias = attn_bias.add(
+                build_alibi_bias(
+                    n_heads,
+                    seq_len,
+                    full=not causal,
+                    alibi_bias_max=alibi_bias_max,
+                    device=device,
+                    dtype=dtype,
+                )
+            )
+        return attn_bias
+    else:
+        raise ValueError(f"attn_impl={attn_impl!r} is an invalid setting.")
+    
+def build_alibi_bias(
+    n_heads, seq_len, full=False, alibi_bias_max=8, device=None, dtype=None
+):
+    alibi_bias = torch.arange(1 - seq_len, 1, dtype=torch.int32, device=device).view(
+        1, 1, 1, seq_len
+    )
+    if full:
+        alibi_bias = alibi_bias - torch.arange(
+            1 - seq_len, 1, dtype=torch.int32, device=device
+        ).view(1, 1, seq_len, 1)
+        alibi_bias = alibi_bias.abs().mul(-1)
+    slopes = gen_slopes(n_heads, alibi_bias_max, device=device)
+    alibi_bias = alibi_bias * slopes
+    return alibi_bias.to(dtype=dtype)
+
+def gen_slopes(n_heads, alibi_bias_max=8, device=None):
+    _n_heads = 2 ** math.ceil(math.log2(n_heads))
+    m = torch.arange(1, _n_heads + 1, dtype=torch.float32, device=device)
+    m = m.mul(alibi_bias_max / _n_heads)
+    slopes = 1.0 / torch.pow(2, m)
+    if _n_heads != n_heads:
+        slopes = torch.concat([slopes[1::2], slopes[::2]])[:n_heads]
+    return slopes.view(1, n_heads, 1, 1)
+
+ATTN_CLASS_REGISTRY = {
+    "multihead_attention": MultiheadAttention,
+}
