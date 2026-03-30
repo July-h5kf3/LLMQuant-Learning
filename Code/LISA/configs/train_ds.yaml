@@ -1,0 +1,55 @@
+local_rank: 0
+version: "liuhaotian/llava-llama-2-13b-chat-lightning-preview"
+vis_save_path: "./vis_output"
+precision: "bf16"
+image_size: 1024
+model_max_length: 512
+lora_r: 8
+vision_tower: "openai/clip-vit-large-patch14"
+load_in_8bit: false
+load_in_4bit: false
+
+dataset: "sem_seg||refer_seg||vqa||reason_seg"
+sample_rates: "9,3,3,1"
+sem_seg_data: "ade20k||cocostuff||pascal_part||paco_lvis||mapillary"
+refer_seg_data: "refclef||refcoco||refcoco+||refcocog"
+vqa_data: "llava_instruct_150k"
+reason_seg_data: "ReasonSeg|train"
+val_dataset: "ReasonSeg|val"
+dataset_dir: "./dataset"
+
+log_base_dir: "./runs"
+exp_name: "lisa"
+epochs: 10
+steps_per_epoch: 500
+batch_size: 2
+grad_accumulation_steps: 10
+val_batch_size: 1
+workers: 4
+lr: 0.0003
+
+ce_loss_weight: 1.0
+dice_loss_weight: 0.5
+bce_loss_weight: 2.0
+
+lora_alpha: 16
+lora_dropout: 0.05
+lora_target_modules: "q_proj,v_proj"
+
+explanatory: 0.1
+beta1: 0.9
+beta2: 0.95
+num_classes_per_sample: 3
+exclude_val: false
+no_eval: false
+
+vision_pretrained: "PATH_TO_SAM_ViT-H"
+out_dim: 256
+resume: ""
+print_freq: 1
+start_epoch: 0
+gradient_checkpointing: true
+train_mask_decoder: true
+use_mm_start_end: true
+auto_resume: true
+conv_type: "llava_v1"

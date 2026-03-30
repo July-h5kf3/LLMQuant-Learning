@@ -4,15 +4,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .llava.model.language_model.llava_llama import (LlavaLlamaForCausalLM,LlavaLlamaModel)
+from .llava.model.language_model.llava_llama import (
+    LlavaLlamaForCausalLM,
+    LlavaLlamaModel,
+)
 from .segment_anything import build_sam_vit_h
+
 
 def dice_loss(
     inputs: torch.Tensor,
     targets: torch.Tensor,
     num_masks: float,
-    scale = 1000,
-    eps = 1e-6,
+    scale=1000,
+    eps=1e-6,
 ):
     inputs = inputs.sigmoid()
     inputs = inputs.flatten(1, 2)
@@ -23,6 +27,7 @@ def dice_loss(
     loss = loss.sum() / (num_masks + 1e-8)
     return loss
 
+
 def sigmoid_ce_loss(
     inputs: torch.Tensor,
     targets: torch.Tensor,
@@ -32,13 +37,15 @@ def sigmoid_ce_loss(
     loss = loss.flatten(1, 2).mean(1).sum() / (num_masks + 1e-8)
     return loss
 
+
 class LisaMetaModel:
     def __init__(
         self,
         config,
         **kwargs,
     ):
-        super(LisaMetaModel,self).__init__(config)
+        super(LisaMetaModel, self).__init__(config)
+
         self.config = config
         if not hasattr(self.config, "train_mask_decoder"):
             self.config.train_mask_decoder = kwargs["train_mask_decoder"]
@@ -47,6 +54,7 @@ class LisaMetaModel:
         else:
             self.vision_pretrained = kwargs.get("vision_pretrained", None)
             self.initialize_lisa_modules(self.config)
+
     def initialize_lisa_modules(self, config):
         #SAM
         self.visual_model = build_sam_vit_h(self.vision_pretrained)
@@ -61,9 +69,9 @@ class LisaMetaModel:
         in_dim = config.hidden_size
         out_dim = config.out_dim
         text_fc = [
+            nn.Linear(in_dim, in_dim),
+            nn.ReLU(inplace=True),
             nn.Linear(in_dim, out_dim),
-            nn.ReLU(),
-            nn.Linear(out_dim, out_dim),
             nn.Dropout(0.0),
         ]
         self.text_hidden_fcs = nn.ModuleList([nn.Sequential(*text_fc)])
@@ -71,13 +79,14 @@ class LisaMetaModel:
         for param in self.text_hidden_fcs.parameters():
             param.requires_grad = True
 
-class LisaModel(LisaMetaModel,LlavaLlamaModel):
+
+class LisaModel(LisaMetaModel, LlavaLlamaModel):
     def __init__(
         self,
         config,
         **kwargs,
     ):
-        super(LisaModel,self).__init__(config,**kwargs)
+        super(LisaModel, self).__init__(config, **kwargs)
 
         self.config.use_cache = False
         self.config.vision_tower = self.config.mm_vision_tower
@@ -88,7 +97,8 @@ class LisaModel(LisaMetaModel,LlavaLlamaModel):
         self.config.freeze_mm_mlp_adapter = True
         self.config.pretrain_mm_mlp_adapter = None
         self.config.mm_use_im_patch_token = False
-    
+
+
 class LISAForCausalLM(LlavaLlamaForCausalLM):
     def __init__(
         self,
@@ -105,6 +115,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             self.bce_loss_weight = kwargs.pop("bce_loss_weight", None)
         else:
             config.mm_vision_tower = config.vision_tower
+
         self.seg_token_idx = kwargs.pop("seg_token_idx")
 
         super().__init__(config)
@@ -113,29 +124,33 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.post_init()
 
-    def get_visual_embs(self,pixel_values: torch.FloatTensor):
+    def get_visual_embs(self, pixel_values: torch.FloatTensor):
         with torch.no_grad():
             image_embeddings_list = []
             for i in range(pixel_values.shape[0]):
-                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 image_embeddings = self.model.visual_model.image_encoder(
                     pixel_values[i].unsqueeze(0)
                 )
                 image_embeddings_list.append(image_embeddings)
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             image_embeddings = torch.cat(image_embeddings_list, dim=0)
         return image_embeddings
-    def forward(self,**kwargs):
+
+    def forward(self, **kwargs):
         if "past_key_values" in kwargs:
             return super().forward(**kwargs)
         return self.model_forward(**kwargs)
+
     def model_forward(
         self,
         images: torch.FloatTensor,
         images_clip: torch.FloatTensor,
-        input_ids: torch.LongTensor = None,
-        labels: torch.LongTensor = None,
-        attention_mask: torch.LongTensor = None,
+        input_ids: torch.LongTensor,
+        labels: torch.LongTensor,
+        attention_masks: torch.LongTensor = None,
         offset: torch.LongTensor = None,
         masks_list: List[torch.FloatTensor] = None,
         label_list: List[torch.Tensor] = None,
@@ -145,20 +160,24 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
     ):
         image_embeddings = self.get_visual_embs(images)
         batch_size = image_embeddings.shape[0]
-        assert batch_size == len(offset) -  1
+        assert batch_size == len(offset) - 1
 
-        seg_token_mask = input_ids[:,1:] == self.seg_token_idx
-        #因为seg_token_mask是根据input_ids[:,1:]生成的，所以它的shape是(batch_size, seq_len-1)，需要补一个False，保证和input_ids的shape一致
+        device = input_ids.device
+        seg_token_mask = input_ids[:, 1:] == self.seg_token_idx
+        # 因为seg_token_mask是根据input_ids[:,1:]生成的，所以它的shape是(batch_size, seq_len-1)，需要补一个False，保证和input_ids的shape一致
         seg_token_mask = torch.cat(
             [
                 seg_token_mask,
-                torch.zeros((seg_token_mask.shape[0],1)).bool().cuda(),
+                torch.zeros((seg_token_mask.shape[0], 1), dtype=torch.bool, device=device),
             ],
             dim=1,
         )
-        #模型前面会插入图像token，所以seg_token_mask需要在前面补255个False，保证和input_ids的shape一致
+        # 模型前面会插入图像token，所以seg_token_mask需要在前面补255个False，保证和input_ids的shape一致
         seg_token_mask = torch.cat(
-            [torch.zeros((seg_token_mask.shape[0],255)).bool().cuda(), seg_token_mask],
+            [
+                torch.zeros((seg_token_mask.shape[0], 255), dtype=torch.bool, device=device),
+                seg_token_mask,
+            ],
             dim=1,
         )
 
@@ -166,20 +185,22 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             n_batch = 1
             length = input_ids.shape[0]
             assert images_clip.shape[0] == 1
-            images_clip_extend = images_clip.expand(length,-1,-1,-1).contiguous()
-            #一张图片可能对应多个文本输入，所以需要在前面补齐图片特征，保证和input_ids的shape一致
+            images_clip_extend = images_clip.expand(length, -1, -1, -1).contiguous()
+            # 一张图片可能对应多个文本输入，所以需要在前面补齐图片特征，保证和input_ids的shape一致
 
             output_hidden_states = []
             for i in range(n_batch):
-                start_i,end_i = i * length, min((i + 1) * length, input_ids.shape[0])
+                start_i, end_i = i * length, min((i + 1) * length, input_ids.shape[0])
                 output_i = super().forward(
-                    images=images_clip_extend[:end_i - start_i],
-                    attention_mask=attention_mask[start_i:end_i],
+                    images=images_clip_extend[: end_i - start_i],
+                    attention_mask=attention_masks[start_i:end_i],
                     input_ids=input_ids[start_i:end_i],
-                    return_dict=True,
+                    output_hidden_states=True,
                 )
                 output_hidden_states.append(output_i.hidden_states)
-                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
             output_hidden_states_list = []
             output_hidden_states_level = torch.cat(output_hidden_states, dim=0)
             output_hidden_states_list.append(output_hidden_states_level)
@@ -200,32 +221,31 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
 
             output = super().forward(
                 images=images_clip,
-                attention_mask=attention_mask,
+                attention_mask=attention_masks,
                 input_ids=input_ids,
                 labels=labels,
                 output_hidden_states=True,
             )
             output_hidden_states = output.hidden_states
-        hidden_states = []
 
+        hidden_states = []
         assert len(self.model.text_hidden_fcs) == 1
-        #取最后一层的hidden state，并映射到SAM的文本embedding空间
+        # 取最后一层的hidden state，并映射到SAM的文本embedding空间
         hidden_states.append(self.model.text_hidden_fcs[0](output_hidden_states[-1]))
 
         last_hidden_state = torch.stack(hidden_states, dim=-1).sum(dim=-1)
-        pred_embeddings = last_hidden_state[seg_token_mask] #取出文本中所有seg_token_idx对应的hidden state，作为SAM的文本prompt embedding
-        seg_token_counts = seg_token_mask.int().sum(-1)  # [bs, ]
-        
-        #seg_token_counts表示每个样本中seg_token_idx的数量，
-        #seg_token_offset表示每个样本中seg_token_idx的起始位置，
-        #pred_embeddings_表示每个样本中seg_token_idx对应的hidden state列表
+        pred_embeddings = last_hidden_state[seg_token_mask]  # 取出文本中所有seg_token_idx对应的hidden state，作为SAM的文本prompt embedding
+        seg_token_counts = seg_token_mask.int().sum(-1)
+
+        # seg_token_counts表示每个样本中seg_token_idx的数量，
+        # seg_token_offset表示每个样本中seg_token_idx的起始位置，
+        # pred_embeddings_表示每个样本中seg_token_idx对应的hidden state列表
         seg_token_offset = seg_token_counts.cumsum(-1)
         seg_token_offset = torch.cat(
-            [torch.zeros(1).long().cuda(), seg_token_offset], dim=0
+            [torch.zeros(1, dtype=torch.long, device=device), seg_token_offset], dim=0
         )
-
         seg_token_offset = seg_token_offset[offset]
-        
+
         pred_embeddings_ = []
         for i in range(len(seg_token_offset) - 1):
             start_i, end_i = seg_token_offset[i], seg_token_offset[i + 1]
@@ -235,14 +255,14 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         multimask_output = False
         pred_masks = []
         for i in range(len(pred_embeddings)):
-            (sparse_embeddings,dense_embeddings) = self.model.visual_model.prompt_encoder(
+            sparse_embeddings, dense_embeddings = self.model.visual_model.prompt_encoder(
                 points=None,
                 boxes=None,
                 masks=None,
                 text_embeds=pred_embeddings[i].unsqueeze(1),
             )
             sparse_embeddings = sparse_embeddings.to(pred_embeddings[i].dtype)
-            low_res_masks, iou_predictions = self.model.visual_model.mask_decoder(
+            low_res_masks, _ = self.model.visual_model.mask_decoder(
                 image_embeddings=image_embeddings[i].unsqueeze(0),
                 image_pe=self.model.visual_model.prompt_encoder.get_dense_pe(),
                 sparse_prompt_embeddings=sparse_embeddings,
@@ -255,7 +275,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 original_size=label_list[i].shape,
             )
             pred_masks.append(pred_mask[:, 0])
-        
+
         model_output = output
         gt_masks = masks_list
 
@@ -264,11 +284,8 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 "pred_masks": pred_masks,
                 "gt_masks": gt_masks,
             }
-        
-        output = model_output.logits
 
-        ce_loss = model_output.loss
-        ce_loss = ce_loss * self.ce_loss_weight
+        ce_loss = model_output.loss * self.ce_loss_weight
         mask_bce_loss = 0
         mask_dice_loss = 0
         num_masks = 0
@@ -279,9 +296,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
 
             assert (
                 gt_mask.shape[0] == pred_mask.shape[0]
-            ), "gt_mask.shape: {}, pred_mask.shape: {}".format(
-                gt_mask.shape, pred_mask.shape
-            )
+            ), f"gt_mask.shape: {gt_mask.shape}, pred_mask.shape: {pred_mask.shape}"
             mask_bce_loss += (
                 sigmoid_ce_loss(pred_mask, gt_mask, num_masks=gt_mask.shape[0])
                 * gt_mask.shape[0]
@@ -305,6 +320,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             "mask_dice_loss": mask_dice_loss,
             "mask_loss": mask_loss,
         }
+
     def evaluate(
         self,
         images_clip,
@@ -327,28 +343,27 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             output_hidden_states = outputs.hidden_states[-1]
             output_ids = outputs.sequences
 
+            device = output_ids.device
             seg_token_mask = output_ids[:, 1:] == self.seg_token_idx
-            # hack for IMAGE_TOKEN_INDEX (we suppose that there is only one image, and it is in the front)
             seg_token_mask = torch.cat(
                 [
-                    torch.zeros((seg_token_mask.shape[0], 255)).bool().cuda(),
+                    torch.zeros((seg_token_mask.shape[0], 255), dtype=torch.bool, device=device),
                     seg_token_mask,
                 ],
                 dim=1,
             )
 
             hidden_states = []
-
             assert len(self.model.text_hidden_fcs) == 1
             hidden_states.append(self.model.text_hidden_fcs[0](output_hidden_states))
 
             last_hidden_state = torch.stack(hidden_states, dim=-1).sum(dim=-1)
             pred_embeddings = last_hidden_state[seg_token_mask]
 
-            seg_token_counts = seg_token_mask.int().sum(-1)  # [bs, ]
+            seg_token_counts = seg_token_mask.int().sum(-1)
             seg_token_offset = seg_token_counts.cumsum(-1)
             seg_token_offset = torch.cat(
-                [torch.zeros(1).long().cuda(), seg_token_offset], dim=0
+                [torch.zeros(1, dtype=torch.long, device=device), seg_token_offset], dim=0
             )
 
             pred_embeddings_ = []
@@ -362,10 +377,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             multimask_output = False
             pred_masks = []
             for i in range(len(pred_embeddings)):
-                (
-                    sparse_embeddings,
-                    dense_embeddings,
-                ) = self.model.visual_model.prompt_encoder(
+                sparse_embeddings, dense_embeddings = self.model.visual_model.prompt_encoder(
                     points=None,
                     boxes=None,
                     masks=None,
@@ -373,7 +385,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 )
 
                 sparse_embeddings = sparse_embeddings.to(pred_embeddings[i].dtype)
-                low_res_masks, iou_predictions = self.model.visual_model.mask_decoder(
+                low_res_masks, _ = self.model.visual_model.mask_decoder(
                     image_embeddings=image_embeddings[i].unsqueeze(0),
                     image_pe=self.model.visual_model.prompt_encoder.get_dense_pe(),
                     sparse_prompt_embeddings=sparse_embeddings,
