@@ -5,3 +5,4 @@ paper/**/*.pdf
 __pycache__/
 *.py[cod]
 .venv/
+Code/LISA/weights/
