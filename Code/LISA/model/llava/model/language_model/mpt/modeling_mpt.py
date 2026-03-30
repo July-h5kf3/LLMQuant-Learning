@@ -72,3 +72,76 @@ class MPTModel(MPTPreTrainedModel):
         return self.wte
     def set_input_embeddings(self, value):
         self.wte = value
+    
+    @torch.no_grad()
+    def _attn_bias(
+        self,
+        device,
+        dtype,
+        attention_mask: Optional[torch.ByteTensor] = None,
+        prefix_mask: Optional[torch.ByteTensor] = None,
+        sequence_id: Optional[torch.LongTensor] = None,
+    ):
+        del prefix_mask, sequence_id
+
+        # The current LISA path does not use prefix_lm / sequence_id / alibi.
+        # We only need to fold the padding mask into an additive attention bias.
+        self._attn_bias_initialized = True
+
+        if attention_mask is None:
+            return (None, None)
+
+        s_k = attention_mask.shape[-1]
+        attn_bias = torch.zeros((1, 1, 1, s_k), device=device, dtype=dtype)
+        min_val = torch.finfo(attn_bias.dtype).min
+        attn_bias = attn_bias.masked_fill(
+            ~attention_mask.view(-1, 1, 1, s_k), min_val
+        )
+        return (attn_bias, None)
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        past_key_values:Optional[List[Tuple[torch.FloatTensor]]] = None,
+        attention_mask:Optional[torch.ByteTensor] = None,
+        prefix_mask:Optional[torch.ByteTensor] = None,
+        sequence_id:Optional[torch.LongTensor] = None,
+        return_dict:Optional[bool] = None,
+        output_attentions:Optional[bool] = None,
+        output_hidden_states:Optional[bool] = None,
+        use_cache: Optional[bool] = None,
+        inputs_embeds:Optional[torch.Tensor] = None,
+    ):
+        return_dict = (
+            return_dict if return_dict is not None else self.config.return_dict
+        )
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+        if attention_mask is not None:
+            attention_mask = attention_mask.bool()
+        if not return_dict:
+            raise NotImplementedError(
+                "return_dict False is not implemented yet for MPT"
+            )
+        if output_attentions:
+            if self.attn_impl != "torch":
+                raise NotImplementedError(
+                    "output_attentions is not implemented for MPT when using attn_impl `flash` or `triton`."
+                )
+        if (
+            attention_mask is not None
+            and attention_mask[:, 0].sum() != attention_mask.shape[0]
+            and self.training
+        ):
+            raise NotImplementedError(
+                "MPT does not support training with left padding."
+            )
+        if input_ids is not None:
+                S = input_ids.size(1)
+                assert (
+                S <= self.config.max_seq_len
+                ), f"Cannot forward input with seq_len={S}, this model only supports seq_len<={self.config.max_seq_len}"
+                tok_emb = self.wte(input_ids)
+        else:
+            assert inputs_embeds is not None
+            #20260330 Comments:这里发现源代码会有点问题，因此先暂停实现，Codex告诉我MPT可能没被用
+            
+                
