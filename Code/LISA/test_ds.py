@@ -2,15 +2,17 @@ import argparse
 import os
 import sys
 from functools import partial
+from types import SimpleNamespace
 
-import deepspeed
 import torch
 import tqdm
 import transformers
+import yaml
 from peft import LoraConfig, get_peft_model
 
 from model.LISA import LISAForCausalLM
-from model.llava import conversation as conversation_lib
+from model.llava1p5 import conversation as conversation_lib
+from train_utils import cast_batch_precision, get_device, get_torch_dtype
 from utils.utils import (
     DEFAULT_IM_END_TOKEN,
     DEFAULT_IM_START_TOKEN,
@@ -19,86 +21,75 @@ from utils.utils import (
     intersectionAndUnionGPU,
 )
 
+REQUIRED_CONFIG_KEYS = (
+    "local_rank",
+    "version",
+    "precision",
+    "image_size",
+    "model_max_length",
+    "lora_r",
+    "vision_tower",
+    "load_in_8bit",
+    "load_in_4bit",
+    "dataset_dir",
+    "test_dataset",
+    "workers",
+    "batch_size",
+    "lora_alpha",
+    "lora_dropout",
+    "lora_target_modules",
+    "ce_loss_weight",
+    "dice_loss_weight",
+    "bce_loss_weight",
+    "vision_pretrained",
+    "out_dim",
+    "resume",
+    "train_mask_decoder",
+    "use_mm_start_end",
+    "conv_type",
+)
+
 
 def parse_args(args):
     parser = argparse.ArgumentParser(description="LISA Test Inference")
-    parser.add_argument("--local_rank", default=0, type=int, help="node rank")
     parser.add_argument(
-        "--version", default="liuhaotian/llava-llama-2-13b-chat-lightning-preview"
-    )
-    parser.add_argument(
-        "--precision",
-        default="bf16",
+        "--config",
+        default="configs/test_ds.yaml",
         type=str,
-        choices=["fp32", "bf16", "fp16"],
-        help="precision for inference",
+        help="Path to YAML config file.",
     )
-    parser.add_argument("--image_size", default=1024, type=int, help="image size")
-    parser.add_argument("--model_max_length", default=512, type=int)
-    parser.add_argument("--lora_r", default=8, type=int)
     parser.add_argument(
-        "--vision-tower", default="openai/clip-vit-large-patch14", type=str
+        "--local_rank",
+        default=None,
+        type=int,
+        help="Optional runtime override for distributed launchers.",
     )
-    parser.add_argument("--load_in_8bit", action="store_true", default=False)
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--dataset_dir", default="./dataset", type=str)
-    parser.add_argument("--test_dataset", default="ReasonSeg|val", type=str)
-    parser.add_argument("--workers", default=4, type=int)
-    parser.add_argument("--batch_size", default=1, type=int)
-    parser.add_argument("--lora_alpha", default=16, type=int)
-    parser.add_argument("--lora_dropout", default=0.05, type=float)
-    parser.add_argument("--lora_target_modules", default="q_proj,v_proj", type=str)
-    parser.add_argument("--ce_loss_weight", default=1.0, type=float)
-    parser.add_argument("--dice_loss_weight", default=0.5, type=float)
-    parser.add_argument("--bce_loss_weight", default=2.0, type=float)
-    parser.add_argument("--vision_pretrained", default="PATH_TO_SAM_ViT-H", type=str)
-    parser.add_argument("--out_dim", default=256, type=int)
-    parser.add_argument("--resume", default="", type=str)
-    parser.add_argument("--train_mask_decoder", action="store_true", default=True)
-    parser.add_argument("--use_mm_start_end", action="store_true", default=True)
-    parser.add_argument(
-        "--conv_type",
-        default="llava_v1",
-        type=str,
-        choices=["llava_v1", "llava_llama_2"],
-    )
-    return parser.parse_args(args)
+    parsed = parser.parse_args(args)
 
+    config_path = parsed.config
+    if not os.path.isabs(config_path):
+        config_path = os.path.join(os.path.dirname(__file__), config_path)
 
-def get_device(args):
-    if torch.cuda.is_available():
-        return torch.device("cuda", args.local_rank)
-    return torch.device("cpu")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
 
+    if not isinstance(config, dict):
+        raise ValueError("YAML config must be a mapping.")
 
-def get_torch_dtype(precision):
-    torch_dtype = torch.float32
-    if precision == "bf16":
-        torch_dtype = torch.bfloat16
-    elif precision == "fp16":
-        torch_dtype = torch.float16
-    return torch_dtype
+    missing_keys = [k for k in REQUIRED_CONFIG_KEYS if k not in config]
+    if missing_keys:
+        raise KeyError(f"Missing config keys in YAML: {missing_keys}")
 
+    config["config"] = config_path
+    if parsed.local_rank is not None:
+        config["local_rank"] = parsed.local_rank
 
-def move_batch_to_device(input_dict, device):
-    for k, v in input_dict.items():
-        if isinstance(v, torch.Tensor):
-            input_dict[k] = v.to(device=device, non_blocking=True)
-        elif isinstance(v, list) and len(v) > 0 and isinstance(v[0], torch.Tensor):
-            input_dict[k] = [ele.to(device=device, non_blocking=True) for ele in v]
-    return input_dict
+    if config["precision"] not in {"fp32", "bf16", "fp16"}:
+        raise ValueError("precision must be one of: fp32, bf16, fp16")
+    if config["conv_type"] not in {"llava_v1", "llava_llama_2"}:
+        raise ValueError("conv_type must be one of: llava_v1, llava_llama_2")
 
-
-def cast_batch_precision(input_dict, precision):
-    if precision == "fp16":
-        input_dict["images"] = input_dict["images"].half()
-        input_dict["images_clip"] = input_dict["images_clip"].half()
-    elif precision == "bf16":
-        input_dict["images"] = input_dict["images"].bfloat16()
-        input_dict["images_clip"] = input_dict["images_clip"].bfloat16()
-    else:
-        input_dict["images"] = input_dict["images"].float()
-        input_dict["images_clip"] = input_dict["images_clip"].float()
+    return SimpleNamespace(**config)
 
 
 def load_val_modules():
@@ -142,12 +133,12 @@ def build_model(args):
     model.config.eos_token_id = tokenizer.eos_token_id
     model.config.bos_token_id = tokenizer.bos_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
-
-    model.get_model().initialize_vision_modules(model.get_model().config)
-    model.get_model().initialize_lisa_modules(model.get_model().config)
+    
+    # model.get_model().initialize_vision_modules(model.get_model().config)
+    # model.get_model().initialize_lisa_modules(model.get_model().config)
 
     vision_tower = model.get_model().get_vision_tower()
-    vision_tower.to(dtype=torch_dtype, device=get_device(args))
+    vision_tower.to(dtype=torch_dtype, device=get_device(args.local_rank))
 
     for p in vision_tower.parameters():
         p.requires_grad = False
@@ -159,10 +150,11 @@ def build_model(args):
     ]
 
     if args.lora_r > 0:
-        def find_linear_layers(model, lora_target_modules):
+
+        def find_linear_layers(model_obj, lora_target_modules):
             cls = torch.nn.Linear
             lora_module_names = set()
-            for name, module in model.named_modules():
+            for name, module in model_obj.named_modules():
                 if (
                     isinstance(module, cls)
                     and all(
@@ -237,9 +229,7 @@ def load_checkpoint_for_eval(model_or_engine, resume_path, device):
     if not resume_path:
         return
 
-    if os.path.isdir(resume_path) and hasattr(
-        model_or_engine, "load_checkpoint"
-    ):
+    if os.path.isdir(resume_path) and hasattr(model_or_engine, "load_checkpoint"):
         model_or_engine.load_checkpoint(resume_path)
         return
 
@@ -252,7 +242,9 @@ def load_checkpoint_for_eval(model_or_engine, resume_path, device):
     model_or_engine.load_state_dict(state_dict, strict=False)
 
 
-def evaluate(test_loader, model_engine, args, device=None):
+def evaluate(test_loader, model_engine, args):
+    from utils.utils import dict_to_cuda
+
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
@@ -263,12 +255,8 @@ def evaluate(test_loader, model_engine, args, device=None):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        if device is None:
-            from utils.utils import dict_to_cuda
+        input_dict = dict_to_cuda(input_dict)
 
-            input_dict = dict_to_cuda(input_dict)
-        else:
-            input_dict = move_batch_to_device(input_dict, device)
         cast_batch_precision(input_dict, args.precision)
 
         with torch.no_grad():
@@ -307,22 +295,10 @@ def main(args):
     args = parse_args(args)
     tokenizer, model = build_model(args)
     _, test_loader = build_test_loader(args, tokenizer)
-    device = get_device(args)
-
-    ds_config = {
-        "train_micro_batch_size_per_gpu": args.batch_size,
-        "gradient_accumulation_steps": 1,
-        "fp16": {"enabled": args.precision == "fp16"},
-        "bf16": {"enabled": args.precision == "bf16"},
-        "zero_optimization": {"stage": 0},
-    }
-    model_engine, _, _, _ = deepspeed.initialize(
-        model=model,
-        model_parameters=model.parameters(),
-        config=ds_config,
-    )
-    load_checkpoint_for_eval(model_engine, args.resume, device)
-    evaluate(test_loader, model_engine, args)
+    device = get_device(args.local_rank)
+    model = model.to(device=device, dtype=get_torch_dtype(args.precision))
+    load_checkpoint_for_eval(model, args.resume, device)
+    evaluate(test_loader, model, args)
 
 
 if __name__ == "__main__":

@@ -1,55 +1,105 @@
+# 当前进程的本地 GPU 序号（分布式启动时由启动器覆盖）
 local_rank: 0
+# 基础多模态模型名称或路径
 version: "liuhaotian/llava-llama-2-13b-chat-lightning-preview"
+# 可视化输出目录
 vis_save_path: "./vis_output"
+# 训练精度，可选 fp32/bf16/fp16
 precision: "bf16"
+# 输入图像边长（会在数据管线中缩放到该大小）
 image_size: 1024
+# 文本最大 token 长度
 model_max_length: 512
+# LoRA 的秩，设为 0 表示关闭 LoRA
 lora_r: 8
+# 视觉塔（CLIP）模型名称
 vision_tower: "openai/clip-vit-large-patch14"
+# 是否启用 8bit 加载（当前训练默认不启用）
 load_in_8bit: false
+# 是否启用 4bit 加载（当前训练默认不启用）
 load_in_4bit: false
 
+# 训练数据混合类型，使用 || 分隔
 dataset: "sem_seg||refer_seg||vqa||reason_seg"
+# 各数据源采样比例，顺序与 dataset 对应
 sample_rates: "9,3,3,1"
+# 语义分割数据集配置
 sem_seg_data: "ade20k||cocostuff||pascal_part||paco_lvis||mapillary"
+# 指代表达分割数据集配置
 refer_seg_data: "refclef||refcoco||refcoco+||refcocog"
+# VQA 数据集配置
 vqa_data: "llava_instruct_150k"
+# ReasonSeg 数据集配置
 reason_seg_data: "ReasonSeg|train"
+# 验证集配置
 val_dataset: "ReasonSeg|val"
+# 数据集根目录
 dataset_dir: "./dataset"
 
+# 训练日志根目录
 log_base_dir: "./runs"
+# 实验名称（会拼接到 log_base_dir 下）
 exp_name: "lisa"
+# 训练总 epoch 数
 epochs: 10
+# 每个 epoch 的迭代步数
 steps_per_epoch: 500
+# 单卡 micro-batch 大小
 batch_size: 2
+# 梯度累积步数
 grad_accumulation_steps: 10
+# 验证 batch 大小
 val_batch_size: 1
+# DataLoader worker 数量
 workers: 4
+# 学习率
 lr: 0.0003
 
+# 文本生成损失权重
 ce_loss_weight: 1.0
+# mask dice 损失权重
 dice_loss_weight: 0.5
+# mask BCE 损失权重
 bce_loss_weight: 2.0
 
+# LoRA alpha 参数
 lora_alpha: 16
+# LoRA dropout 概率
 lora_dropout: 0.05
+# LoRA 目标模块名（逗号分隔）
 lora_target_modules: "q_proj,v_proj"
 
+# 解释性样本比例
 explanatory: 0.1
+# AdamW beta1
 beta1: 0.9
+# AdamW beta2
 beta2: 0.95
+# 每个样本采样的类别数
 num_classes_per_sample: 3
+# 是否排除验证集重叠样本
 exclude_val: false
+# 是否跳过验证流程
 no_eval: false
 
+# SAM 预训练权重路径
 vision_pretrained: "PATH_TO_SAM_ViT-H"
+# 文本到分割特征映射维度
 out_dim: 256
+# 恢复训练路径（空字符串表示不指定）
 resume: ""
+# 日志打印间隔（按 step）
 print_freq: 1
+# 起始 epoch（通常由恢复训练自动覆盖）
 start_epoch: 0
+# 是否开启梯度检查点
 gradient_checkpointing: true
+# 是否训练 mask decoder
 train_mask_decoder: true
+# 是否在图像 token 两侧添加特殊 token
 use_mm_start_end: true
+# 是否自动从默认 checkpoint 目录恢复
 auto_resume: true
+# 对话模板类型，可选 llava_v1/llava_llama_2
 conv_type: "llava_v1"
+

@@ -14,75 +14,70 @@ import yaml
 from peft import LoraConfig, get_peft_model
 from torch.utils.tensorboard import SummaryWriter
 
-
 from model.LISA import LISAForCausalLM
-from model.llava import conversation as conversation_lib
-from utils.utils import (
-    DEFAULT_IM_END_TOKEN,
-    DEFAULT_IM_START_TOKEN,
-    AverageMeter,
-    ProgressMeter,
-    Summary,
+from model.llava1p5 import conversation as conversation_lib
+from train_utils import (
+    build_progress,
+    cast_batch_precision,
+    get_device,
+    get_next_batch,
+    get_torch_dtype,
+    log_train_metrics,
+    reset_meters,
+    update_train_meters,
 )
+from utils.utils import DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN, Summary
 
-DEFAULT_CONFIG = {
-    "local_rank": 0,
-    "version": "liuhaotian/llava-llama-2-13b-chat-lightning-preview",
-    "vis_save_path": "./vis_output",
-    "precision": "bf16",
-    "image_size": 1024,
-    "model_max_length": 512,
-    "lora_r": 8,
-    "vision_tower": "openai/clip-vit-large-patch14",
-    "load_in_8bit": False,
-    "load_in_4bit": False,
-    "dataset": "sem_seg||refer_seg||vqa||reason_seg",
-    "sample_rates": "9,3,3,1",
-    "sem_seg_data": "ade20k||cocostuff||pascal_part||paco_lvis||mapillary",
-    "refer_seg_data": "refclef||refcoco||refcoco+||refcocog",
-    "vqa_data": "llava_instruct_150k",
-    "reason_seg_data": "ReasonSeg|train",
-    "val_dataset": "ReasonSeg|val",
-    "dataset_dir": "./dataset",
-    "log_base_dir": "./runs",
-    "exp_name": "lisa",
-    "epochs": 10,
-    "steps_per_epoch": 500,
-    "batch_size": 2,
-    "grad_accumulation_steps": 10,
-    "val_batch_size": 1,
-    "workers": 4,
-    "lr": 0.0003,
-    "ce_loss_weight": 1.0,
-    "dice_loss_weight": 0.5,
-    "bce_loss_weight": 2.0,
-    "lora_alpha": 16,
-    "lora_dropout": 0.05,
-    "lora_target_modules": "q_proj,v_proj",
-    "explanatory": 0.1,
-    "beta1": 0.9,
-    "beta2": 0.95,
-    "num_classes_per_sample": 3,
-    "exclude_val": False,
-    "no_eval": False,
-    "vision_pretrained": "PATH_TO_SAM_ViT-H",
-    "out_dim": 256,
-    "resume": "",
-    "print_freq": 1,
-    "start_epoch": 0,
-    "gradient_checkpointing": True,
-    "train_mask_decoder": True,
-    "use_mm_start_end": True,
-    "auto_resume": True,
-    "conv_type": "llava_v1",
-}
-
-TRAIN_METRIC_KEYS = (
-    ("loss", "Loss"),
-    ("ce_loss", "CeLoss"),
-    ("mask_loss", "MaskLoss"),
-    ("mask_bce_loss", "MaskBCELoss"),
-    ("mask_dice_loss", "MaskDICELoss"),
+REQUIRED_CONFIG_KEYS = (
+    "local_rank",
+    "version",
+    "vis_save_path",
+    "precision",
+    "image_size",
+    "model_max_length",
+    "lora_r",
+    "vision_tower",
+    "load_in_8bit",
+    "load_in_4bit",
+    "dataset",
+    "sample_rates",
+    "sem_seg_data",
+    "refer_seg_data",
+    "vqa_data",
+    "reason_seg_data",
+    "val_dataset",
+    "dataset_dir",
+    "log_base_dir",
+    "exp_name",
+    "epochs",
+    "steps_per_epoch",
+    "batch_size",
+    "grad_accumulation_steps",
+    "val_batch_size",
+    "workers",
+    "lr",
+    "ce_loss_weight",
+    "dice_loss_weight",
+    "bce_loss_weight",
+    "lora_alpha",
+    "lora_dropout",
+    "lora_target_modules",
+    "explanatory",
+    "beta1",
+    "beta2",
+    "num_classes_per_sample",
+    "exclude_val",
+    "no_eval",
+    "vision_pretrained",
+    "out_dim",
+    "resume",
+    "print_freq",
+    "start_epoch",
+    "gradient_checkpointing",
+    "train_mask_decoder",
+    "use_mm_start_end",
+    "auto_resume",
+    "conv_type",
 )
 
 
@@ -101,6 +96,7 @@ def parse_args(args):
         help="Optional runtime override for distributed launchers.",
     )
     parsed = parser.parse_args(args)
+
     config_path = parsed.config
     if not os.path.isabs(config_path):
         config_path = os.path.join(os.path.dirname(__file__), config_path)
@@ -108,54 +104,23 @@ def parse_args(args):
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
 
-    defaults = dict(DEFAULT_CONFIG)
-    defaults.update(config)
-    defaults["config"] = config_path
-    if parsed.local_rank is not None:
-        defaults["local_rank"] = parsed.local_rank
+    if not isinstance(config, dict):
+        raise ValueError("YAML config must be a mapping.")
 
-    if defaults["precision"] not in {"fp32", "bf16", "fp16"}:
+    missing_keys = [k for k in REQUIRED_CONFIG_KEYS if k not in config]
+    if missing_keys:
+        raise KeyError(f"Missing config keys in YAML: {missing_keys}")
+
+    config["config"] = config_path
+    if parsed.local_rank is not None:
+        config["local_rank"] = parsed.local_rank
+
+    if config["precision"] not in {"fp32", "bf16", "fp16"}:
         raise ValueError("precision must be one of: fp32, bf16, fp16")
-    if defaults["conv_type"] not in {"llava_v1", "llava_llama_2"}:
+    if config["conv_type"] not in {"llava_v1", "llava_llama_2"}:
         raise ValueError("conv_type must be one of: llava_v1, llava_llama_2")
 
-    return SimpleNamespace(**defaults)
-
-
-def get_device(args):
-    if torch.cuda.is_available():
-        return torch.device("cuda", args.local_rank)
-    return torch.device("cpu")
-
-
-def get_torch_dtype(precision):
-    torch_dtype = torch.float32
-    if precision == "bf16":
-        torch_dtype = torch.bfloat16
-    elif precision == "fp16":
-        torch_dtype = torch.float16
-    return torch_dtype
-
-
-def move_batch_to_device(input_dict, device):
-    for k, v in input_dict.items():
-        if isinstance(v, torch.Tensor):
-            input_dict[k] = v.to(device=device, non_blocking=True)
-        elif isinstance(v, list) and len(v) > 0 and isinstance(v[0], torch.Tensor):
-            input_dict[k] = [ele.to(device=device, non_blocking=True) for ele in v]
-    return input_dict
-
-
-def cast_batch_precision(input_dict, precision):
-    if precision == "fp16":
-        input_dict["images"] = input_dict["images"].half()
-        input_dict["images_clip"] = input_dict["images_clip"].half()
-    elif precision == "bf16":
-        input_dict["images"] = input_dict["images"].bfloat16()
-        input_dict["images_clip"] = input_dict["images_clip"].bfloat16()
-    else:
-        input_dict["images"] = input_dict["images"].float()
-        input_dict["images_clip"] = input_dict["images_clip"].float()
+    return SimpleNamespace(**config)
 
 
 def load_data_modules():
@@ -172,49 +137,6 @@ def build_collate_fn(args, tokenizer, collate_fn):
         use_mm_start_end=args.use_mm_start_end,
         local_rank=args.local_rank,
     )
-
-
-def build_progress(epoch, steps_per_epoch):
-    batch_time = AverageMeter("Time", ":6.3f")
-    data_time = AverageMeter("Data", ":6.3f")
-    metric_meters = {
-        key: AverageMeter(label, ":.4f") for key, label in TRAIN_METRIC_KEYS
-    }
-    progress = ProgressMeter(
-        steps_per_epoch,
-        [batch_time] + [metric_meters[key] for key, _ in TRAIN_METRIC_KEYS],
-        prefix=f"Epoch: [{epoch}]",
-    )
-    return batch_time, data_time, metric_meters, progress
-
-
-def reset_meters(*meters):
-    for meter in meters:
-        meter.reset()
-
-
-def update_train_meters(metric_meters, output_dict, batch_size):
-    for key, _ in TRAIN_METRIC_KEYS:
-        metric_meters[key].update(output_dict[key].item(), batch_size)
-
-
-def log_train_metrics(writer, metric_meters, batch_time, data_time, global_step):
-    if writer is None:
-        return
-
-    for key, _ in TRAIN_METRIC_KEYS:
-        writer.add_scalar(f"train/{key}", metric_meters[key].avg, global_step)
-    writer.add_scalar("metrics/total_secs_per_batch", batch_time.avg, global_step)
-    writer.add_scalar("metrics/data_secs_per_batch", data_time.avg, global_step)
-
-
-def get_next_batch(train_loader, train_iter):
-    try:
-        input_dict = next(train_iter)
-    except StopIteration:
-        train_iter = iter(train_loader)
-        input_dict = next(train_iter)
-    return input_dict, train_iter
 
 
 def build_tokenizer_and_model(args):
@@ -260,7 +182,7 @@ def build_tokenizer_and_model(args):
     model.get_model().initialize_vision_modules(model.get_model().config)
     model.get_model().initialize_lisa_modules(model.get_model().config)
     vision_tower = model.get_model().get_vision_tower()
-    vision_tower.to(dtype=torch_dtype, device=get_device(args))
+    vision_tower.to(dtype=torch_dtype, device=get_device(args.local_rank))
 
     for p in vision_tower.parameters():
         p.requires_grad = False
@@ -272,10 +194,11 @@ def build_tokenizer_and_model(args):
     ]
 
     if args.lora_r > 0:
-        def find_linear_layers(model, lora_target_modules):
+
+        def find_linear_layers(model_obj, lora_target_modules):
             cls = torch.nn.Linear
             lora_module_names = set()
-            for name, module in model.named_modules():
+            for name, module in model_obj.named_modules():
                 if (
                     isinstance(module, cls)
                     and all(
@@ -317,7 +240,7 @@ def build_tokenizer_and_model(args):
     return tokenizer, model
 
 
-def build_datasets_and_loaders(args, tokenizer):
+def build_datasets(args, tokenizer):
     HybridDataset, ValDataset, _ = load_data_modules()
     world_size = max(torch.cuda.device_count(), 1)
     train_dataset = HybridDataset(
@@ -355,7 +278,9 @@ def build_datasets_and_loaders(args, tokenizer):
     return train_dataset, val_dataset
 
 
-def validate(val_loader, model_engine, epoch, writer, args, device=None):
+def validate(val_loader, model_engine, epoch, writer, args):
+    from utils.utils import AverageMeter, dict_to_cuda, intersectionAndUnionGPU
+
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
@@ -366,12 +291,7 @@ def validate(val_loader, model_engine, epoch, writer, args, device=None):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        if device is None:
-            from utils.utils import dict_to_cuda
-
-            input_dict = dict_to_cuda(input_dict)
-        else:
-            input_dict = move_batch_to_device(input_dict, device)
+        input_dict = dict_to_cuda(input_dict)
         cast_batch_precision(input_dict, args.precision)
 
         with torch.no_grad():
@@ -384,8 +304,6 @@ def validate(val_loader, model_engine, epoch, writer, args, device=None):
 
         intersection, union, acc_iou = 0.0, 0.0, 0.0
         for mask_i, output_i in zip(masks_list, output_list):
-            from utils.utils import intersectionAndUnionGPU
-
             intersection_i, union_i, _ = intersectionAndUnionGPU(
                 output_i.contiguous().clone(), mask_i.contiguous(), 2, ignore_index=255
             )
@@ -416,7 +334,7 @@ def validate(val_loader, model_engine, epoch, writer, args, device=None):
     return giou, ciou
 
 
-def train_with_deepspeed(args, model, tokenizer, train_dataset, val_dataset, writer):
+def setup_deepspeed(args, model, tokenizer, train_dataset, val_dataset):
     _, _, collate_fn = load_data_modules()
     ds_config = {
         "train_micro_batch_size_per_gpu": args.batch_size,
@@ -451,6 +369,7 @@ def train_with_deepspeed(args, model, tokenizer, train_dataset, val_dataset, wri
             "allgather_bucket_size": 5e8,
         },
     }
+
     model_engine, _, train_loader, scheduler = deepspeed.initialize(
         model=model,
         model_parameters=model.parameters(),
@@ -459,24 +378,13 @@ def train_with_deepspeed(args, model, tokenizer, train_dataset, val_dataset, wri
         config=ds_config,
     )
 
-    if args.auto_resume and len(args.resume) == 0:
-        resume = os.path.join(args.log_dir, "ckpt_model")
-        if os.path.exists(resume):
-            args.resume = resume
-
-    if args.resume:
-        model_engine.load_checkpoint(args.resume)
-        latest_path = os.path.join(args.resume, "latest")
-        if os.path.exists(latest_path):
-            with open(latest_path, "r", encoding="utf-8") as f:
-                ckpt_dir = f.readlines()[0].strip()
-            args.start_epoch = int(ckpt_dir.replace("global_step", "")) // args.steps_per_epoch
-
     val_loader = None
     if val_dataset is not None:
-        val_sampler = torch.utils.data.distributed.DistributedSampler(
-            val_dataset, shuffle=False, drop_last=False
-        )
+        val_sampler = None
+        if args.distributed and torch.distributed.is_initialized():
+            val_sampler = torch.utils.data.distributed.DistributedSampler(
+                val_dataset, shuffle=False, drop_last=False
+            )
         val_loader = torch.utils.data.DataLoader(
             val_dataset,
             batch_size=args.val_batch_size,
@@ -487,60 +395,78 @@ def train_with_deepspeed(args, model, tokenizer, train_dataset, val_dataset, wri
             collate_fn=build_collate_fn(args, tokenizer, collate_fn),
         )
 
-    train_iter = iter(train_loader)
-    best_score, cur_ciou = 0.0, 0.0
-    for epoch in range(args.start_epoch, args.epochs):
-        train_iter = train_epoch_deepspeed(
-            train_loader, model_engine, epoch, scheduler, writer, train_iter, args
+    return {
+        "model": model_engine,
+        "train_loader": train_loader,
+        "val_loader": val_loader,
+        "scheduler": scheduler,
+    }
+
+
+def try_auto_resume(args):
+    if not args.auto_resume or args.resume:
+        return
+
+    resume = os.path.join(args.log_dir, "ckpt_model")
+    if os.path.exists(resume):
+        args.resume = resume
+
+
+def load_resume(args, state):
+    if not args.resume:
+        return
+
+    state["model"].load_checkpoint(args.resume)
+    latest_path = os.path.join(args.resume, "latest")
+    if os.path.exists(latest_path):
+        with open(latest_path, "r", encoding="utf-8") as f:
+            ckpt_dir = f.readlines()[0].strip()
+        args.start_epoch = int(ckpt_dir.replace("global_step", "")) // args.steps_per_epoch
+
+
+def save_best_checkpoint(args, state, epoch, best_score, cur_ciou):
+    save_dir = os.path.join(args.log_dir, "ckpt_model")
+    if args.local_rank == 0:
+        os.makedirs(args.log_dir, exist_ok=True)
+        torch.save(
+            {"epoch": epoch},
+            os.path.join(
+                args.log_dir,
+                f"meta_log_giou{best_score:.3f}_ciou{cur_ciou:.3f}.pth",
+            ),
         )
+        if os.path.exists(save_dir):
+            shutil.rmtree(save_dir)
 
-        is_best = False
-        if val_loader is not None:
-            giou, ciou = validate(val_loader, model_engine, epoch, writer, args)
-            is_best = giou > best_score
-            best_score = max(giou, best_score)
-            cur_ciou = ciou if is_best else cur_ciou
-
-        if args.no_eval or is_best:
-            save_dir = os.path.join(args.log_dir, "ckpt_model")
-            if args.local_rank == 0:
-                os.makedirs(args.log_dir, exist_ok=True)
-                torch.save(
-                    {"epoch": epoch},
-                    os.path.join(
-                        args.log_dir,
-                        f"meta_log_giou{best_score:.3f}_ciou{cur_ciou:.3f}.pth",
-                    ),
-                )
-                if os.path.exists(save_dir):
-                    shutil.rmtree(save_dir)
-            if torch.distributed.is_initialized():
-                torch.distributed.barrier()
-            model_engine.save_checkpoint(save_dir)
+    if torch.distributed.is_initialized():
+        torch.distributed.barrier()
+    state["model"].save_checkpoint(save_dir)
 
 
-def train_epoch_deepspeed(train_loader, model, epoch, scheduler, writer, train_iter, args):
+def train_one_epoch(args, state, epoch, writer, train_iter):
     batch_time, data_time, metric_meters, progress = build_progress(
         epoch, args.steps_per_epoch
     )
 
-    model.train()
+    state["model"].train()
+
     end = time.time()
     for global_step in range(args.steps_per_epoch):
         for _ in range(args.grad_accumulation_steps):
-            input_dict, train_iter = get_next_batch(train_loader, train_iter)
+            input_dict, train_iter = get_next_batch(state["train_loader"], train_iter)
+            data_time.update(time.time() - end)
 
             from utils.utils import dict_to_cuda
 
-            data_time.update(time.time() - end)
             input_dict = dict_to_cuda(input_dict)
             cast_batch_precision(input_dict, args.precision)
 
-            output_dict = model(**input_dict)
+            output_dict = state["model"](**input_dict)
             loss = output_dict["loss"]
             update_train_meters(metric_meters, output_dict, input_dict["images"].size(0))
-            model.backward(loss)
-            model.step()
+
+            state["model"].backward(loss)
+            state["model"].step()
 
         batch_time.update(time.time() - end)
         end = time.time()
@@ -551,10 +477,34 @@ def train_epoch_deepspeed(train_loader, model, epoch, scheduler, writer, train_i
             reset_meters(batch_time, data_time, *metric_meters.values())
 
         if global_step != 0 and writer is not None and args.local_rank == 0:
-            curr_lr = scheduler.get_last_lr()
+            curr_lr = state["scheduler"].get_last_lr()
             writer.add_scalar("train/lr", curr_lr[0], global_step)
 
     return train_iter
+
+
+def train(args, state, writer):
+    train_iter = iter(state["train_loader"])
+    best_score, cur_ciou = 0.0, 0.0
+
+    for epoch in range(args.start_epoch, args.epochs):
+        train_iter = train_one_epoch(args, state, epoch, writer, train_iter)
+
+        is_best = False
+        if state["val_loader"] is not None:
+            giou, ciou = validate(
+                state["val_loader"],
+                state["model"],
+                epoch,
+                writer,
+                args,
+            )
+            is_best = giou > best_score
+            best_score = max(giou, best_score)
+            cur_ciou = ciou if is_best else cur_ciou
+
+        if args.no_eval or is_best:
+            save_best_checkpoint(args, state, epoch, best_score, cur_ciou)
 
 
 def main(args):
@@ -569,9 +519,7 @@ def main(args):
     tokenizer, model = build_tokenizer_and_model(args)
     args.distributed = torch.cuda.device_count() > 1
 
-    train_dataset, val_dataset = build_datasets_and_loaders(
-        args, tokenizer
-    )
+    train_dataset, val_dataset = build_datasets(args, tokenizer)
     if val_dataset is not None:
         print(
             f"Training with {len(train_dataset)} examples and validating with {len(val_dataset)} examples."
@@ -579,7 +527,10 @@ def main(args):
     else:
         print(f"Training with {len(train_dataset)} examples.")
 
-    train_with_deepspeed(args, model, tokenizer, train_dataset, val_dataset, writer)
+    state = setup_deepspeed(args, model, tokenizer, train_dataset, val_dataset)
+    try_auto_resume(args)
+    load_resume(args, state)
+    train(args, state, writer)
 
 
 if __name__ == "__main__":

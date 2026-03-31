@@ -9,10 +9,10 @@ import torch.nn.functional as F
 from pycocotools import mask
 from transformers import CLIPImageProcessor
 
-from model.llava import conversation as conversation_lib
-from model.llava.constants import (DEFAULT_IMAGE_TOKEN, IGNORE_INDEX,
+from model.llava1p5 import conversation as conversation_lib
+from model.llava1p5.constants import (DEFAULT_IMAGE_TOKEN, IGNORE_INDEX,
                                    IMAGE_TOKEN_INDEX)
-from model.llava.mm_utils import tokenizer_image_token
+from model.llava1p5.mm_utils import tokenizer_image_token
 from model.segment_anything.utils.transforms import ResizeLongestSide
 
 from .conversation import get_default_conv_template
@@ -41,6 +41,7 @@ def collate_fn(
     offset_list = [0]
     cnt = 0
     inferences = []
+    change_all_list = []
     for (
         image_path,
         images,
@@ -53,6 +54,11 @@ def collate_fn(
         sampled_classes,
         inference,
     ) in batch:
+        if isinstance(image_path, (list, tuple)) and len(image_path) >= 2:
+            change_all_list.append(image_path[1])
+            image_path = image_path[0]
+        else:
+            change_all_list.append(-1)
         image_path_list.append(image_path)
         images_list.append(images)
         images_clip_list.append(images_clip)
@@ -157,6 +163,7 @@ def collate_fn(
         "sampled_classes_list": sampled_classes_list,
         "inference": inferences[0],
         "conversation_list": conversation_list,
+        "change_list": change_all_list,
     }
 
 

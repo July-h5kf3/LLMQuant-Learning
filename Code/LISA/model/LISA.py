@@ -1,10 +1,12 @@
 from typing import List
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from scipy.optimize import linear_sum_assignment
 
-from .llava.model.language_model.llava_llama import (
+from .llava1p5.model.language_model.llava_llama import (
     LlavaLlamaForCausalLM,
     LlavaLlamaModel,
 )
@@ -144,6 +146,67 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             return super().forward(**kwargs)
         return self.model_forward(**kwargs)
 
+    def batch_dice_loss(self, inputs: torch.Tensor, targets: torch.Tensor):
+        inputs = inputs.sigmoid()
+        numerator = 2 * torch.einsum("nc,mc->nm", inputs, targets)
+        denominator = inputs.sum(-1)[:, None] + targets.sum(-1)[None, :]
+        return 1 - (numerator + 1) / (denominator + 1)
+
+    def batch_sigmoid_ce_loss(self, inputs: torch.Tensor, targets: torch.Tensor):
+        hw = inputs.shape[1]
+        pos = F.binary_cross_entropy_with_logits(
+            inputs, torch.ones_like(inputs), reduction="none"
+        )
+        neg = F.binary_cross_entropy_with_logits(
+            inputs, torch.zeros_like(inputs), reduction="none"
+        )
+        loss = torch.einsum("nc,mc->nm", pos, targets) + torch.einsum(
+            "nc,mc->nm", neg, (1 - targets)
+        )
+        return loss / hw
+
+    def _hungarian_match_indices(
+        self, pred_masks_flat: torch.Tensor, gt_masks_flat: torch.Tensor
+    ):
+        cost = self.batch_dice_loss(pred_masks_flat, gt_masks_flat) + self.batch_sigmoid_ce_loss(
+            pred_masks_flat, gt_masks_flat
+        )
+        pred_indices, gt_indices = linear_sum_assignment(cost.detach().cpu().numpy())
+        sorted_pred_order = np.argsort(pred_indices)
+        adjusted_gt_indices = gt_indices[sorted_pred_order]
+        return adjusted_gt_indices
+
+    def reorder_gt_masks_by_change_list(self, pred_masks, gt_masks, change_list):
+        reordered_gt_masks = list(gt_masks)
+        if change_list is None:
+            return reordered_gt_masks
+
+        max_len = min(len(reordered_gt_masks), len(pred_masks), len(change_list))
+        for batch_idx in range(max_len):
+            groups = change_list[batch_idx]
+            if not isinstance(groups, (list, tuple)):
+                continue
+
+            batch_pred = pred_masks[batch_idx]
+            batch_gt = reordered_gt_masks[batch_idx]
+            batch_reordered = batch_gt.clone()
+
+            for group in groups:
+                if not isinstance(group, (list, tuple)) or len(group) <= 1:
+                    continue
+
+                group_idx = list(group)
+                group_pred = batch_pred[group_idx, :, :].reshape(len(group_idx), -1)
+                group_gt = batch_gt[group_idx, :, :].reshape(len(group_idx), -1)
+
+                group_gt_indices = self._hungarian_match_indices(group_pred, group_gt)
+                for local_i, gt_local_i in enumerate(group_gt_indices):
+                    batch_reordered[group_idx[local_i]] = batch_gt[group_idx[int(gt_local_i)]]
+
+            reordered_gt_masks[batch_idx] = batch_reordered
+
+        return reordered_gt_masks
+
     def model_forward(
         self,
         images: torch.FloatTensor,
@@ -155,6 +218,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         masks_list: List[torch.FloatTensor] = None,
         label_list: List[torch.Tensor] = None,
         resize_list: List[tuple] = None,
+        change_list: List = None,
         inference: bool = False,
         **kwargs,
     ):
@@ -173,9 +237,11 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             dim=1,
         )
         # 模型前面会插入图像token，所以seg_token_mask需要在前面补255个False，保证和input_ids的shape一致
+        image_token_len = (images_clip.shape[2] // 14) * (images_clip.shape[3] // 14)
         seg_token_mask = torch.cat(
             [
-                torch.zeros((seg_token_mask.shape[0], 255), dtype=torch.bool, device=device),
+                torch.zeros((seg_token_mask.shape[0], image_token_len - 1), dtype=torch.bool, device=device),#bug fix from LISA++
+                #torch.zeros((seg_token_mask.shape[0], 255), dtype=torch.bool, device=device),
                 seg_token_mask,
             ],
             dim=1,
@@ -278,6 +344,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
 
         model_output = output
         gt_masks = masks_list
+        gt_masks = self.reorder_gt_masks_by_change_list(pred_masks, gt_masks, change_list)
 
         if inference:
             return {
@@ -345,9 +412,10 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
 
             device = output_ids.device
             seg_token_mask = output_ids[:, 1:] == self.seg_token_idx
+            image_token_len = (images_clip.shape[2] // 14) * (images_clip.shape[3] // 14)
             seg_token_mask = torch.cat(
                 [
-                    torch.zeros((seg_token_mask.shape[0], 255), dtype=torch.bool, device=device),
+                    torch.zeros((seg_token_mask.shape[0], image_token_len - 1), dtype=torch.bool, device=device),
                     seg_token_mask,
                 ],
                 dim=1,
