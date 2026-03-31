@@ -3,20 +3,11 @@ import os
 import sys
 from functools import partial
 
+import deepspeed
 import torch
 import tqdm
 import transformers
-
-try:
-    import deepspeed
-except ModuleNotFoundError:
-    deepspeed = None
-
-try:
-    from peft import LoraConfig, get_peft_model
-except ModuleNotFoundError:
-    LoraConfig = None
-    get_peft_model = None
+from peft import LoraConfig, get_peft_model
 
 from model.LISA import LISAForCausalLM
 from model.llava import conversation as conversation_lib
@@ -168,11 +159,6 @@ def build_model(args):
     ]
 
     if args.lora_r > 0:
-        if LoraConfig is None or get_peft_model is None:
-            raise RuntimeError(
-                "LoRA requires `peft`. Please install it in Code/LISA/.venv or set --lora_r 0."
-            )
-
         def find_linear_layers(model, lora_target_modules):
             cls = torch.nn.Linear
             lora_module_names = set()
@@ -224,7 +210,7 @@ def build_test_loader(args, tokenizer):
         raise ValueError("Test batch size must be 1 for segmentation evaluation.")
 
     sampler = None
-    if deepspeed is not None and torch.cuda.device_count() > 1:
+    if torch.cuda.device_count() > 1:
         sampler = torch.utils.data.distributed.DistributedSampler(
             test_dataset, shuffle=False, drop_last=False
         )
@@ -251,7 +237,7 @@ def load_checkpoint_for_eval(model_or_engine, resume_path, device):
     if not resume_path:
         return
 
-    if os.path.isdir(resume_path) and deepspeed is not None and hasattr(
+    if os.path.isdir(resume_path) and hasattr(
         model_or_engine, "load_checkpoint"
     ):
         model_or_engine.load_checkpoint(resume_path)
@@ -323,27 +309,20 @@ def main(args):
     _, test_loader = build_test_loader(args, tokenizer)
     device = get_device(args)
 
-    if deepspeed is not None and torch.cuda.is_available():
-        ds_config = {
-            "train_micro_batch_size_per_gpu": args.batch_size,
-            "gradient_accumulation_steps": 1,
-            "fp16": {"enabled": args.precision == "fp16"},
-            "bf16": {"enabled": args.precision == "bf16"},
-            "zero_optimization": {"stage": 0},
-        }
-        model_engine, _, _, _ = deepspeed.initialize(
-            model=model,
-            model_parameters=model.parameters(),
-            config=ds_config,
-        )
-        load_checkpoint_for_eval(model_engine, args.resume, device)
-        evaluate(test_loader, model_engine, args)
-    else:
-        if deepspeed is None:
-            print("DeepSpeed is not installed. Falling back to plain PyTorch evaluation.")
-        model.to(device)
-        load_checkpoint_for_eval(model, args.resume, device)
-        evaluate(test_loader, model, args, device=device)
+    ds_config = {
+        "train_micro_batch_size_per_gpu": args.batch_size,
+        "gradient_accumulation_steps": 1,
+        "fp16": {"enabled": args.precision == "fp16"},
+        "bf16": {"enabled": args.precision == "bf16"},
+        "zero_optimization": {"stage": 0},
+    }
+    model_engine, _, _, _ = deepspeed.initialize(
+        model=model,
+        model_parameters=model.parameters(),
+        config=ds_config,
+    )
+    load_checkpoint_for_eval(model_engine, args.resume, device)
+    evaluate(test_loader, model_engine, args)
 
 
 if __name__ == "__main__":

@@ -5,13 +5,18 @@ description = "Inference-focused LISA reproduction workspace"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "deepspeed>=0.18.1",
     "einops>=0.8.2",
+    "fvcore>=0.1.5.post20221221",
+    "matplotlib>=3.10.0",
     "numpy>=2.4.0",
     "opencv-python-headless>=4.10.0",
     "peft>=0.17.0",
     "pillow>=11.2.1",
     "pycocotools>=2.0.10",
     "pyyaml>=6.0.2",
+    "requests>=2.32.0",
+    "scikit-image>=0.25.0",
     "tensorboard>=2.20.0",
     "torch==2.9.1",
     "torchvision==0.24.1",
@@ -27,6 +32,11 @@ torch = [
 
 [tool.uv]
 package = false
+
+[[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

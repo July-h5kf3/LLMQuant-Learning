@@ -6,34 +6,13 @@ import time
 from functools import partial
 from types import SimpleNamespace
 
+import deepspeed
 import torch
 import tqdm
 import transformers
 import yaml
-
-try:
-    import deepspeed
-except ModuleNotFoundError:
-    deepspeed = None
-
-try:
-    from peft import LoraConfig, get_peft_model
-except ModuleNotFoundError:
-    LoraConfig = None
-    get_peft_model = None
-
-try:
-    from torch.utils.tensorboard import SummaryWriter
-except ModuleNotFoundError:
-    class SummaryWriter:  # type: ignore[override]
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def add_scalar(self, *args, **kwargs):
-            pass
-
-        def close(self):
-            pass
+from peft import LoraConfig, get_peft_model
+from torch.utils.tensorboard import SummaryWriter
 
 
 from model.LISA import LISAForCausalLM
@@ -293,11 +272,6 @@ def build_tokenizer_and_model(args):
     ]
 
     if args.lora_r > 0:
-        if LoraConfig is None or get_peft_model is None:
-            raise RuntimeError(
-                "LoRA requires `peft`. Please install it in Code/LISA/.venv or set --lora_r 0."
-            )
-
         def find_linear_layers(model, lora_target_modules):
             cls = torch.nn.Linear
             lora_module_names = set()
@@ -343,8 +317,8 @@ def build_tokenizer_and_model(args):
     return tokenizer, model
 
 
-def build_datasets_and_loaders(args, tokenizer, use_deepspeed):
-    HybridDataset, ValDataset, collate_fn = load_data_modules()
+def build_datasets_and_loaders(args, tokenizer):
+    HybridDataset, ValDataset, _ = load_data_modules()
     world_size = max(torch.cuda.device_count(), 1)
     train_dataset = HybridDataset(
         args.dataset_dir,
@@ -378,54 +352,7 @@ def build_datasets_and_loaders(args, tokenizer, use_deepspeed):
     else:
         val_dataset = None
 
-    if use_deepspeed:
-        return train_dataset, val_dataset, None, None
-
-    collate = build_collate_fn(args, tokenizer, collate_fn)
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.workers,
-        pin_memory=torch.cuda.is_available(),
-        collate_fn=collate,
-    )
-
-    val_loader = None
-    if val_dataset is not None:
-        val_loader = torch.utils.data.DataLoader(
-            val_dataset,
-            batch_size=args.val_batch_size,
-            shuffle=False,
-            num_workers=args.workers,
-            pin_memory=torch.cuda.is_available(),
-            collate_fn=collate,
-        )
-
-    return train_dataset, val_dataset, train_loader, val_loader
-
-
-def load_fallback_checkpoint(model, optimizer, scheduler, resume_path, device):
-    checkpoint = torch.load(resume_path, map_location=device)
-    model.load_state_dict(checkpoint["model"], strict=False)
-    if optimizer is not None and "optimizer" in checkpoint:
-        optimizer.load_state_dict(checkpoint["optimizer"])
-    if scheduler is not None and "scheduler" in checkpoint:
-        scheduler.load_state_dict(checkpoint["scheduler"])
-    return checkpoint.get("epoch", 0) + 1
-
-
-def save_fallback_checkpoint(model, optimizer, scheduler, epoch, save_dir):
-    os.makedirs(save_dir, exist_ok=True)
-    torch.save(
-        {
-            "epoch": epoch,
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-        },
-        os.path.join(save_dir, "checkpoint.pt"),
-    )
+    return train_dataset, val_dataset
 
 
 def validate(val_loader, model_engine, epoch, writer, args, device=None):
@@ -630,102 +557,6 @@ def train_epoch_deepspeed(train_loader, model, epoch, scheduler, writer, train_i
     return train_iter
 
 
-def train_with_torch(args, model, tokenizer, train_loader, val_loader, writer):
-    device = get_device(args)
-    model.to(device)
-    optimizer = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad],
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        weight_decay=0.0,
-    )
-    scheduler = transformers.get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=100,
-        num_training_steps=args.epochs * args.steps_per_epoch,
-    )
-
-    if args.auto_resume and len(args.resume) == 0:
-        resume = os.path.join(args.log_dir, "ckpt_model", "checkpoint.pt")
-        if os.path.exists(resume):
-            args.resume = resume
-
-    if args.resume and os.path.isfile(args.resume):
-        args.start_epoch = load_fallback_checkpoint(
-            model, optimizer, scheduler, args.resume, device
-        )
-
-    train_iter = iter(train_loader)
-    best_score, cur_ciou = 0.0, 0.0
-
-    for epoch in range(args.start_epoch, args.epochs):
-        train_iter = train_epoch_torch(
-            train_loader, model, optimizer, epoch, scheduler, writer, train_iter, args, device
-        )
-
-        is_best = False
-        if val_loader is not None:
-            giou, ciou = validate(val_loader, model, epoch, writer, args, device=device)
-            is_best = giou > best_score
-            best_score = max(giou, best_score)
-            cur_ciou = ciou if is_best else cur_ciou
-
-        if args.no_eval or is_best:
-            save_dir = os.path.join(args.log_dir, "ckpt_model")
-            if args.local_rank == 0:
-                save_fallback_checkpoint(model, optimizer, scheduler, epoch, save_dir)
-                torch.save(
-                    {"epoch": epoch},
-                    os.path.join(
-                        args.log_dir,
-                        f"meta_log_giou{best_score:.3f}_ciou{cur_ciou:.3f}.pth",
-                    ),
-                )
-
-
-def train_epoch_torch(train_loader, model, optimizer, epoch, scheduler, writer, train_iter, args, device):
-    batch_time, data_time, metric_meters, progress = build_progress(
-        epoch, args.steps_per_epoch
-    )
-
-    model.train()
-    end = time.time()
-    optimizer.zero_grad(set_to_none=True)
-    for global_step in range(args.steps_per_epoch):
-        for inner_step in range(args.grad_accumulation_steps):
-            input_dict, train_iter = get_next_batch(train_loader, train_iter)
-
-            data_time.update(time.time() - end)
-            input_dict = move_batch_to_device(input_dict, device)
-            cast_batch_precision(input_dict, args.precision)
-
-            output_dict = model(**input_dict)
-            loss = output_dict["loss"]
-            update_train_meters(metric_meters, output_dict, input_dict["images"].size(0))
-
-            (loss / args.grad_accumulation_steps).backward()
-
-            if inner_step == args.grad_accumulation_steps - 1:
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
-
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if global_step % args.print_freq == 0 and args.local_rank == 0:
-            progress.display(global_step + 1)
-            if writer is not None:
-                log_train_metrics(
-                    writer, metric_meters, batch_time, data_time, global_step
-                )
-                writer.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step)
-
-            reset_meters(batch_time, data_time, *metric_meters.values())
-
-    return train_iter
-
-
 def main(args):
     args = parse_args(args)
     args.log_dir = os.path.join(args.log_base_dir, args.exp_name)
@@ -736,11 +567,10 @@ def main(args):
         writer = None
 
     tokenizer, model = build_tokenizer_and_model(args)
-    use_deepspeed = deepspeed is not None and torch.cuda.is_available()
-    args.distributed = use_deepspeed and torch.cuda.device_count() > 1
+    args.distributed = torch.cuda.device_count() > 1
 
-    train_dataset, val_dataset, train_loader, val_loader = build_datasets_and_loaders(
-        args, tokenizer, use_deepspeed
+    train_dataset, val_dataset = build_datasets_and_loaders(
+        args, tokenizer
     )
     if val_dataset is not None:
         print(
@@ -749,12 +579,7 @@ def main(args):
     else:
         print(f"Training with {len(train_dataset)} examples.")
 
-    if use_deepspeed:
-        train_with_deepspeed(args, model, tokenizer, train_dataset, val_dataset, writer)
-    else:
-        if deepspeed is None:
-            print("DeepSpeed is not installed. Falling back to plain PyTorch training.")
-        train_with_torch(args, model, tokenizer, train_loader, val_loader, writer)
+    train_with_deepspeed(args, model, tokenizer, train_dataset, val_dataset, writer)
 
 
 if __name__ == "__main__":
