@@ -58,6 +58,7 @@ class LisaMetaModel:
             self.initialize_lisa_modules(self.config)
 
     def initialize_lisa_modules(self, config):
+        print("if you have trained models, please be careful when you see this!")
         #SAM
         self.visual_model = build_sam_vit_h(self.vision_pretrained)
         for param in self.visual_model.parameters():
@@ -102,19 +103,28 @@ class LisaModel(LisaMetaModel, LlavaLlamaModel):
 
 
 class LISAForCausalLM(LlavaLlamaForCausalLM):
+    _keys_to_ignore_on_load_unexpected = [r"model\.dynamic_fc\..*"]
+
     def __init__(
         self,
         config,
         **kwargs,
     ):
+        self.ce_loss_weight = kwargs.pop(
+            "ce_loss_weight", getattr(config, "ce_loss_weight", None)
+        )
+        self.dice_loss_weight = kwargs.pop(
+            "dice_loss_weight", getattr(config, "dice_loss_weight", None)
+        )
+        self.bce_loss_weight = kwargs.pop(
+            "bce_loss_weight", getattr(config, "bce_loss_weight", None)
+        )
+
         if not hasattr(config, "train_mask_decoder"):
             config.mm_use_im_start_end = kwargs.pop("use_mm_start_end", True)
             config.mm_vision_tower = kwargs.get(
                 "vision_tower", "openai/clip-vit-large-patch14"
             )
-            self.ce_loss_weight = kwargs.pop("ce_loss_weight", None)
-            self.dice_loss_weight = kwargs.pop("dice_loss_weight", None)
-            self.bce_loss_weight = kwargs.pop("bce_loss_weight", None)
         else:
             config.mm_vision_tower = config.vision_tower
 
@@ -164,6 +174,21 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             "nc,mc->nm", neg, (1 - targets)
         )
         return loss / hw
+
+    def _align_seg_token_mask(
+        self, seg_token_mask: torch.Tensor, target_len: int
+    ) -> torch.Tensor:
+        current_len = seg_token_mask.shape[1]
+        if current_len == target_len:
+            return seg_token_mask
+        if current_len > target_len:
+            return seg_token_mask[:, :target_len]
+        pad = torch.zeros(
+            (seg_token_mask.shape[0], target_len - current_len),
+            dtype=seg_token_mask.dtype,
+            device=seg_token_mask.device,
+        )
+        return torch.cat([seg_token_mask, pad], dim=1)
 
     def _hungarian_match_indices(
         self, pred_masks_flat: torch.Tensor, gt_masks_flat: torch.Tensor
@@ -300,6 +325,9 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         hidden_states.append(self.model.text_hidden_fcs[0](output_hidden_states[-1]))
 
         last_hidden_state = torch.stack(hidden_states, dim=-1).sum(dim=-1)
+        seg_token_mask = self._align_seg_token_mask(
+            seg_token_mask, last_hidden_state.shape[1]
+        )
         pred_embeddings = last_hidden_state[seg_token_mask]  # 取出文本中所有seg_token_idx对应的hidden state，作为SAM的文本prompt embedding
         seg_token_counts = seg_token_mask.int().sum(-1)
 

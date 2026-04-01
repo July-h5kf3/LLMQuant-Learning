@@ -72,6 +72,11 @@ def collate_fn(
         offset_list.append(cnt)
         inferences.append(inference)
 
+    image_token_len = 0
+    if images_clip_list:
+        clip_h, clip_w = images_clip_list[0].shape[-2:]
+        image_token_len = (clip_h // 14) * (clip_w // 14)
+
     if use_mm_start_end:
         # replace <image> token
         for i in range(len(conversation_list)):
@@ -141,7 +146,10 @@ def collate_fn(
             assert cur_len == total_len
 
     if inferences[0] == False:
-        truncate_len = tokenizer.model_max_length - 255
+        # One <image> placeholder token is expanded into image_token_len patch tokens
+        # inside the LLaVA multimodal input builder, so only the extra tokens need to
+        # be reserved here.
+        truncate_len = tokenizer.model_max_length - max(image_token_len - 1, 0)
 
         if input_ids.shape[1] > truncate_len:
             input_ids = input_ids[:, :truncate_len]

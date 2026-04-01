@@ -52,4 +52,4 @@ train_mask_decoder: true
 # 是否在图像 token 两侧添加特殊 token
 use_mm_start_end: false
 # 对话模板类型，可选 llava_v1/llava_llama_2
-conv_type: "llava_v1"
+conv_type: "llava_llama_2"

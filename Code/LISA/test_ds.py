@@ -64,6 +64,18 @@ def parse_args(args):
         type=int,
         help="Optional runtime override for distributed launchers.",
     )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        type=str,
+        help="Optional checkpoint path override.",
+    )
+    parser.add_argument(
+        "--test_dataset",
+        default=None,
+        type=str,
+        help="Optional dataset override, e.g. ReasonSeg|val or ReasonSeg|test.",
+    )
     parsed = parser.parse_args(args)
 
     config_path = parsed.config
@@ -83,6 +95,10 @@ def parse_args(args):
     config["config"] = config_path
     if parsed.local_rank is not None:
         config["local_rank"] = parsed.local_rank
+    if parsed.resume is not None:
+        config["resume"] = parsed.resume
+    if parsed.test_dataset is not None:
+        config["test_dataset"] = parsed.test_dataset
 
     if config["precision"] not in {"fp32", "bf16", "fp16"}:
         raise ValueError("precision must be one of: fp32, bf16, fp16")
@@ -107,11 +123,13 @@ def build_model(args):
         use_fast=False,
     )
     tokenizer.pad_token = tokenizer.unk_token
-    tokenizer.add_tokens("[SEG]")
-    args.seg_token_idx = tokenizer("[SEG]", add_special_tokens=False).input_ids[0]
+    num_new_tokens = tokenizer.add_tokens("[SEG]")
+    args.seg_token_idx = tokenizer.convert_tokens_to_ids("[SEG]")
+    if args.seg_token_idx == tokenizer.unk_token_id:
+        raise ValueError("[SEG] token was not added to the tokenizer correctly.")
 
     if args.use_mm_start_end:
-        tokenizer.add_tokens(
+        num_new_tokens += tokenizer.add_tokens(
             [DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True
         )
 
@@ -133,11 +151,12 @@ def build_model(args):
     model.config.eos_token_id = tokenizer.eos_token_id
     model.config.bos_token_id = tokenizer.bos_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
-    
-    # model.get_model().initialize_vision_modules(model.get_model().config)
-    # model.get_model().initialize_lisa_modules(model.get_model().config)
+    model.config.tokenizer_model_max_length = tokenizer.model_max_length
+    model.config.tokenizer_padding_side = tokenizer.padding_side
 
     vision_tower = model.get_model().get_vision_tower()
+    if hasattr(vision_tower, "is_loaded") and not vision_tower.is_loaded:
+        vision_tower.load_model()
     vision_tower.to(dtype=torch_dtype, device=get_device(args.local_rank))
 
     for p in vision_tower.parameters():
@@ -149,7 +168,7 @@ def build_model(args):
         args.conv_type
     ]
 
-    if args.lora_r > 0:
+    if args.lora_r > 0 and args.resume:
 
         def find_linear_layers(model_obj, lora_target_modules):
             cls = torch.nn.Linear
@@ -184,7 +203,8 @@ def build_model(args):
         )
         model = get_peft_model(model, lora_config)
 
-    model.resize_token_embeddings(len(tokenizer))
+    if num_new_tokens > 0:
+        model.resize_token_embeddings(len(tokenizer))
     return tokenizer, model
 
 

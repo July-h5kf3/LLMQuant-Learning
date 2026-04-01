@@ -6,3 +6,7 @@ __pycache__/
 *.py[cod]
 .venv/
 Code/LISA/weights/
+Code/LISA/configs/*
+!Code/LISA/configs/train_ds.yaml
+!Code/LISA/configs/test_ds.yaml
+Code/LISA/runs/*

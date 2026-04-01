@@ -1,12 +1,11 @@
 import argparse
+import contextlib
 import os
-import shutil
 import sys
 import time
 from functools import partial
 from types import SimpleNamespace
 
-import deepspeed
 import torch
 import tqdm
 import transformers
@@ -18,11 +17,11 @@ from model.LISA import LISAForCausalLM
 from model.llava1p5 import conversation as conversation_lib
 from train_utils import (
     build_progress,
-    cast_batch_precision,
     get_device,
     get_next_batch,
     get_torch_dtype,
     log_train_metrics,
+    move_batch_to_device,
     reset_meters,
     update_train_meters,
 )
@@ -149,7 +148,9 @@ def build_tokenizer_and_model(args):
     )
     tokenizer.pad_token = tokenizer.unk_token
     tokenizer.add_tokens("[SEG]")
-    args.seg_token_idx = tokenizer("[SEG]", add_special_tokens=False).input_ids[0]
+    args.seg_token_idx = tokenizer.convert_tokens_to_ids("[SEG]")
+    if args.seg_token_idx == tokenizer.unk_token_id:
+        raise ValueError("[SEG] token was not added to the tokenizer correctly.")
 
     if args.use_mm_start_end:
         tokenizer.add_tokens(
@@ -174,13 +175,14 @@ def build_tokenizer_and_model(args):
     model.config.eos_token_id = tokenizer.eos_token_id
     model.config.bos_token_id = tokenizer.bos_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
+    model.config.tokenizer_model_max_length = tokenizer.model_max_length
+    model.config.tokenizer_padding_side = tokenizer.padding_side
 
     model.enable_input_require_grads()
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
 
     model.get_model().initialize_vision_modules(model.get_model().config)
-    model.get_model().initialize_lisa_modules(model.get_model().config)
     vision_tower = model.get_model().get_vision_tower()
     vision_tower.to(dtype=torch_dtype, device=get_device(args.local_rank))
 
@@ -278,6 +280,16 @@ def build_datasets(args, tokenizer):
     return train_dataset, val_dataset
 
 
+def get_autocast_context(args, enabled):
+    if not enabled or not torch.cuda.is_available():
+        return contextlib.nullcontext()
+    if args.precision == "bf16":
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    if args.precision == "fp16":
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
+    return contextlib.nullcontext()
+
+
 def validate(val_loader, model_engine, epoch, writer, args):
     from utils.utils import AverageMeter, dict_to_cuda, intersectionAndUnionGPU
 
@@ -292,9 +304,7 @@ def validate(val_loader, model_engine, epoch, writer, args):
             torch.cuda.empty_cache()
 
         input_dict = dict_to_cuda(input_dict)
-        cast_batch_precision(input_dict, args.precision)
-
-        with torch.no_grad():
+        with torch.no_grad(), get_autocast_context(args, enabled=True):
             output_dict = model_engine(**input_dict)
 
         pred_masks = output_dict["pred_masks"]
@@ -334,72 +344,65 @@ def validate(val_loader, model_engine, epoch, writer, args):
     return giou, ciou
 
 
-def setup_deepspeed(args, model, tokenizer, train_dataset, val_dataset):
-    _, _, collate_fn = load_data_modules()
-    ds_config = {
-        "train_micro_batch_size_per_gpu": args.batch_size,
-        "gradient_accumulation_steps": args.grad_accumulation_steps,
-        "optimizer": {
-            "type": "AdamW",
-            "params": {
-                "lr": args.lr,
-                "weight_decay": 0.0,
-                "betas": (args.beta1, args.beta2),
-            },
-        },
-        "scheduler": {
-            "type": "WarmupDecayLR",
-            "params": {
-                "total_num_steps": args.epochs * args.steps_per_epoch,
-                "warmup_min_lr": 0,
-                "warmup_max_lr": args.lr,
-                "warmup_num_steps": 100,
-                "warmup_type": "linear",
-            },
-        },
-        "fp16": {"enabled": args.precision == "fp16"},
-        "bf16": {"enabled": args.precision == "bf16"},
-        "gradient_clipping": 1.0,
-        "zero_optimization": {
-            "stage": 2,
-            "contiguous_gradients": True,
-            "overlap_comm": True,
-            "reduce_scatter": True,
-            "reduce_bucket_size": 5e8,
-            "allgather_bucket_size": 5e8,
-        },
-    }
+def build_warmup_decay_scheduler(optimizer, total_steps, warmup_steps):
+    total_steps = max(total_steps, 1)
+    warmup_steps = max(min(warmup_steps, total_steps), 0)
 
-    model_engine, _, train_loader, scheduler = deepspeed.initialize(
-        model=model,
-        model_parameters=model.parameters(),
-        training_data=train_dataset,
+    def lr_lambda(current_step):
+        if warmup_steps > 0 and current_step < warmup_steps:
+            return float(current_step + 1) / float(warmup_steps)
+        decay_steps = max(total_steps - warmup_steps, 1)
+        progress = float(current_step - warmup_steps) / float(decay_steps)
+        return max(0.0, 1.0 - progress)
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def setup_torch(args, model, tokenizer, train_dataset, val_dataset):
+    _, _, collate_fn = load_data_modules()
+    device = get_device(args.local_rank)
+    model.to(device=device)
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.workers,
+        pin_memory=torch.cuda.is_available(),
         collate_fn=build_collate_fn(args, tokenizer, collate_fn),
-        config=ds_config,
     )
 
     val_loader = None
     if val_dataset is not None:
-        val_sampler = None
-        if args.distributed and torch.distributed.is_initialized():
-            val_sampler = torch.utils.data.distributed.DistributedSampler(
-                val_dataset, shuffle=False, drop_last=False
-            )
         val_loader = torch.utils.data.DataLoader(
             val_dataset,
             batch_size=args.val_batch_size,
             shuffle=False,
             num_workers=args.workers,
-            pin_memory=False,
-            sampler=val_sampler,
+            pin_memory=torch.cuda.is_available(),
             collate_fn=build_collate_fn(args, tokenizer, collate_fn),
         )
 
+    optimizer = torch.optim.AdamW(
+        (p for p in model.parameters() if p.requires_grad),
+        lr=args.lr,
+        betas=(args.beta1, args.beta2),
+        weight_decay=0.0,
+    )
+    scheduler = build_warmup_decay_scheduler(
+        optimizer,
+        total_steps=args.epochs * args.steps_per_epoch,
+        warmup_steps=100,
+    )
+
     return {
-        "model": model_engine,
+        "model": model,
         "train_loader": train_loader,
         "val_loader": val_loader,
+        "optimizer": optimizer,
         "scheduler": scheduler,
+        "device": device,
+        "global_step": 0,
     }
 
 
@@ -416,12 +419,17 @@ def load_resume(args, state):
     if not args.resume:
         return
 
-    state["model"].load_checkpoint(args.resume)
-    latest_path = os.path.join(args.resume, "latest")
-    if os.path.exists(latest_path):
-        with open(latest_path, "r", encoding="utf-8") as f:
-            ckpt_dir = f.readlines()[0].strip()
-        args.start_epoch = int(ckpt_dir.replace("global_step", "")) // args.steps_per_epoch
+    checkpoint_path = args.resume
+    if os.path.isdir(checkpoint_path):
+        checkpoint_path = os.path.join(checkpoint_path, "checkpoint.pt")
+    checkpoint = torch.load(checkpoint_path, map_location=state["device"])
+    state["model"].load_state_dict(checkpoint["model"], strict=False)
+    if "optimizer" in checkpoint:
+        state["optimizer"].load_state_dict(checkpoint["optimizer"])
+    if "scheduler" in checkpoint:
+        state["scheduler"].load_state_dict(checkpoint["scheduler"])
+    state["global_step"] = checkpoint.get("global_step", 0)
+    args.start_epoch = checkpoint.get("epoch", 0)
 
 
 def save_best_checkpoint(args, state, epoch, best_score, cur_ciou):
@@ -435,12 +443,28 @@ def save_best_checkpoint(args, state, epoch, best_score, cur_ciou):
                 f"meta_log_giou{best_score:.3f}_ciou{cur_ciou:.3f}.pth",
             ),
         )
-        if os.path.exists(save_dir):
-            shutil.rmtree(save_dir)
 
-    if torch.distributed.is_initialized():
-        torch.distributed.barrier()
-    state["model"].save_checkpoint(save_dir)
+    checkpoint_path = os.path.join(save_dir, "checkpoint.pt")
+    if args.local_rank == 0:
+        os.makedirs(save_dir, exist_ok=True)
+        trainable_names = {
+            name for name, param in state["model"].named_parameters() if param.requires_grad
+        }
+        model_state = {
+            name: tensor.detach().cpu()
+            for name, tensor in state["model"].state_dict().items()
+            if name in trainable_names
+        }
+        torch.save(
+            {
+                "epoch": epoch + 1,
+                "global_step": state["global_step"],
+                "model": model_state,
+                "optimizer": state["optimizer"].state_dict(),
+                "scheduler": state["scheduler"].state_dict(),
+            },
+            checkpoint_path,
+        )
 
 
 def train_one_epoch(args, state, epoch, writer, train_iter):
@@ -449,24 +473,31 @@ def train_one_epoch(args, state, epoch, writer, train_iter):
     )
 
     state["model"].train()
+    device = state.get("device")
 
     end = time.time()
     for global_step in range(args.steps_per_epoch):
+        state["optimizer"].zero_grad(set_to_none=True)
+
         for _ in range(args.grad_accumulation_steps):
             input_dict, train_iter = get_next_batch(state["train_loader"], train_iter)
             data_time.update(time.time() - end)
 
-            from utils.utils import dict_to_cuda
+            if device is not None:
+                input_dict = move_batch_to_device(input_dict, device)
+            else:
+                from utils.utils import dict_to_cuda
 
-            input_dict = dict_to_cuda(input_dict)
-            cast_batch_precision(input_dict, args.precision)
-
-            output_dict = state["model"](**input_dict)
-            loss = output_dict["loss"]
+                input_dict = dict_to_cuda(input_dict)
+            with get_autocast_context(args, enabled=True):
+                output_dict = state["model"](**input_dict)
+                loss = output_dict["loss"] / args.grad_accumulation_steps
             update_train_meters(metric_meters, output_dict, input_dict["images"].size(0))
+            loss.backward()
 
-            state["model"].backward(loss)
-            state["model"].step()
+        state["optimizer"].step()
+        state["scheduler"].step()
+        state["global_step"] += 1
 
         batch_time.update(time.time() - end)
         end = time.time()
@@ -527,7 +558,7 @@ def main(args):
     else:
         print(f"Training with {len(train_dataset)} examples.")
 
-    state = setup_deepspeed(args, model, tokenizer, train_dataset, val_dataset)
+    state = setup_torch(args, model, tokenizer, train_dataset, val_dataset)
     try_auto_resume(args)
     load_resume(args, state)
     train(args, state, writer)
