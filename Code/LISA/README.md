@@ -39,7 +39,9 @@ uv run python test_ds.py --config configs/test_ds.yaml
 ## TODO
 
 - 目前模型性能依旧高度绑定Transformers版本，会导致很多可以调库的方法无法被使用。测试发现若使用版本5.4.0则无法复现出论文中的效果
-- 在 LISA++ baseline 上实现与论文结果的精度对齐
+- 在 LISA++ baseline 上实现与论文结果的精度对齐:
+  1. 在Reasoning instance segmentation下的结果
+  2. 在4-bit/8-bit量化下的对齐
 - 复现并实现 MASQuant
 
 ## 参考链接
