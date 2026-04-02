@@ -260,7 +260,6 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         if past_key_values:
             input_ids = input_ids[:, -1:]
 
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
         if inputs_embeds is not None and past_key_values is None:
             model_inputs = {"inputs_embeds": inputs_embeds}
         else:
@@ -278,5 +277,11 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         )
         return model_inputs
 
-AutoConfig.register("llava", LlavaConfig, exist_ok=True)
-AutoModelForCausalLM.register(LlavaConfig, LlavaLlamaForCausalLM)
+try:
+    AutoConfig.register("llava", LlavaConfig)
+except ValueError:
+    pass
+try:
+    AutoModelForCausalLM.register(LlavaConfig, LlavaLlamaForCausalLM)
+except ValueError:
+    pass

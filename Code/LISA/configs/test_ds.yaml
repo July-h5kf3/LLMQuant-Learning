@@ -1,55 +1,30 @@
-# 当前进程的本地 GPU 序号（分布式启动时由启动器覆盖）
 local_rank: 0
-# 基础多模态模型名称或路径
 version: "/root/autodl-tmp/LISA/weights/LISA_PLUS_7B"
-# 推理精度，可选 fp32/bf16/fp16
 precision: "bf16"
-# 输入图像边长（会在数据管线中缩放到该大小）
 image_size: 1024
-# 文本最大 token 长度
-model_max_length: 512
-# LoRA 的秩，设为 0 表示关闭 LoRA
-lora_r: 0
-# 视觉塔（CLIP）模型名称
+model_max_length: 1024
+lora_r: 8
 vision_tower: "/root/autodl-tmp/.cache/huggingface/transformers/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1"
-# 是否启用 8bit 加载（当前推理默认不启用）
 load_in_8bit: false
-# 是否启用 4bit 加载（当前推理默认不启用）
 load_in_4bit: false
 
-# 数据集根目录
 dataset_dir: "/root/autodl-tmp/LISA/dataset"
-# 测试集配置
-test_dataset: "ReasonSeg|val"
-# DataLoader worker 数量
+test_dataset: "ReasonSeg|test"
 workers: 4
-# 测试 batch 大小（当前脚本要求固定为 1）
 batch_size: 1
 
-# LoRA alpha 参数
 lora_alpha: 16
-# LoRA dropout 概率
 lora_dropout: 0.05
-# LoRA 目标模块名（逗号分隔）
 lora_target_modules: "q_proj,v_proj"
 
-# 文本生成损失权重（用于构建模型参数）
 ce_loss_weight: 1.0
-# mask dice 损失权重（用于构建模型参数）
 dice_loss_weight: 0.5
-# mask BCE 损失权重（用于构建模型参数）
 bce_loss_weight: 2.0
 
-# SAM 预训练权重路径
 vision_pretrained: "/root/autodl-tmp/LISA/weights/SAM/sam_vit_h_4b8939.pth"
-# 文本到分割特征映射维度
 out_dim: 256
-# 待评估权重路径（可为 deepspeed checkpoint 目录或单文件）
 resume: ""
 
-# 是否训练 mask decoder（推理构建模型时保持与训练一致）
 train_mask_decoder: true
-# 是否在图像 token 两侧添加特殊 token
 use_mm_start_end: false
-# 对话模板类型，可选 llava_v1/llava_llama_2
-conv_type: "llava_llama_2"
+conv_type: "llava_v1"

@@ -103,7 +103,6 @@ class LisaModel(LisaMetaModel, LlavaLlamaModel):
 
 
 class LISAForCausalLM(LlavaLlamaForCausalLM):
-    _keys_to_ignore_on_load_unexpected = [r"model\.dynamic_fc\..*"]
 
     def __init__(
         self,
@@ -126,7 +125,8 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 "vision_tower", "openai/clip-vit-large-patch14"
             )
         else:
-            config.mm_vision_tower = config.vision_tower
+            config.mm_use_im_start_end = kwargs.pop("use_mm_start_end", True)
+            config.mm_vision_tower = kwargs.get("vision_tower", config.vision_tower)
 
         self.seg_token_idx = kwargs.pop("seg_token_idx")
 

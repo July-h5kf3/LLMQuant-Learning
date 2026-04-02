@@ -88,3 +88,24 @@ def get_next_batch(train_loader, train_iter):
         train_iter = iter(train_loader)
         input_dict = next(train_iter)
     return input_dict, train_iter
+
+
+def assert_no_meta_params(model, module_keywords=None):
+    if module_keywords is None:
+        module_keywords = []
+
+    meta_names = []
+    for name, param in model.named_parameters():
+        if getattr(param, "is_meta", False):
+            if not module_keywords or any(keyword in name for keyword in module_keywords):
+                meta_names.append(name)
+
+    if meta_names:
+        preview = ", ".join(meta_names[:10])
+        if len(meta_names) > 10:
+            preview += ", ..."
+        raise RuntimeError(
+            "Detected meta parameters after model loading. "
+            "This usually means some weights were not materialized correctly. "
+            f"Examples: {preview}"
+        )

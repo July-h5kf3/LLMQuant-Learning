@@ -53,6 +53,14 @@ sam_model_registry = {
 }
 
 
+def _load_state_dict_compat(module, state_dict, strict=False):
+    """Use assign=True on newer Torch to avoid meta-parameter copy no-op warnings."""
+    try:
+        return module.load_state_dict(state_dict, strict=strict, assign=True)
+    except TypeError:
+        return module.load_state_dict(state_dict, strict=strict)
+
+
 def _build_sam(
     encoder_embed_dim,
     encoder_depth,
@@ -104,5 +112,5 @@ def _build_sam(
     if checkpoint is not None:
         with open(checkpoint, "rb") as f:
             state_dict = torch.load(f)
-        sam.load_state_dict(state_dict, strict=False)
+        _load_state_dict_compat(sam, state_dict, strict=False)
     return sam

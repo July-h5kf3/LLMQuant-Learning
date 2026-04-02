@@ -12,7 +12,12 @@ from peft import LoraConfig, get_peft_model
 
 from model.LISA import LISAForCausalLM
 from model.llava1p5 import conversation as conversation_lib
-from train_utils import cast_batch_precision, get_device, get_torch_dtype
+from train_utils import (
+    assert_no_meta_params,
+    cast_batch_precision,
+    get_device,
+    get_torch_dtype,
+)
 from utils.utils import (
     DEFAULT_IM_END_TOKEN,
     DEFAULT_IM_START_TOKEN,
@@ -146,7 +151,11 @@ def build_model(args):
     }
     torch_dtype = get_torch_dtype(args.precision)
     model = LISAForCausalLM.from_pretrained(
-        args.version, torch_dtype=torch_dtype, low_cpu_mem_usage=True, **model_args
+        args.version, torch_dtype=torch_dtype, **model_args
+    )
+    assert_no_meta_params(
+        model,
+        module_keywords=["visual_model", "text_hidden_fcs", "mm_projector", "lm_head"],
     )
     model.config.eos_token_id = tokenizer.eos_token_id
     model.config.bos_token_id = tokenizer.bos_token_id
@@ -287,15 +296,29 @@ def evaluate(test_loader, model_engine, args):
         output_list = (pred_masks[0] > 0).int()
         assert len(pred_masks) == 1
 
-        intersection, union, acc_iou = 0.0, 0.0, 0.0
+        # ReasonSeg semantic prompts can produce multiple instance-like masks
+        # for one semantic target. Merge them before scoring against the single
+        # union GT mask instead of only comparing the first prediction.
+        if masks_list.shape[0] == 1 and output_list.shape[0] > 1:
+            output_list = (output_list.sum(dim=0, keepdim=True) > 0).int()
+
+        intersection = None
+        union = None
+        acc_iou = None
         for mask_i, output_i in zip(masks_list, output_list):
             intersection_i, union_i, _ = intersectionAndUnionGPU(
                 output_i.contiguous().clone(), mask_i.contiguous(), 2, ignore_index=255
             )
+            if intersection is None:
+                intersection = torch.zeros_like(intersection_i)
+                union = torch.zeros_like(union_i)
+                acc_iou = torch.zeros_like(intersection_i, dtype=torch.float32)
             intersection += intersection_i
             union += union_i
-            acc_iou += intersection_i / (union_i + 1e-5)
+            acc_iou += intersection_i.float() / (union_i.float() + 1e-5)
             acc_iou[union_i == 0] += 1.0
+        if intersection is None:
+            continue
         intersection, union = intersection.cpu().numpy(), union.cpu().numpy()
         acc_iou = acc_iou.cpu().numpy() / masks_list.shape[0]
         intersection_meter.update(intersection)
@@ -303,8 +326,16 @@ def evaluate(test_loader, model_engine, args):
         acc_iou_meter.update(acc_iou, n=masks_list.shape[0])
 
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10)
-    ciou = iou_class[1]
-    giou = acc_iou_meter.avg[1]
+    if isinstance(iou_class, (int, float)):
+        ciou = iou_class
+    else:
+        ciou = iou_class[1]
+
+    giou_avg = acc_iou_meter.avg
+    if isinstance(giou_avg, (int, float)):
+        giou = giou_avg
+    else:
+        giou = giou_avg[1]
     print(
         f"Test dataset: {args.test_dataset}, samples: {len(test_loader.dataset)}, giou: {giou:.4f}, ciou: {ciou:.4f}"
     )

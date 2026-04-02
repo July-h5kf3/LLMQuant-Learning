@@ -46,7 +46,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values=None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
@@ -54,9 +54,6 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         output_hidden_states: Optional[bool] = None,
         images: Optional[torch.FloatTensor] = None,
         return_dict: Optional[bool] = None,
-        logits_to_keep: Union[int, torch.Tensor] = 0,
-        cache_position: Optional[torch.LongTensor] = None,
-        **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         output_attentions = (
             output_attentions
@@ -92,18 +89,10 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            cache_position=cache_position,
-            **kwargs,
         )
 
         hidden_states = outputs[0]
-        if isinstance(logits_to_keep, int):
-            if logits_to_keep == 0:
-                logits = self.lm_head(hidden_states)
-            else:
-                logits = self.lm_head(hidden_states[:, -logits_to_keep:, :])
-        else:
-            logits = self.lm_head(hidden_states[:, logits_to_keep, :])
+        logits = self.lm_head(hidden_states)
 
         loss = None
         if labels is not None:
@@ -135,24 +124,29 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     def prepare_inputs_for_generation(
         self,
         input_ids,
-        next_sequence_length=None,
         past_key_values=None,
         attention_mask=None,
         inputs_embeds=None,
-        is_first_iteration=False,
         **kwargs,
     ):
         images = kwargs.pop("images", None)
-        model_inputs = super().prepare_inputs_for_generation(
-            input_ids,
-            next_sequence_length=next_sequence_length,
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            is_first_iteration=is_first_iteration,
-            **kwargs,
+        past_key_values = None
+        if past_key_values:
+            input_ids = input_ids[:, -1:]
+
+        if inputs_embeds is not None and past_key_values is None:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            model_inputs = {"input_ids": input_ids}
+
+        model_inputs.update(
+            {
+                "past_key_values": past_key_values,
+                "use_cache": kwargs.get("use_cache"),
+                "attention_mask": attention_mask,
+                "images": images,
+            }
         )
-        model_inputs["images"] = images
         return model_inputs
 
 

@@ -19,10 +19,10 @@ val_dataset: "ReasonSeg|val"
 dataset_dir: "/root/autodl-tmp/LISA/dataset"
 
 log_base_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/runs"
-exp_name: "reasonseg_train239_eval_val_test_10ep_500step_bs5"
-epochs: 10
-steps_per_epoch: 500
-batch_size: 5
+exp_name: "reasonseg_train239_336_10ep_500step_bs5"
+epochs: 1
+steps_per_epoch: 20
+batch_size: 1
 grad_accumulation_steps: 1
 val_batch_size: 1
 workers: 2
@@ -46,7 +46,7 @@ no_eval: false
 vision_pretrained: "/root/autodl-tmp/LISA/weights/SAM/sam_vit_h_4b8939.pth"
 out_dim: 256
 resume: ""
-print_freq: 1
+print_freq: 20
 start_epoch: 0
 gradient_checkpointing: true
 train_mask_decoder: true

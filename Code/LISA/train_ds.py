@@ -16,6 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 from model.LISA import LISAForCausalLM
 from model.llava1p5 import conversation as conversation_lib
 from train_utils import (
+    assert_no_meta_params,
     build_progress,
     get_device,
     get_next_batch,
@@ -170,7 +171,11 @@ def build_tokenizer_and_model(args):
     }
     torch_dtype = get_torch_dtype(args.precision)
     model = LISAForCausalLM.from_pretrained(
-        args.version, torch_dtype=torch_dtype, low_cpu_mem_usage=True, **model_args
+        args.version, torch_dtype=torch_dtype, **model_args
+    )
+    assert_no_meta_params(
+        model,
+        module_keywords=["visual_model", "text_hidden_fcs", "mm_projector", "lm_head"],
     )
     model.config.eos_token_id = tokenizer.eos_token_id
     model.config.bos_token_id = tokenizer.bos_token_id
