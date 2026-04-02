@@ -1015,3 +1015,15 @@ $$
 Q_{prod}(x) = [Q_{MSE}(x),Q_{qjl}(x-Q^{-1}_{MSE}(Q_{MSE}(x))),||x-Q^{-1}_{MSE}(Q_{MSE}(x))||_2]
 $$
 论文还对该方法的误差下界进行了估计，具体的参考原文。
+
+#### MASQuant: Modality-Aware Smoothing Quantization for Multimodal Large Language Models
+
+
+
+当将基于通道级（Per-channel）平滑的PTQ应用于多模态大模型（MLLMs）时会面临两个核心挑战：
+
+1. Smoothing Misalignment（平滑错位）：不同模态的激活值幅度存在数量级的差异，例如视觉Token的激活范围通常比文本和音频大10-100倍。传统的Per-channel量化为每个通道计算单一的缩放因子，导致主导模态的较大激活决定平滑因子，而使非主导模态的激活被过度平滑，信号被严重压制，最终导致量化后的模型性能不佳。
+2. Cross-Modal Computational Invariance（跨模态计算不变性）：直接为不同模态计算独立的平滑因子会破坏计算不变性（坐标系不同）。若严格保持模态特定的平滑，推理时需要为不同模态存储不同的量化权重矩阵，这违背了量化技术通过单一低精度权重表示来减少内存占用的根本目标。
+
+论文提出了MASQuant框架来解决上述两个问题，该框架包含两个核心组件：MAS（Modality-Aware Smoothing）以及CMC（Cross-Modal Compensation ）
+
