@@ -11,3 +11,5 @@ Code/LISA/configs/*
 !Code/LISA/configs/test_ds.yaml
 Code/LISA/runs/*
 Week/*
+Code/LISA/weights/*
+Code/LISA/dataset

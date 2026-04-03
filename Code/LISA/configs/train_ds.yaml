@@ -1,5 +1,5 @@
 local_rank: 0
-version: "/root/autodl-tmp/LISA/weights/LISA_PLUS_7B"
+version: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B"
 vis_save_path: "./vis_output"
 precision: "bf16"
 image_size: 1024
@@ -16,7 +16,7 @@ refer_seg_data: "refclef"
 vqa_data: "llava_instruct_150k"
 reason_seg_data: "ReasonSeg|train"
 val_dataset: "ReasonSeg|val"
-dataset_dir: "/root/autodl-tmp/LISA/dataset"
+dataset_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/dataset"
 
 log_base_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/runs"
 exp_name: "reasonseg_train239_336_10ep_500step_bs5"
@@ -43,7 +43,7 @@ num_classes_per_sample: 3
 exclude_val: false
 no_eval: false
 
-vision_pretrained: "/root/autodl-tmp/LISA/weights/SAM/sam_vit_h_4b8939.pth"
+vision_pretrained: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/SAM/sam_vit_h_4b8939.pth"
 out_dim: 256
 resume: ""
 print_freq: 20

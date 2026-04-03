@@ -1,5 +1,5 @@
 local_rank: 0
-version: "/root/autodl-tmp/LISA/weights/LISA_PLUS_7B"
+version: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B"
 precision: "bf16"
 image_size: 1024
 model_max_length: 1024
@@ -8,7 +8,7 @@ vision_tower: "/root/autodl-tmp/.cache/huggingface/transformers/models--openai--
 load_in_8bit: false
 load_in_4bit: false
 
-dataset_dir: "/root/autodl-tmp/LISA/dataset"
+dataset_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/dataset"
 test_dataset: "ReasonSeg|val"
 workers: 4
 batch_size: 1
@@ -21,7 +21,7 @@ ce_loss_weight: 1.0
 dice_loss_weight: 0.5
 bce_loss_weight: 2.0
 
-vision_pretrained: "/root/autodl-tmp/LISA/weights/SAM/sam_vit_h_4b8939.pth"
+vision_pretrained: "/root/autodl-tmp/LLMQuant-Learning/CodeLISA/weights/SAM/sam_vit_h_4b8939.pth"
 out_dim: 256
 resume: ""
 
