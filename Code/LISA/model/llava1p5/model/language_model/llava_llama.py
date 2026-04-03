@@ -12,24 +12,38 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-
+import gc
+import json
+import os
 from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-
-from transformers import AutoConfig, AutoModelForCausalLM, \
-                         LlamaConfig, LlamaModel, LlamaForCausalLM
-
+import torch.nn.functional as F
+import transformers
+from transformers import AutoConfig, AutoModelForCausalLM
+try:
+    from transformers.generation import GenerationMixin
+except ImportError:
+    from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
+from model.compat_transformers_431 import (
+    LlamaConfig,
+    LlamaForCausalLM,
+    LlamaModel,
+)
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 
 from torch.nn import CrossEntropyLoss
 import copy
 
 class LlavaConfig(LlamaConfig):
-    model_type = "llava"
+    model_type = "lisa_llava"
 
 
 class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
@@ -39,8 +53,127 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
         super(LlavaLlamaModel, self).__init__(config)
 
 
-class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
+class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMixin):
     config_class = LlavaConfig
+
+    @classmethod
+    def _coerce_config(cls, config):
+        if config is None or isinstance(config, cls.config_class):
+            return config
+
+        config_dict = config.to_dict()
+        if config_dict.get("model_type") == "llava":
+            config_dict["model_type"] = cls.config_class.model_type
+        return cls.config_class.from_dict(config_dict)
+
+    @classmethod
+    def _load_compat_config(cls, model_path):
+        config_path = os.path.join(model_path, "config.json")
+        if not os.path.exists(config_path):
+            return cls.config_class.from_pretrained(model_path)
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_dict = json.load(f)
+
+        if config_dict.get("model_type") == "llava":
+            config_dict["model_type"] = cls.config_class.model_type
+        return cls.config_class.from_dict(config_dict)
+
+    @staticmethod
+    def _resolve_torch_dtype(config, torch_dtype):
+        if torch_dtype in (None, "auto"):
+            config_dtype = getattr(config, "torch_dtype", None)
+            if isinstance(config_dtype, str) and hasattr(torch, config_dtype):
+                return getattr(torch, config_dtype)
+            return None
+        if isinstance(torch_dtype, str) and hasattr(torch, torch_dtype):
+            return getattr(torch, torch_dtype)
+        return torch_dtype
+
+    @staticmethod
+    def _resolve_target_device(device_map):
+        if device_map is None:
+            return None
+        target = device_map.get("") if isinstance(device_map, dict) else device_map
+        if target in (None, "auto"):
+            return None
+        if isinstance(target, int):
+            return f"cuda:{target}"
+        return str(target)
+
+    @staticmethod
+    def _iter_checkpoint_files(model_path):
+        index_path = os.path.join(model_path, "pytorch_model.bin.index.json")
+        if os.path.exists(index_path):
+            with open(index_path, "r", encoding="utf-8") as f:
+                index = json.load(f)
+            seen = set()
+            for filename in index["weight_map"].values():
+                if filename in seen:
+                    continue
+                seen.add(filename)
+                yield os.path.join(model_path, filename)
+            return
+
+        single_bin = os.path.join(model_path, "pytorch_model.bin")
+        if os.path.exists(single_bin):
+            yield single_bin
+            return
+
+        raise FileNotFoundError(f"Could not find PyTorch checkpoint under {model_path}")
+
+    @classmethod
+    def _legacy_from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        config = cls._coerce_config(kwargs.pop("config", None))
+        torch_dtype = kwargs.pop("torch_dtype", None)
+        device_map = kwargs.pop("device_map", None)
+        kwargs.pop("low_cpu_mem_usage", None)
+
+        if config is None:
+            config = cls._load_compat_config(pretrained_model_name_or_path)
+
+        resolved_dtype = cls._resolve_torch_dtype(config, torch_dtype)
+        init_dtype = (
+            resolved_dtype
+            if resolved_dtype in (torch.float16, torch.bfloat16, torch.float32)
+            else None
+        )
+
+        with no_init_weights():
+            if init_dtype is None:
+                model = cls(config, *model_args, **kwargs)
+            else:
+                original_dtype = torch.get_default_dtype()
+                torch.set_default_dtype(init_dtype)
+                try:
+                    model = cls(config, *model_args, **kwargs)
+                finally:
+                    torch.set_default_dtype(original_dtype)
+
+        for checkpoint_file in cls._iter_checkpoint_files(pretrained_model_name_or_path):
+            shard_state = torch.load(checkpoint_file, map_location="cpu")
+            model.load_state_dict(shard_state, strict=False)
+            del shard_state
+            gc.collect()
+
+        if resolved_dtype is not None and resolved_dtype != init_dtype:
+            model = model.to(dtype=resolved_dtype)
+        target_device = cls._resolve_target_device(device_map)
+        if target_device is not None:
+            model = model.to(device=target_device)
+        return model
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        version_parts = transformers.__version__.split(".")[:2]
+        transformers_version = tuple(int(part) for part in version_parts)
+        if transformers_version > (4, 31):
+            return cls._legacy_from_pretrained(
+                pretrained_model_name_or_path, *model_args, **kwargs
+            )
+        return super().from_pretrained(
+            pretrained_model_name_or_path, *model_args, **kwargs
+        )
 
     def __init__(self, config):
         super(LlamaForCausalLM, self).__init__(config)
@@ -278,7 +411,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         return model_inputs
 
 try:
-    AutoConfig.register("llava", LlavaConfig)
+    AutoConfig.register("lisa_llava", LlavaConfig)
 except ValueError:
     pass
 try:

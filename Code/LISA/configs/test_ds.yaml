@@ -9,7 +9,7 @@ load_in_8bit: false
 load_in_4bit: false
 
 dataset_dir: "/root/autodl-tmp/LISA/dataset"
-test_dataset: "ReasonSeg|test"
+test_dataset: "ReasonSeg|val"
 workers: 4
 batch_size: 1
 

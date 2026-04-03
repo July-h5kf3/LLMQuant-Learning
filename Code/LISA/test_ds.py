@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import torch
 import tqdm
-import transformers
 import yaml
 from peft import LoraConfig, get_peft_model
 
@@ -18,6 +17,7 @@ from train_utils import (
     get_device,
     get_torch_dtype,
 )
+from utils.tokenizer_compat import add_lisa_seg_token, load_lisa_tokenizer
 from utils.utils import (
     DEFAULT_IM_END_TOKEN,
     DEFAULT_IM_START_TOKEN,
@@ -120,16 +120,14 @@ def load_val_modules():
 
 
 def build_model(args):
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
+    tokenizer = load_lisa_tokenizer(
         args.version,
-        cache_dir=None,
         model_max_length=args.model_max_length,
         padding_side="right",
         use_fast=False,
     )
     tokenizer.pad_token = tokenizer.unk_token
-    num_new_tokens = tokenizer.add_tokens("[SEG]")
-    args.seg_token_idx = tokenizer.convert_tokens_to_ids("[SEG]")
+    num_new_tokens, args.seg_token_idx = add_lisa_seg_token(tokenizer)
     if args.seg_token_idx == tokenizer.unk_token_id:
         raise ValueError("[SEG] token was not added to the tokenizer correctly.")
 
