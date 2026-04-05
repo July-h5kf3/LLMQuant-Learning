@@ -5,11 +5,11 @@ image_size: 1024
 model_max_length: 1024
 lora_r: 8
 vision_tower: "/root/autodl-tmp/.cache/huggingface/transformers/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1"
-load_in_8bit: false
-load_in_4bit: false
+quant_method: "none"
+quant_kwargs: {}
 
 dataset_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/dataset"
-test_dataset: "ReasonSeg|val"
+test_dataset: "ReasonSegInst|val"
 workers: 4
 batch_size: 1
 
@@ -21,7 +21,7 @@ ce_loss_weight: 1.0
 dice_loss_weight: 0.5
 bce_loss_weight: 2.0
 
-vision_pretrained: "/root/autodl-tmp/LLMQuant-Learning/CodeLISA/weights/SAM/sam_vit_h_4b8939.pth"
+vision_pretrained: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/SAM/sam_vit_h_4b8939.pth"
 out_dim: 256
 resume: ""
 

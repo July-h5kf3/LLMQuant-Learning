@@ -3,20 +3,30 @@ import os
 import sys
 from functools import partial
 from types import SimpleNamespace
+import numpy as np
 
 import torch
 import tqdm
 import yaml
 from peft import LoraConfig, get_peft_model
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
 
 from model.LISA import LISAForCausalLM
 from model.llava1p5 import conversation as conversation_lib
+from quantization_utils import build_quantization_kwargs
 from train_utils import (
     assert_no_meta_params,
     cast_batch_precision,
+    encode_binary_mask,
     get_device,
     get_torch_dtype,
+    is_reasonseg_inst_dataset,
+    load_checkpoint_for_eval,
+    mask_score_from_logits,
+    rle_area_and_bbox,
 )
+from utils.reason_seg_inst_dataset import ReasonSegInstDataset
 from utils.tokenizer_compat import add_lisa_seg_token, load_lisa_tokenizer
 from utils.utils import (
     DEFAULT_IM_END_TOKEN,
@@ -34,8 +44,7 @@ REQUIRED_CONFIG_KEYS = (
     "model_max_length",
     "lora_r",
     "vision_tower",
-    "load_in_8bit",
-    "load_in_4bit",
+    "quant_method",
     "dataset_dir",
     "test_dataset",
     "workers",
@@ -93,6 +102,18 @@ def parse_args(args):
     if not isinstance(config, dict):
         raise ValueError("YAML config must be a mapping.")
 
+    if "quant_method" not in config:
+        load_in_8bit = config.get("load_in_8bit", False)
+        load_in_4bit = config.get("load_in_4bit", False)
+        if load_in_8bit and load_in_4bit:
+            raise ValueError("load_in_8bit and load_in_4bit cannot both be True")
+        if load_in_8bit:
+            config["quant_method"] = "bnb_8bit"
+        elif load_in_4bit:
+            config["quant_method"] = "bnb_4bit"
+        else:
+            config["quant_method"] = "none"
+
     missing_keys = [k for k in REQUIRED_CONFIG_KEYS if k not in config]
     if missing_keys:
         raise KeyError(f"Missing config keys in YAML: {missing_keys}")
@@ -109,6 +130,12 @@ def parse_args(args):
         raise ValueError("precision must be one of: fp32, bf16, fp16")
     if config["conv_type"] not in {"llava_v1", "llava_llama_2"}:
         raise ValueError("conv_type must be one of: llava_v1, llava_llama_2")
+
+    if "quant_kwargs" not in config:
+        config["quant_kwargs"] = {}
+
+    config.pop("load_in_8bit", None)
+    config.pop("load_in_4bit", None)
 
     return SimpleNamespace(**config)
 
@@ -148,8 +175,14 @@ def build_model(args):
         "use_mm_start_end": args.use_mm_start_end,
     }
     torch_dtype = get_torch_dtype(args.precision)
+    quantization_kwargs = build_quantization_kwargs(
+        args.quant_method, torch_dtype, args.quant_kwargs
+    )
     model = LISAForCausalLM.from_pretrained(
-        args.version, torch_dtype=torch_dtype, **model_args
+        args.version,
+        torch_dtype=torch_dtype,
+        **quantization_kwargs,
+        **model_args,
     )
     assert_no_meta_params(
         model,
@@ -216,14 +249,26 @@ def build_model(args):
 
 
 def build_test_loader(args, tokenizer):
-    ValDataset, collate_fn = load_val_modules()
-    test_dataset = ValDataset(
-        args.dataset_dir,
-        tokenizer,
-        args.vision_tower,
-        args.test_dataset,
-        args.image_size,
-    )
+    _, collate_fn = load_val_modules()
+    test_dataset_name = args.test_dataset.split("|", 1)[0]
+    if is_reasonseg_inst_dataset(test_dataset_name):
+        split = args.test_dataset.split("|", 1)[1] if "|" in args.test_dataset else "train"
+        test_dataset = ReasonSegInstDataset(
+            args.dataset_dir,
+            tokenizer,
+            args.vision_tower,
+            split,
+            args.image_size,
+        )
+    else:
+        ValDataset, _ = load_val_modules()
+        test_dataset = ValDataset(
+            args.dataset_dir,
+            tokenizer,
+            args.vision_tower,
+            args.test_dataset,
+            args.image_size,
+        )
 
     if args.batch_size != 1:
         raise ValueError("Test batch size must be 1 for segmentation evaluation.")
@@ -252,29 +297,27 @@ def build_test_loader(args, tokenizer):
     return test_dataset, test_loader
 
 
-def load_checkpoint_for_eval(model_or_engine, resume_path, device):
-    if not resume_path:
-        return
-
-    if os.path.isdir(resume_path) and hasattr(model_or_engine, "load_checkpoint"):
-        model_or_engine.load_checkpoint(resume_path)
-        return
-
-    checkpoint_path = resume_path
-    if os.path.isdir(resume_path):
-        checkpoint_path = os.path.join(resume_path, "checkpoint.pt")
-
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    state_dict = checkpoint.get("model", checkpoint)
-    model_or_engine.load_state_dict(state_dict, strict=False)
-
-
 def evaluate(test_loader, model_engine, args):
     from utils.utils import dict_to_cuda
 
-    intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
-    union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
-    acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
+    test_dataset_name = args.test_dataset.split("|", 1)[0]
+    is_reasonseg_inst = is_reasonseg_inst_dataset(test_dataset_name)
+
+    if is_reasonseg_inst:
+        coco_gt_dict = {
+            "images": [],
+            "annotations": [],
+            "categories": [{"id": 1, "name": "target"}],
+            "info": {},
+            "licenses": [],
+        }
+        coco_detections = []
+        ann_id = 1
+        image_id = 1
+    else:
+        intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
+        union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
+        acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
 
     model_engine.eval()
 
@@ -289,14 +332,63 @@ def evaluate(test_loader, model_engine, args):
         with torch.no_grad():
             output_dict = model_engine(**input_dict)
 
+        if is_reasonseg_inst:
+            raw_image_path = input_dict["image_paths"][0]
+            if isinstance(raw_image_path, list):
+                raw_image_path = raw_image_path[0]
+            image_name = os.path.basename(raw_image_path)
+
+            gt_masks = output_dict["gt_masks"][0].detach().cpu().numpy().astype(np.uint8)
+            pred_mask_logits = output_dict["pred_masks"][0].detach().float().cpu()
+            pred_masks = (pred_mask_logits > 0).numpy().astype(np.uint8)
+
+            height, width = gt_masks.shape[-2:]
+            coco_gt_dict["images"].append(
+                {
+                    "id": image_id,
+                    "file_name": image_name,
+                    "width": width,
+                    "height": height,
+                }
+            )
+
+            for gt_mask in gt_masks:
+                gt_rle = encode_binary_mask(gt_mask)
+                gt_area, gt_bbox = rle_area_and_bbox(gt_rle)
+                coco_gt_dict["annotations"].append(
+                    {
+                        "id": ann_id,
+                        "image_id": image_id,
+                        "category_id": 1,
+                        "segmentation": gt_rle,
+                        "area": gt_area,
+                        "bbox": gt_bbox,
+                        "iscrowd": 0,
+                    }
+                )
+                ann_id += 1
+
+            for pred_mask, pred_mask_logit in zip(pred_masks, pred_mask_logits):
+                if pred_mask.sum() == 0:
+                    continue
+                pred_rle = encode_binary_mask(pred_mask)
+                coco_detections.append(
+                    {
+                        "image_id": image_id,
+                        "category_id": 1,
+                        "segmentation": pred_rle,
+                        "score": mask_score_from_logits(pred_mask_logit),
+                    }
+                )
+
+            image_id += 1
+            continue
+
         pred_masks = output_dict["pred_masks"]
         masks_list = output_dict["gt_masks"][0].int()
         output_list = (pred_masks[0] > 0).int()
         assert len(pred_masks) == 1
 
-        # ReasonSeg semantic prompts can produce multiple instance-like masks
-        # for one semantic target. Merge them before scoring against the single
-        # union GT mask instead of only comparing the first prediction.
         if masks_list.shape[0] == 1 and output_list.shape[0] > 1:
             output_list = (output_list.sum(dim=0, keepdim=True) > 0).int()
 
@@ -323,17 +415,39 @@ def evaluate(test_loader, model_engine, args):
         union_meter.update(union)
         acc_iou_meter.update(acc_iou, n=masks_list.shape[0])
 
+    if is_reasonseg_inst:
+        coco_gt = COCO()
+        coco_gt.dataset = coco_gt_dict
+        coco_gt.createIndex()
+
+        if not coco_detections:
+            raise RuntimeError("No valid ReasonSeg-Inst predictions were produced.")
+
+        coco_dt = coco_gt.loadRes(coco_detections)
+        coco_eval = COCOeval(coco_gt, coco_dt, iouType="segm")
+        coco_eval.evaluate()
+        coco_eval.accumulate()
+        coco_eval.summarize()
+
+        metrics = {
+            "mAP": float(coco_eval.stats[0]),
+            "AP50": float(coco_eval.stats[1]),
+            "AP75": float(coco_eval.stats[2]),
+            "AP-small": float(coco_eval.stats[3]),
+            "AP-medium": float(coco_eval.stats[4]),
+            "AP-large": float(coco_eval.stats[5]),
+        }
+        print(
+            "ReasonSeg-Inst metrics: "
+            + ", ".join(f"{key}: {value:.4f}" for key, value in metrics.items())
+        )
+        return metrics
+
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10)
-    if isinstance(iou_class, (int, float)):
-        ciou = iou_class
-    else:
-        ciou = iou_class[1]
+    ciou = iou_class if isinstance(iou_class, (int, float)) else iou_class[1]
 
     giou_avg = acc_iou_meter.avg
-    if isinstance(giou_avg, (int, float)):
-        giou = giou_avg
-    else:
-        giou = giou_avg[1]
+    giou = giou_avg if isinstance(giou_avg, (int, float)) else giou_avg[1]
     print(
         f"Test dataset: {args.test_dataset}, samples: {len(test_loader.dataset)}, giou: {giou:.4f}, ciou: {ciou:.4f}"
     )
