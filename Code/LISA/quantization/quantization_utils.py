@@ -1,14 +1,14 @@
 import os
 
 import yaml
-from transformers import BitsAndBytesConfig
+from transformers import AwqConfig, BitsAndBytesConfig
 
 
 def validate_quantization_config(quant_method, quant_kwargs=None):
     if quant_kwargs is None:
         quant_kwargs = {}
 
-    supported_methods = {"none", "bnb_8bit", "bnb_4bit"}
+    supported_methods = {"none", "bnb_8bit", "bnb_4bit", "awq"}
     if quant_method not in supported_methods:
         raise ValueError(
             f"Unsupported quant_method: {quant_method}. "
@@ -62,6 +62,43 @@ def build_bnb_4bit_kwargs(torch_dtype, quant_kwargs=None):
     }
 
 
+def build_awq_kwargs(quant_kwargs=None):
+    if quant_kwargs is None:
+        quant_kwargs = {}
+
+    bits = quant_kwargs.get("bits", 4)
+    group_size = quant_kwargs.get("group_size", 128)
+    zero_point = quant_kwargs.get("zero_point", True)
+    backend = quant_kwargs.get("backend", "auto")
+    modules_to_not_convert = quant_kwargs.get("modules_to_not_convert")
+
+    awq_config = AwqConfig(
+        bits=bits,
+        group_size=group_size,
+        zero_point=zero_point,
+        backend=backend,
+        modules_to_not_convert=modules_to_not_convert,
+    )
+
+    extra_kwargs = {
+        k: v
+        for k, v in quant_kwargs.items()
+        if k
+        not in {
+            "bits",
+            "group_size",
+            "zero_point",
+            "backend",
+            "modules_to_not_convert",
+        }
+    }
+
+    return {
+        "quantization_config": awq_config,
+        **extra_kwargs,
+    }
+
+
 def build_quantization_kwargs(quant_method, torch_dtype, quant_kwargs=None):
     validate_quantization_config(quant_method, quant_kwargs)
 
@@ -71,6 +108,8 @@ def build_quantization_kwargs(quant_method, torch_dtype, quant_kwargs=None):
         return build_bnb_8bit_kwargs()
     if quant_method == "bnb_4bit":
         return build_bnb_4bit_kwargs(torch_dtype, quant_kwargs)
+    if quant_method == "awq":
+        return build_awq_kwargs(quant_kwargs)
 
     raise ValueError(f"Unsupported quant_method: {quant_method}")
 
@@ -79,4 +118,8 @@ def is_quantized_model(model):
     return bool(
         getattr(model, "is_loaded_in_4bit", False)
         or getattr(model, "is_loaded_in_8bit", False)
+        or getattr(model, "quantization_method", None) == "awq"
+        or getattr(getattr(model, "config", None), "quantization_config", None)
+        is not None
     )
+

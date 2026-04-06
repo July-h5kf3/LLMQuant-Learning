@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 import sys
 import time
 from functools import partial
@@ -16,7 +17,7 @@ from pycocotools.cocoeval import COCOeval
 
 from model.LISA import LISAForCausalLM
 from model.llava1p5 import conversation as conversation_lib
-from quantization_utils import (
+from quantization import (
     build_quantization_kwargs,
     is_quantized_model,
     load_quant_config,
@@ -71,6 +72,18 @@ REQUIRED_CONFIG_KEYS = (
 )
 
 
+def set_random_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
 def parse_args(args):
     parser = argparse.ArgumentParser(description="LISA Test Inference")
     parser.add_argument(
@@ -96,6 +109,12 @@ def parse_args(args):
         default=None,
         type=str,
         help="Optional dataset override, e.g. ReasonSeg|val or ReasonSeg|test.",
+    )
+    parser.add_argument(
+        "--seed",
+        default=3407,
+        type=int,
+        help="Random seed for reproducible evaluation.",
     )
     parsed = parser.parse_args(args)
 
@@ -132,6 +151,7 @@ def parse_args(args):
         config["resume"] = parsed.resume
     if parsed.test_dataset is not None:
         config["test_dataset"] = parsed.test_dataset
+    config["seed"] = parsed.seed
 
     if config["precision"] not in {"fp32", "bf16", "fp16"}:
         raise ValueError("precision must be one of: fp32, bf16, fp16")
@@ -503,6 +523,7 @@ def evaluate(test_loader, model_engine, args):
 
 def main(args):
     args = parse_args(args)
+    set_random_seed(args.seed)
     tokenizer, model = build_model(args)
     _, test_loader = build_test_loader(args, tokenizer)
     device = get_device(args.local_rank)
