@@ -19,9 +19,11 @@ from model.LISA import LISAForCausalLM
 from model.llava1p5 import conversation as conversation_lib
 from quantization import (
     build_quantization_kwargs,
+    ensure_awq_checkpoint,
     is_quantized_model,
     load_quant_config,
 )
+from quantization.merge_awq_weight import load_awq_weights_into_lisa
 from train_utils import (
     assert_no_meta_params,
     cast_batch_precision,
@@ -170,6 +172,11 @@ def parse_args(args):
     quant_config_data = load_quant_config(
         config["quant_config"], os.path.dirname(config_path)
     )
+    if config["quant_config"]:
+        quant_config_path = config["quant_config"]
+        if not os.path.isabs(quant_config_path):
+            quant_config_path = os.path.join(os.path.dirname(config_path), quant_config_path)
+        quant_config_data["_config_path"] = quant_config_path
     if config["quant_kwargs"]:
         quant_config_data = {**quant_config_data, **config["quant_kwargs"]}
     config["quant_kwargs"] = quant_config_data
@@ -187,8 +194,13 @@ def load_val_modules():
 
 
 def build_model(args):
+    model_path = args.version
+    awq_model_path = None
+    if args.quant_method == "awq":
+        awq_model_path = ensure_awq_checkpoint(args.version, args.quant_kwargs)
+
     tokenizer = load_lisa_tokenizer(
-        args.version,
+        model_path,
         model_max_length=args.model_max_length,
         padding_side="right",
         use_fast=False,
@@ -215,15 +227,27 @@ def build_model(args):
         "use_mm_start_end": args.use_mm_start_end,
     }
     torch_dtype = get_torch_dtype(args.precision)
-    quantization_kwargs = build_quantization_kwargs(
-        args.quant_method, torch_dtype, args.quant_kwargs
-    )
-    model = LISAForCausalLM.from_pretrained(
-        args.version,
-        torch_dtype=torch_dtype,
-        **quantization_kwargs,
-        **model_args,
-    )
+    if args.quant_method == "awq":
+        model = LISAForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch_dtype,
+            **model_args,
+        )
+        model = load_awq_weights_into_lisa(
+            model,
+            awq_model_path,
+            fuse_layers=False,
+        )
+    else:
+        quantization_kwargs = build_quantization_kwargs(
+            args.quant_method, torch_dtype, args.quant_kwargs
+        )
+        model = LISAForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch_dtype,
+            **quantization_kwargs,
+            **model_args,
+        )
     assert_no_meta_params(
         model,
         module_keywords=["visual_model", "text_hidden_fcs", "mm_projector", "lm_head"],

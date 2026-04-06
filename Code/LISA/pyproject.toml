@@ -37,6 +37,8 @@ awq = [
     "device-smi==0.4.1",
     "hf_transfer>=0.1.9",
     "random_word==1.0.13",
+    "datasets>=4.8.4",
+    "zstandard>=0.25.0",
 ]
 
 [tool.uv.sources]

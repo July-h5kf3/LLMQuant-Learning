@@ -1,0 +1,24 @@
+awq_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B_awq"
+
+# Calibration data settings.
+dataset_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/dataset"
+vision_tower: "/root/autodl-tmp/.cache/huggingface/transformers/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1"
+vision_pretrained: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/SAM/sam_vit_h_4b8939.pth"
+calibration_dataset: "ReasonSeg|train"
+image_size: 1024
+model_max_length: 1024
+questions_per_image: 1
+max_calib_samples: 128
+calibration_batch_size: 1
+calibration_num_workers: 0
+seed: 3407
+conv_type: "llava_v1"
+use_mm_start_end: false
+
+# AWQ quantization settings.
+backend: "autoawq"
+bits: 4
+group_size: 128
+zero_point: true
+version: "GEMM"
+duo_scaling: true
