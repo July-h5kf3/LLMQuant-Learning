@@ -5,11 +5,14 @@ image_size: 1024
 model_max_length: 1024
 lora_r: 8
 vision_tower: "/root/autodl-tmp/.cache/huggingface/transformers/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1"
+# Now support: "bnb_4bit", "bnb_8bit","none"
 quant_method: "none"
-quant_kwargs: {}
+quant_config: "quant/bnb_8bit.yaml"
 
 dataset_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/dataset"
-test_dataset: "ReasonSegInst|val"
+#如果是测试ReasonSeg数据集就用:"ReasonSeg|test","ReasonSeg|val"
+#如果是测试ReasonSeg-inst数据集就用:"ReasonSegInst|val"
+test_dataset: "ReasonSeg|test"
 workers: 4
 batch_size: 1
 

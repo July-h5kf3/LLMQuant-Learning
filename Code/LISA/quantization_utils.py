@@ -1,3 +1,6 @@
+import os
+
+import yaml
 from transformers import BitsAndBytesConfig
 
 
@@ -16,8 +19,29 @@ def validate_quantization_config(quant_method, quant_kwargs=None):
         raise ValueError("quant_kwargs must be a mapping.")
 
 
+def load_quant_config(config_path, base_dir=None):
+    if not config_path:
+        return {}
+
+    resolved_path = config_path
+    if not os.path.isabs(resolved_path) and base_dir is not None:
+        resolved_path = os.path.join(base_dir, resolved_path)
+
+    with open(resolved_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+
+    if not isinstance(config, dict):
+        raise ValueError("Quantization config YAML must be a mapping.")
+    return config
+
+
 def build_bnb_8bit_kwargs():
-    return {"load_in_8bit": True}
+    return {
+        "load_in_8bit": True,
+        "quantization_config": BitsAndBytesConfig(
+            load_in_8bit=True,
+        ),
+    }
 
 
 def build_bnb_4bit_kwargs(torch_dtype, quant_kwargs=None):
@@ -49,3 +73,10 @@ def build_quantization_kwargs(quant_method, torch_dtype, quant_kwargs=None):
         return build_bnb_4bit_kwargs(torch_dtype, quant_kwargs)
 
     raise ValueError(f"Unsupported quant_method: {quant_method}")
+
+
+def is_quantized_model(model):
+    return bool(
+        getattr(model, "is_loaded_in_4bit", False)
+        or getattr(model, "is_loaded_in_8bit", False)
+    )

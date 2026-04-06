@@ -17,6 +17,7 @@ import json
 import os
 from typing import List, Optional, Tuple, Union
 
+import bitsandbytes as bnb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -31,6 +32,7 @@ try:
     from transformers.initialization import no_init_weights
 except ImportError:
     from transformers.modeling_utils import no_init_weights
+from transformers.quantizers.quantizers_utils import should_convert_module
 
 from model.compat_transformers_431 import (
     LlamaConfig,
@@ -55,6 +57,22 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
 
 class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMixin):
     config_class = LlavaConfig
+
+    _quantization_skip_modules = [
+        "lm_head",
+        "model.visual_model",
+        "model.text_hidden_fcs",
+        "model.mm_projector",
+    ]
+
+    @staticmethod
+    def _requests_quantized_loading(kwargs):
+        quantization_config = kwargs.get("quantization_config")
+        return bool(
+            kwargs.get("load_in_4bit")
+            or kwargs.get("load_in_8bit")
+            or quantization_config is not None
+        )
 
     @classmethod
     def _coerce_config(cls, config):
@@ -123,11 +141,80 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
         raise FileNotFoundError(f"Could not find PyTorch checkpoint under {model_path}")
 
     @classmethod
+    def _replace_with_bnb_layers(
+        cls, module, quantization_config, prefix=""
+    ):
+        for child_name, child in list(module.named_children()):
+            full_name = f"{prefix}.{child_name}" if prefix else child_name
+
+            if isinstance(child, nn.Linear) and should_convert_module(
+                full_name, cls._quantization_skip_modules
+            ):
+                bias = child.bias is not None
+                if quantization_config.load_in_8bit:
+                    new_module = bnb.nn.Linear8bitLt(
+                        child.in_features,
+                        child.out_features,
+                        bias=bias,
+                        has_fp16_weights=quantization_config.llm_int8_has_fp16_weight,
+                        threshold=quantization_config.llm_int8_threshold,
+                    )
+                    new_module.weight = bnb.nn.Int8Params(
+                        child.weight.detach().cpu(),
+                        requires_grad=False,
+                        has_fp16_weights=quantization_config.llm_int8_has_fp16_weight,
+                    )
+                else:
+                    new_module = bnb.nn.Linear4bit(
+                        child.in_features,
+                        child.out_features,
+                        bias=bias,
+                        compute_dtype=quantization_config.bnb_4bit_compute_dtype,
+                        compress_statistics=quantization_config.bnb_4bit_use_double_quant,
+                        quant_type=quantization_config.bnb_4bit_quant_type,
+                        quant_storage=quantization_config.bnb_4bit_quant_storage,
+                    )
+                    new_module.weight = bnb.nn.Params4bit(
+                        child.weight.detach().cpu(),
+                        requires_grad=False,
+                        compress_statistics=quantization_config.bnb_4bit_use_double_quant,
+                        quant_type=quantization_config.bnb_4bit_quant_type,
+                        quant_storage=quantization_config.bnb_4bit_quant_storage,
+                        module=new_module,
+                    )
+
+                if bias:
+                    new_module.bias = nn.Parameter(
+                        child.bias.detach().cpu(), requires_grad=False
+                    )
+                new_module.source_cls = type(child)
+                new_module.requires_grad_(False)
+                setattr(module, child_name, new_module)
+                continue
+
+            cls._replace_with_bnb_layers(child, quantization_config, full_name)
+
+    @classmethod
+    def _apply_legacy_quantization(cls, model, quantization_config):
+        cls._replace_with_bnb_layers(model, quantization_config)
+
+        if quantization_config.load_in_4bit:
+            model.is_loaded_in_4bit = True
+            model.is_4bit_serializable = True
+        if quantization_config.load_in_8bit:
+            model.is_loaded_in_8bit = True
+            model.is_8bit_serializable = True
+        return model
+
+    @classmethod
     def _legacy_from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         config = cls._coerce_config(kwargs.pop("config", None))
         torch_dtype = kwargs.pop("torch_dtype", None)
         device_map = kwargs.pop("device_map", None)
         kwargs.pop("low_cpu_mem_usage", None)
+        load_in_4bit = kwargs.pop("load_in_4bit", False)
+        load_in_8bit = kwargs.pop("load_in_8bit", False)
+        quantization_config = kwargs.pop("quantization_config", None)
 
         if config is None:
             config = cls._load_compat_config(pretrained_model_name_or_path)
@@ -150,13 +237,26 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
                 finally:
                     torch.set_default_dtype(original_dtype)
 
+        quantized_loading = quantization_config is not None or load_in_4bit or load_in_8bit
+
+        if quantized_loading:
+            if quantization_config is None:
+                raise ValueError("quantization_config is required for legacy quantized loading.")
+
         for checkpoint_file in cls._iter_checkpoint_files(pretrained_model_name_or_path):
             shard_state = torch.load(checkpoint_file, map_location="cpu")
             model.load_state_dict(shard_state, strict=False)
             del shard_state
             gc.collect()
 
-        if resolved_dtype is not None and resolved_dtype != init_dtype:
+        if quantized_loading:
+            model = cls._apply_legacy_quantization(model, quantization_config)
+
+        if (
+            resolved_dtype is not None
+            and resolved_dtype != init_dtype
+            and not quantized_loading
+        ):
             model = model.to(dtype=resolved_dtype)
         target_device = cls._resolve_target_device(device_map)
         if target_device is not None:

@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+import time
 from functools import partial
 from types import SimpleNamespace
 import numpy as np
@@ -8,13 +9,18 @@ import numpy as np
 import torch
 import tqdm
 import yaml
+from exp_utils import write_markdown_result
 from peft import LoraConfig, get_peft_model
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
 from model.LISA import LISAForCausalLM
 from model.llava1p5 import conversation as conversation_lib
-from quantization_utils import build_quantization_kwargs
+from quantization_utils import (
+    build_quantization_kwargs,
+    is_quantized_model,
+    load_quant_config,
+)
 from train_utils import (
     assert_no_meta_params,
     cast_batch_precision,
@@ -45,6 +51,7 @@ REQUIRED_CONFIG_KEYS = (
     "lora_r",
     "vision_tower",
     "quant_method",
+    "quant_config",
     "dataset_dir",
     "test_dataset",
     "workers",
@@ -131,8 +138,21 @@ def parse_args(args):
     if config["conv_type"] not in {"llava_v1", "llava_llama_2"}:
         raise ValueError("conv_type must be one of: llava_v1, llava_llama_2")
 
-    if "quant_kwargs" not in config:
+    if "quant_config" not in config:
+        config["quant_config"] = ""
+
+    if "quant_kwargs" in config and config["quant_kwargs"] is not None:
+        if not isinstance(config["quant_kwargs"], dict):
+            raise ValueError("quant_kwargs must be a mapping.")
+    else:
         config["quant_kwargs"] = {}
+
+    quant_config_data = load_quant_config(
+        config["quant_config"], os.path.dirname(config_path)
+    )
+    if config["quant_kwargs"]:
+        quant_config_data = {**quant_config_data, **config["quant_kwargs"]}
+    config["quant_kwargs"] = quant_config_data
 
     config.pop("load_in_8bit", None)
     config.pop("load_in_4bit", None)
@@ -302,6 +322,10 @@ def evaluate(test_loader, model_engine, args):
 
     test_dataset_name = args.test_dataset.split("|", 1)[0]
     is_reasonseg_inst = is_reasonseg_inst_dataset(test_dataset_name)
+    fwd_times = []
+
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
 
     if is_reasonseg_inst:
         coco_gt_dict = {
@@ -329,8 +353,14 @@ def evaluate(test_loader, model_engine, args):
 
         cast_batch_precision(input_dict, args.precision)
 
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        start_time = time.perf_counter()
         with torch.no_grad():
             output_dict = model_engine(**input_dict)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        fwd_times.append(time.perf_counter() - start_time)
 
         if is_reasonseg_inst:
             raw_image_path = input_dict["image_paths"][0]
@@ -441,6 +471,14 @@ def evaluate(test_loader, model_engine, args):
             "ReasonSeg-Inst metrics: "
             + ", ".join(f"{key}: {value:.4f}" for key, value in metrics.items())
         )
+        metrics["peak_mem_mib"] = (
+            torch.cuda.max_memory_allocated() / (1024 ** 2)
+            if torch.cuda.is_available()
+            else None
+        )
+        metrics["avg_fwd_ms"] = (
+            1000.0 * sum(fwd_times) / len(fwd_times) if fwd_times else None
+        )
         return metrics
 
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10)
@@ -451,7 +489,16 @@ def evaluate(test_loader, model_engine, args):
     print(
         f"Test dataset: {args.test_dataset}, samples: {len(test_loader.dataset)}, giou: {giou:.4f}, ciou: {ciou:.4f}"
     )
-    return giou, ciou
+    return {
+        "giou": float(giou),
+        "ciou": float(ciou),
+        "peak_mem_mib": (
+            torch.cuda.max_memory_allocated() / (1024 ** 2)
+            if torch.cuda.is_available()
+            else None
+        ),
+        "avg_fwd_ms": 1000.0 * sum(fwd_times) / len(fwd_times) if fwd_times else None,
+    }
 
 
 def main(args):
@@ -459,9 +506,17 @@ def main(args):
     tokenizer, model = build_model(args)
     _, test_loader = build_test_loader(args, tokenizer)
     device = get_device(args.local_rank)
-    model = model.to(device=device, dtype=get_torch_dtype(args.precision))
+    torch_dtype = get_torch_dtype(args.precision)
+    if is_quantized_model(model):
+        model = model.to(device=device)
+        model.model.visual_model.to(device=device, dtype=torch_dtype)
+        model.model.text_hidden_fcs.to(device=device, dtype=torch_dtype)
+    else:
+        model = model.to(device=device, dtype=torch_dtype)
     load_checkpoint_for_eval(model, args.resume, device)
-    evaluate(test_loader, model, args)
+    metrics = evaluate(test_loader, model, args)
+    if not is_reasonseg_inst_dataset(args.test_dataset.split("|", 1)[0]):
+        write_markdown_result(args, metrics)
 
 
 if __name__ == "__main__":
