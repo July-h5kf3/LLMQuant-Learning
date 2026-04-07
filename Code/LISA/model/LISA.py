@@ -193,9 +193,37 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
     def _hungarian_match_indices(
         self, pred_masks_flat: torch.Tensor, gt_masks_flat: torch.Tensor
     ):
+        # Some quantized backbones can occasionally produce NaN/Inf mask logits on a
+        # small subset of samples. Keep Hungarian matching robust by sanitizing the
+        # inputs and falling back to a large finite penalty for any invalid costs.
+        pred_masks_flat = torch.nan_to_num(
+            pred_masks_flat,
+            nan=0.0,
+            posinf=20.0,
+            neginf=-20.0,
+        )
+        gt_masks_flat = torch.nan_to_num(
+            gt_masks_flat,
+            nan=0.0,
+            posinf=1.0,
+            neginf=0.0,
+        ).clamp_(0.0, 1.0)
+
         cost = self.batch_dice_loss(pred_masks_flat, gt_masks_flat) + self.batch_sigmoid_ce_loss(
             pred_masks_flat, gt_masks_flat
         )
+        if not torch.isfinite(cost).all():
+            finite_cost = cost[torch.isfinite(cost)]
+            invalid_fill = (
+                float(finite_cost.max().item() + 1.0) if finite_cost.numel() > 0 else 1e6
+            )
+            cost = torch.nan_to_num(
+                cost,
+                nan=invalid_fill,
+                posinf=invalid_fill,
+                neginf=invalid_fill,
+            )
+
         pred_indices, gt_indices = linear_sum_assignment(cost.detach().cpu().numpy())
         sorted_pred_order = np.argsort(pred_indices)
         adjusted_gt_indices = gt_indices[sorted_pred_order]

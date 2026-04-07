@@ -159,6 +159,34 @@ class CalibrationDataset(Dataset):
         }
 
 
+class MultimodalCalibrationExample(dict):
+    def __init__(
+        self,
+        *,
+        inputs_embeds,
+        fake_input_ids,
+        attention_mask=None,
+        position_ids=None,
+    ):
+        super().__init__()
+        self._fake_input_ids = fake_input_ids
+        self["inputs_embeds"] = inputs_embeds
+        if attention_mask is not None:
+            self["attention_mask"] = attention_mask
+        if position_ids is not None:
+            self["position_ids"] = position_ids
+
+    def __getitem__(self, key):
+        if key == "input_ids":
+            return self._fake_input_ids
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        if key == "input_ids":
+            return self._fake_input_ids
+        return super().get(key, default)
+
+
 def calibration_collate_fn(batch, tokenizer, use_mm_start_end=True):
     # Flatten multiple prompts from one image into a single token batch.
     image_paths = []

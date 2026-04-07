@@ -20,6 +20,12 @@ def get_precision_label(args):
         return f"{args.precision}+4bit"
     if args.quant_method == "bnb_8bit":
         return f"{args.precision}+8bit"
+    if args.quant_method == "gptq":
+        return f"{args.precision}+{args.quant_kwargs.get('bits', 4)}bit"
+    if args.quant_method == "hqq":
+        return f"{args.precision}+{args.quant_kwargs.get('bits', 4)}bit"
+    if args.quant_method == "quanto":
+        return f"{args.precision}+{args.quant_kwargs.get('weights', 'int4')}"
     return f"{args.precision}+{args.precision}"
 
 
@@ -33,6 +39,12 @@ def get_method_label(args):
         return f"bnb_{quant_type}{suffix}"
     if args.quant_method == "bnb_8bit":
         return "bnb_llm.int8"
+    if args.quant_method == "gptq":
+        return "gptq"
+    if args.quant_method == "hqq":
+        return "hqq"
+    if args.quant_method == "quanto":
+        return f"quanto_{args.quant_kwargs.get('weights', 'int4')}"
     return "none"
 
 

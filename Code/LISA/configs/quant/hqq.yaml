@@ -1,0 +1,12 @@
+model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B"
+hqq_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B_hqq"
+model_max_length: 1024
+
+# HQQ quantization settings.
+bits: 4
+group_size: 64
+axis: 1
+view_as_float: false
+skip_modules:
+  - "lm_head"
+keep_lm_export: false

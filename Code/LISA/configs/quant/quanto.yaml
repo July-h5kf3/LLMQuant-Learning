@@ -1,0 +1,9 @@
+model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B"
+quanto_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B_quanto"
+
+# Quanto runtime quantization settings.
+weights: "int4"
+activations: null
+modules_to_not_convert:
+  - "lm_head"
+keep_lm_export: false

@@ -18,12 +18,16 @@ from pycocotools.cocoeval import COCOeval
 from model.LISA import LISAForCausalLM
 from model.llava1p5 import conversation as conversation_lib
 from quantization import (
+    HF_BACKBONE_METHODS,
     build_quantization_kwargs,
     ensure_awq_checkpoint,
+    ensure_gptq_checkpoint,
     is_quantized_model,
+    load_awq_weights_into_lisa,
+    load_gptq_weights_into_lisa,
+    load_hf_quantized_backbone_into_lisa,
     load_quant_config,
 )
-from quantization.merge_awq_weight import load_awq_weights_into_lisa
 from train_utils import (
     assert_no_meta_params,
     cast_batch_precision,
@@ -184,6 +188,14 @@ def parse_args(args):
     config.pop("load_in_8bit", None)
     config.pop("load_in_4bit", None)
 
+    if config["quant_method"] in {"hqq", "quanto"} and config["precision"] != "fp16":
+        old_precision = config["precision"]
+        config["precision"] = "fp16"
+        print(
+            f"{config['quant_method']} currently requires fp16 execution; "
+            f"overriding precision from {old_precision} to fp16."
+        )
+
     return SimpleNamespace(**config)
 
 
@@ -196,8 +208,11 @@ def load_val_modules():
 def build_model(args):
     model_path = args.version
     awq_model_path = None
+    gptq_model_path = None
     if args.quant_method == "awq":
         awq_model_path = ensure_awq_checkpoint(args.version, args.quant_kwargs)
+    elif args.quant_method == "gptq":
+        gptq_model_path = ensure_gptq_checkpoint(args.version, args.quant_kwargs)
 
     tokenizer = load_lisa_tokenizer(
         model_path,
@@ -237,6 +252,30 @@ def build_model(args):
             model,
             awq_model_path,
             fuse_layers=False,
+        )
+    elif args.quant_method == "gptq":
+        model = LISAForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch_dtype,
+            **model_args,
+        )
+        model = load_gptq_weights_into_lisa(
+            model,
+            gptq_model_path,
+        )
+    elif args.quant_method in HF_BACKBONE_METHODS:
+        model = LISAForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch_dtype,
+            **model_args,
+        )
+        model = load_hf_quantized_backbone_into_lisa(
+            model,
+            model_path,
+            args.quant_method,
+            args.quant_kwargs,
+            device=get_device(args.local_rank),
+            torch_dtype=torch_dtype,
         )
     else:
         quantization_kwargs = build_quantization_kwargs(
