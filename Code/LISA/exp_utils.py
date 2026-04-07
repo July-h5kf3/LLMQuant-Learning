@@ -14,6 +14,8 @@ def get_exp_name(args):
 
 
 def get_precision_label(args):
+    if args.quant_method == "awq":
+        return f"{args.precision}+{args.quant_kwargs.get('bits', 4)}bit"
     if args.quant_method == "bnb_4bit":
         return f"{args.precision}+4bit"
     if args.quant_method == "bnb_8bit":
@@ -22,6 +24,8 @@ def get_precision_label(args):
 
 
 def get_method_label(args):
+    if args.quant_method == "awq":
+        return "awq"
     if args.quant_method == "bnb_4bit":
         quant_type = args.quant_kwargs.get("quant_type", "nf4")
         use_double_quant = args.quant_kwargs.get("use_double_quant", True)
