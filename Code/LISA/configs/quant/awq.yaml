@@ -1,4 +1,8 @@
+model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B"
 awq_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B_awq"
+base_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B"
+merged_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B_awq_merged"
+awq_subdir: "awq_llm"
 
 # Calibration data settings.
 dataset_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/dataset"
@@ -22,3 +26,4 @@ group_size: 128
 zero_point: true
 version: "GEMM"
 duo_scaling: true
+keep_lm_export: false

@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 import torch
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -15,17 +14,19 @@ if str(REPO_ROOT) not in sys.path:
 
 from model.LISA import LISAForCausalLM
 from quantization.calibration_dataset import build_calibration_loader
+from quantization.quantization_utils import load_quant_config, resolve_path
 from utils.tokenizer_compat import add_lisa_seg_token, load_lisa_tokenizer
+
+WEIGHT_FILES = (
+    "model.safetensors",
+    "model.safetensors.index.json",
+    "pytorch_model.bin",
+    "pytorch_model.bin.index.json",
+)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Quantize the LISA LLM backbone with AWQ.")
-    parser.add_argument(
-        "--model-path",
-        required=True,
-        type=str,
-        help="Path to the original LISA model weights.",
-    )
     parser.add_argument(
         "--config",
         default="configs/quant/awq.yaml",
@@ -40,36 +41,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_yaml_config(config_path):
-    config_path = Path(config_path)
-    if not config_path.is_absolute():
-        config_path = Path(__file__).resolve().parents[1] / config_path
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
-
-    if not isinstance(config, dict):
-        raise ValueError("AWQ config YAML must be a mapping.")
-
-    config["_config_path"] = str(config_path)
-    return config
-
-
-def resolve_path(path_value, *, base_dir):
-    path = Path(path_value)
-    if not path.is_absolute():
-        path = Path(base_dir) / path
-    return path.resolve()
-
-
 def patch_transformers_compat():
     # gptqmodel/awq-related tooling may still import no_init_weights from the old path.
     import transformers
     import transformers.modeling_utils as modeling_utils
 
-    if hasattr(modeling_utils, "no_init_weights"):
-        pass
-    else:
+    if not hasattr(modeling_utils, "no_init_weights"):
         try:
             from transformers.initialization import no_init_weights
         except ImportError:
@@ -94,39 +71,14 @@ def patch_transformers_compat():
         TRANSFORMERS_AUTO_MAPPING_DICT["llava"] = "AutoModelForCausalLM"
 
 
-def awq_checkpoint_exists(output_dir):
+def checkpoint_exists(output_dir, *required_files):
     output_dir = Path(output_dir)
     if not output_dir.is_dir():
         return False
 
-    required_files = [
-        output_dir / "config.json",
-        output_dir / "tokenizer_config.json",
-    ]
-    if not all(path.exists() for path in required_files):
-        return False
-
-    weight_files = [
-        "model.safetensors",
-        "model.safetensors.index.json",
-        "pytorch_model.bin",
-        "pytorch_model.bin.index.json",
-    ]
-    return any((output_dir / filename).exists() for filename in weight_files)
-
-
-def ensure_output_dir(output_dir, force=False):
-    output_dir = Path(output_dir)
-    if output_dir.exists() and force:
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
-
-
-def cleanup_dir(path):
-    path = Path(path)
-    if path.exists():
-        shutil.rmtree(path)
+    return all((output_dir / name).exists() for name in required_files) and any(
+        (output_dir / name).exists() for name in WEIGHT_FILES
+    )
 
 
 def build_lisa_tokenizer(model_path, model_max_length):
@@ -141,40 +93,10 @@ def build_lisa_tokenizer(model_path, model_max_length):
     return tokenizer
 
 
-def exported_checkpoint_exists(output_dir):
-    output_dir = Path(output_dir)
-    if not output_dir.is_dir():
-        return False
-
-    if not (output_dir / "config.json").exists():
-        return False
-
-    return any(
-        (output_dir / filename).exists()
-        for filename in [
-            "pytorch_model.bin",
-            "pytorch_model.bin.index.json",
-            "model.safetensors",
-            "model.safetensors.index.json",
-        ]
-    )
-
-
 def is_lisa_lm_weight(weight_name):
-    lm_prefixes = (
-        "model.embed_tokens.",
-        "model.layers.",
-        "model.norm.",
+    return weight_name == "lm_head.weight" or weight_name.startswith(
+        ("model.embed_tokens.", "model.layers.", "model.norm.")
     )
-    return weight_name == "lm_head.weight" or weight_name.startswith(lm_prefixes)
-
-
-def build_exported_lm_config(source_config):
-    config = dict(source_config)
-    config["architectures"] = ["LlamaForCausalLM"]
-    config["model_type"] = "llama"
-    config["torch_dtype"] = "float16"
-    return config
 
 
 def estimate_lm_weight_bytes(model_path, lm_weight_map):
@@ -197,6 +119,36 @@ def can_materialize_filtered_shards(export_dir, required_bytes, safety_margin_by
     return free_bytes >= required_bytes + safety_margin_bytes
 
 
+def reset_dir(path, force=False):
+    path = Path(path)
+    if force and path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def remove_dir(path):
+    path = Path(path)
+    if path.exists():
+        shutil.rmtree(path)
+
+
+def write_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def load_awq_config(config_path):
+    config_path = resolve_path(config_path, base_dir=REPO_ROOT)
+    config = load_quant_config(str(config_path))
+    config_dir = config_path.parent
+    config["_config_path"] = str(config_path)
+    for key in ("awq_model_path", "dataset_dir", "vision_tower", "vision_pretrained"):
+        config[key] = str(resolve_path(config[key], base_dir=config_dir))
+    config["keep_lm_export"] = bool(config.get("keep_lm_export", False))
+    return config
+
+
 def link_or_copy_file(src, dst):
     src = Path(src)
     dst = Path(dst)
@@ -210,9 +162,9 @@ def link_or_copy_file(src, dst):
 
 def export_lisa_lm_backbone(model_path, export_dir, force=False):
     model_path = Path(model_path)
-    export_dir = ensure_output_dir(export_dir, force=force)
+    export_dir = reset_dir(export_dir, force=force)
 
-    if exported_checkpoint_exists(export_dir) and not force:
+    if checkpoint_exists(export_dir, "config.json") and not force:
         return export_dir
 
     index_path = model_path / "pytorch_model.bin.index.json"
@@ -261,9 +213,14 @@ def export_lisa_lm_backbone(model_path, export_dir, force=False):
 
     with open(model_path / "config.json", "r", encoding="utf-8") as f:
         source_config = json.load(f)
-    exported_config = build_exported_lm_config(source_config)
-    with open(export_dir / "config.json", "w", encoding="utf-8") as f:
-        json.dump(exported_config, f, indent=2, ensure_ascii=False)
+    source_config.update(
+        {
+            "architectures": ["LlamaForCausalLM"],
+            "model_type": "llama",
+            "torch_dtype": "float16",
+        }
+    )
+    write_json(export_dir / "config.json", source_config)
 
     generation_config_path = model_path / "generation_config.json"
     if generation_config_path.exists():
@@ -273,8 +230,7 @@ def export_lisa_lm_backbone(model_path, export_dir, force=False):
         "metadata": {"total_size": lm_total_size},
         "weight_map": lm_weight_map,
     }
-    with open(export_dir / "pytorch_model.bin.index.json", "w", encoding="utf-8") as f:
-        json.dump(exported_index, f, indent=2, ensure_ascii=False)
+    write_json(export_dir / "pytorch_model.bin.index.json", exported_index)
 
     export_meta = {
         "source_model_path": str(model_path),
@@ -285,8 +241,7 @@ def export_lisa_lm_backbone(model_path, export_dir, force=False):
         "storage_mode": storage_mode,
         "estimated_lm_bytes": lm_total_size,
     }
-    with open(export_dir / "lisa_lm_export_meta.json", "w", encoding="utf-8") as f:
-        json.dump(export_meta, f, indent=2, ensure_ascii=False)
+    write_json(export_dir / "lisa_lm_export_meta.json", export_meta)
 
     return export_dir
 
@@ -322,7 +277,6 @@ def validate_source_model(model_path, config):
     # Reuse the repo's custom loading path so the 4.31-trained weights are checked
     # with the same compatibility logic used elsewhere in the project.
     tokenizer = build_lisa_tokenizer(model_path, config["model_max_length"])
-    _ = tokenizer
 
     model = LISAForCausalLM.from_pretrained(
         model_path,
@@ -414,58 +368,22 @@ def run_autoawq_quantization(model_path, output_dir, tokenizer, calibration_text
 
 
 def save_awq_metadata(output_dir, model_path, config, calibration_records):
-    metadata = {
-        "source_model_path": str(model_path),
-        "awq_model_path": str(output_dir),
-        "awq_source_lm_path": str(
-            Path(config["awq_model_path"]).parent / f"{Path(config['awq_model_path']).name}_lm_backbone"
-        ),
-        "backend": config["backend"],
-        "bits": config["bits"],
-        "group_size": config["group_size"],
-        "zero_point": config["zero_point"],
-        "version": config["version"],
-        "num_calibration_records": len(calibration_records),
-        "config_path": config["_config_path"],
-    }
-    with open(Path(output_dir) / "awq_job_meta.json", "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, ensure_ascii=False)
-
-
-def normalize_config(config):
-    config_dir = Path(config["_config_path"]).parent
-
-    normalized = dict(config)
-    normalized["awq_model_path"] = str(
-        resolve_path(config["awq_model_path"], base_dir=config_dir)
+    awq_model_path = Path(config["awq_model_path"])
+    write_json(
+        Path(output_dir) / "awq_job_meta.json",
+        {
+            "source_model_path": str(model_path),
+            "awq_model_path": str(output_dir),
+            "awq_source_lm_path": str(awq_model_path.parent / f"{awq_model_path.name}_lm_backbone"),
+            "backend": config["backend"],
+            "bits": config["bits"],
+            "group_size": config["group_size"],
+            "zero_point": config["zero_point"],
+            "version": config["version"],
+            "num_calibration_records": len(calibration_records),
+            "config_path": config["_config_path"],
+        },
     )
-    normalized["dataset_dir"] = str(
-        resolve_path(config["dataset_dir"], base_dir=config_dir)
-    )
-    normalized["vision_tower"] = str(
-        resolve_path(config["vision_tower"], base_dir=config_dir)
-    )
-    normalized["vision_pretrained"] = str(
-        resolve_path(config["vision_pretrained"], base_dir=config_dir)
-    )
-    normalized.setdefault("backend", "autoawq")
-    normalized.setdefault("bits", 4)
-    normalized.setdefault("group_size", 128)
-    normalized.setdefault("zero_point", True)
-    normalized.setdefault("version", "GEMM")
-    normalized.setdefault("duo_scaling", True)
-    normalized.setdefault("calibration_dataset", "ReasonSeg|train")
-    normalized.setdefault("image_size", 1024)
-    normalized.setdefault("model_max_length", 1024)
-    normalized.setdefault("questions_per_image", 1)
-    normalized.setdefault("max_calib_samples", 128)
-    normalized.setdefault("calibration_batch_size", 1)
-    normalized.setdefault("calibration_num_workers", 0)
-    normalized.setdefault("seed", 3407)
-    normalized.setdefault("conv_type", "llava_v1")
-    normalized.setdefault("use_mm_start_end", False)
-    normalized.setdefault("keep_lm_export", False)
-    return normalized
 
 
 def ensure_awq_checkpoint(model_path, quant_kwargs, force=False):
@@ -478,14 +396,14 @@ def ensure_awq_checkpoint(model_path, quant_kwargs, force=False):
     if not config_path:
         raise ValueError("AWQ quant_kwargs must include '_config_path'.")
 
-    config = normalize_config(load_yaml_config(config_path))
+    config = load_awq_config(config_path)
     output_dir = Path(config["awq_model_path"])
     source_lm_dir = output_dir.parent / f"{output_dir.name}_lm_backbone"
     temp_output_dir = output_dir.parent / f"{output_dir.name}.tmp"
 
-    if awq_checkpoint_exists(output_dir) and not force:
-        cleanup_dir(source_lm_dir)
-        cleanup_dir(temp_output_dir)
+    if checkpoint_exists(output_dir, "config.json", "tokenizer_config.json") and not force:
+        remove_dir(source_lm_dir)
+        remove_dir(temp_output_dir)
         print(f"AWQ checkpoint already exists, reusing: {output_dir}")
         return str(output_dir)
 
@@ -499,8 +417,8 @@ def ensure_awq_checkpoint(model_path, quant_kwargs, force=False):
     if not calibration_records:
         raise ValueError("Calibration dataset is empty.")
 
-    cleanup_dir(temp_output_dir)
-    ensure_output_dir(temp_output_dir, force=False)
+    remove_dir(temp_output_dir)
+    reset_dir(temp_output_dir)
     try:
         print(f"Exporting LISA LLM backbone to: {source_lm_dir}")
         source_lm_dir = export_lisa_lm_backbone(model_path, source_lm_dir, force=force)
@@ -518,12 +436,12 @@ def ensure_awq_checkpoint(model_path, quant_kwargs, force=False):
         )
 
         save_awq_metadata(temp_output_dir, model_path, config, calibration_records)
-        cleanup_dir(output_dir)
+        remove_dir(output_dir)
         temp_output_dir.replace(output_dir)
     finally:
         if not config["keep_lm_export"] and source_lm_dir.exists():
             shutil.rmtree(source_lm_dir)
-        cleanup_dir(temp_output_dir)
+        remove_dir(temp_output_dir)
 
     print(f"AWQ checkpoint saved to: {output_dir}")
     return str(output_dir)
@@ -531,9 +449,10 @@ def ensure_awq_checkpoint(model_path, quant_kwargs, force=False):
 
 def main():
     args = parse_args()
+    config = load_awq_config(args.config)
     ensure_awq_checkpoint(
-        model_path=Path(args.model_path).resolve(),
-        quant_kwargs={"_config_path": args.config},
+        model_path=resolve_path(config["model_path"], base_dir=Path(config["_config_path"]).parent),
+        quant_kwargs={"_config_path": config["_config_path"]},
         force=args.force,
     )
 

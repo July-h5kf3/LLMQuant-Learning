@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import yaml
 from transformers import AwqConfig, BitsAndBytesConfig
@@ -33,6 +34,13 @@ def load_quant_config(config_path, base_dir=None):
     if not isinstance(config, dict):
         raise ValueError("Quantization config YAML must be a mapping.")
     return config
+
+
+def resolve_path(path_value, *, base_dir):
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = Path(base_dir) / path
+    return path.resolve()
 
 
 def build_bnb_8bit_kwargs():
@@ -122,4 +130,3 @@ def is_quantized_model(model):
         or getattr(getattr(model, "config", None), "quantization_config", None)
         is not None
     )
-

@@ -6,18 +6,24 @@ import shutil
 import sys
 from pathlib import Path
 
+from quantization.quantization_utils import load_quant_config, resolve_path
 
-DEFAULT_AWQ_SUBDIR = "awq_llm"
+QUANTIZED_LINEAR_NAMES = (
+    "self_attn.q_proj",
+    "self_attn.k_proj",
+    "self_attn.v_proj",
+    "self_attn.o_proj",
+    "mlp.gate_proj",
+    "mlp.up_proj",
+    "mlp.down_proj",
+)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Merge an AWQ LLM checkpoint with the original LISA weights."
     )
-    parser.add_argument("--base-model-path", required=True, type=str)
-    parser.add_argument("--awq-model-path", required=True, type=str)
-    parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--awq-subdir", type=str, default=DEFAULT_AWQ_SUBDIR)
+    parser.add_argument("--config", default="configs/quant/awq.yaml", type=str)
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--in-place",
@@ -57,12 +63,31 @@ def copy_dir_with_links(src_dir, dst_dir):
                 link_or_copy_file(target, dst_path)
 
 
+def load_merge_config(config_path):
+    config_path = resolve_path(config_path, base_dir=Path(__file__).resolve().parents[1])
+    config = load_quant_config(str(config_path))
+    config_dir = config_path.parent
+
+    config["_config_path"] = str(config_path)
+    config["base_model_path"] = str(
+        resolve_path(config["base_model_path"], base_dir=config_dir)
+    )
+    config["awq_model_path"] = str(
+        resolve_path(config["awq_model_path"], base_dir=config_dir)
+    )
+    if config.get("merged_model_path"):
+        config["merged_model_path"] = str(
+            resolve_path(config["merged_model_path"], base_dir=config_dir)
+        )
+    return config
+
+
 def merge_awq_weights(
     base_model_path,
     awq_model_path,
     output_dir=None,
     *,
-    awq_subdir=DEFAULT_AWQ_SUBDIR,
+    awq_subdir,
     force=False,
     in_place=False,
 ):
@@ -89,15 +114,19 @@ def merge_awq_weights(
         shutil.rmtree(awq_dst_dir)
     copy_dir_with_links(awq_model_path, awq_dst_dir)
 
-    merge_meta = {
-        "base_model_path": str(base_model_path),
-        "awq_model_path": str(awq_model_path),
-        "merged_model_path": str(output_dir),
-        "awq_subdir": awq_subdir,
-        "in_place": in_place,
-    }
     with open(output_dir / "merge_awq_meta.json", "w", encoding="utf-8") as f:
-        json.dump(merge_meta, f, indent=2, ensure_ascii=False)
+        json.dump(
+            {
+                "base_model_path": str(base_model_path),
+                "awq_model_path": str(awq_model_path),
+                "merged_model_path": str(output_dir),
+                "awq_subdir": awq_subdir,
+                "in_place": in_place,
+            },
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
 
     return str(output_dir)
 
@@ -115,39 +144,15 @@ def _load_autoawq_class():
     finally:
         for entry in reversed(removed_entries):
             sys.path.insert(0, entry)
-
-
-def _replace_named_child(parent_module, child_name, new_child):
-    if child_name.isdigit():
-        parent_module[int(child_name)] = new_child
-    else:
-        setattr(parent_module, child_name, new_child)
-
-
-def _get_named_child(parent_module, child_name):
-    if child_name.isdigit():
-        return parent_module[int(child_name)]
-    return getattr(parent_module, child_name)
-
-
 def _inject_awq_layer_modules(lisa_layer, awq_layer):
-    quantized_linear_names = [
-        "self_attn.q_proj",
-        "self_attn.k_proj",
-        "self_attn.v_proj",
-        "self_attn.o_proj",
-        "mlp.gate_proj",
-        "mlp.up_proj",
-        "mlp.down_proj",
-    ]
-    for module_name in quantized_linear_names:
+    for module_name in QUANTIZED_LINEAR_NAMES:
         lisa_parent = lisa_layer
         awq_parent = awq_layer
-        path = module_name.split(".")
-        for part in path[:-1]:
-            lisa_parent = _get_named_child(lisa_parent, part)
-            awq_parent = _get_named_child(awq_parent, part)
-        _replace_named_child(lisa_parent, path[-1], _get_named_child(awq_parent, path[-1]))
+        *parents, leaf = module_name.split(".")
+        for part in parents:
+            lisa_parent = getattr(lisa_parent, part)
+            awq_parent = getattr(awq_parent, part)
+        setattr(lisa_parent, leaf, getattr(awq_parent, leaf))
 
     lisa_layer.input_layernorm.load_state_dict(awq_layer.input_layernorm.state_dict())
     lisa_layer.post_attention_layernorm.load_state_dict(
@@ -184,33 +189,29 @@ def load_awq_weights_into_lisa(
     lisa_model,
     awq_model_or_merged_dir,
     *,
-    awq_subdir=DEFAULT_AWQ_SUBDIR,
+    awq_subdir="awq_llm",
     fuse_layers=False,
     device_map=None,
 ):
     awq_model_or_merged_dir = Path(awq_model_or_merged_dir).resolve()
-    direct_awq_config = awq_model_or_merged_dir / "config.json"
-    direct_awq_weights = awq_model_or_merged_dir / "model.safetensors"
-
-    if direct_awq_config.exists() and direct_awq_weights.exists():
-        awq_model_dir = awq_model_or_merged_dir
-    else:
-        awq_model_dir = awq_model_or_merged_dir / awq_subdir
-        if not awq_model_dir.is_dir():
-            raise FileNotFoundError(
-                "Missing AWQ checkpoint directory. Expected either a direct AWQ model dir "
-                f"or a merged dir containing '{awq_subdir}': {awq_model_or_merged_dir}"
-            )
-
-    if device_map is None:
-        device_map = {"": "cpu"}
+    awq_model_dir = (
+        awq_model_or_merged_dir
+        if (awq_model_or_merged_dir / "config.json").exists()
+        and (awq_model_or_merged_dir / "model.safetensors").exists()
+        else awq_model_or_merged_dir / awq_subdir
+    )
+    if not awq_model_dir.is_dir():
+        raise FileNotFoundError(
+            "Missing AWQ checkpoint directory. Expected either a direct AWQ model dir "
+            f"or a merged dir containing '{awq_subdir}': {awq_model_or_merged_dir}"
+        )
 
     AutoAWQForCausalLM = _load_autoawq_class()
     awq_wrapper = AutoAWQForCausalLM.from_quantized(
         str(awq_model_dir),
         trust_remote_code=True,
         fuse_layers=fuse_layers,
-        device_map=device_map,
+        device_map=device_map or {"": "cpu"},
         safetensors=True,
     )
     awq_model = awq_wrapper.model
@@ -234,11 +235,12 @@ def load_awq_weights_into_lisa(
 
 def main():
     args = parse_args()
+    config = load_merge_config(args.config)
     merged_dir = merge_awq_weights(
-        args.base_model_path,
-        args.awq_model_path,
-        output_dir=args.output_dir,
-        awq_subdir=args.awq_subdir,
+        config["base_model_path"],
+        config["awq_model_path"],
+        output_dir=config.get("merged_model_path"),
+        awq_subdir=config["awq_subdir"],
         force=args.force,
         in_place=args.in_place,
     )
