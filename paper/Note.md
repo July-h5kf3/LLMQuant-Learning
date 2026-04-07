@@ -1095,4 +1095,56 @@ $$
 SVD(T(\Delta W)) = U\Sigma V^\top \approx U_r \Sigma_r V^\top_r
 $$
 
+那么我们对白化进行逆变换后就可以得到低秩修正项：
+$$
+\Delta W = L_1L_2 \quad L_1 = T^{-1}U_r \quad L_2 = \Sigma_r V_r^\top
+$$
+可以证明上述近似在秩r补偿近似下最优：
 
+假设秩为r的矩阵$L = L_1L_2$,其中$L_1,L_2$由上式中定义的秩 r 截断 SVD 给出，它能够最小化重构损失。用形式化语言描述：
+$$
+\mathcal{L}=\sum_v ||X_vS_v^{-1}(\Delta W-L)||_F^2 \quad L^* = \arg \min_{\text{rank}(L)\leq r}\sum_v ||X_vS_v^{-1}(\Delta W-L)||_F^2
+$$
+证明如下：
+
+只考虑两个模态，并且仅对权重进行量化，那么根据定义我们有：
+$$
+L^*=T^{-1}(\text{Trunc}_r(T\Delta W))
+$$
+由
+$$
+(X_vS^{-1}_v)^\top (X_vS_v^{-1}) = P\Lambda P^{\top}
+$$
+可以推出：
+$$
+X_vS_v^{-1}=U\Lambda^{\frac{1}{2}}P^{\top}=UT
+$$
+那么有
+$$
+\begin{align}
+\mathcal{L}(L^*)
+&= \left\| X_v S_v^{-1}(\Delta W - L^*) \right\|_F^2 \\
+&= \left\| U T (\Delta W - L^*) \right\|_F^2 \\
+&= \left\| U T \left(\Delta W - T^{-1}\operatorname{Trunc}_r(T\Delta W)\right) \right\|_F^2 \\
+&= \left\| T\Delta W - \operatorname{Trunc}_r(T\Delta W) \right\|_F^2 \\
+&= \sum_{i>r} \sigma_i(T\Delta W)^2 \\
+&= \sum_{i>r} \sigma_i\!\left(U^{-1}X_vS_v^{-1}\Delta W\right)^2 \\
+&= \sum_{i>r} \sigma_i\!\left(X_vS_v^{-1}\Delta W\right)^2 \\
+&= L_{\min}^2.
+\end{align}
+$$
+
+
+那么至此我们可以写出最终推理阶段将基础量化输出与模态特定修正结合起来：
+$$
+Y =\left
+\{
+\begin{aligned}
+Q(X_mS_m^{-1})Q(S_tW), \quad m=\text{text}\\
+Q(x_mS_m^{-1})Q(S_tW) + X_mS_m^{-1}\cdot L_1^mL_2^m,\quad m\neq \text{text}
+\end{aligned}
+\right.
+$$
+MAS完整的流程如下图
+
+![](figure\MASQuant.png)
