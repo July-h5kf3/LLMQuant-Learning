@@ -1,8 +1,5 @@
 model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B"
-awq_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B_awq"
-base_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B"
-merged_model_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B_awq_merged"
-awq_subdir: "awq_llm"
+smoothquant_scale_path: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/weights/LISA_PLUS_7B_smoothquant_act_scales.pt"
 
 # Calibration data settings.
 dataset_dir: "/root/autodl-tmp/LLMQuant-Learning/Code/LISA/dataset"
@@ -20,11 +17,9 @@ seed: 3407
 conv_type: "llava_v1"
 use_mm_start_end: false
 
-# AWQ quantization settings.
-backend: "autoawq"
-bits: 4
-group_size: 128
-zero_point: true
-version: "GEMM"
-duo_scaling: true
+# SmoothQuant pseudo quantization settings.
+w_bit: 4
+a_bit: 8
+alpha: 0.5
+quantize_bmm_input: false
 keep_lm_export: false

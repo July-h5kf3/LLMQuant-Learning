@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import CLIPImageProcessor
 
 from model.llava1p5 import conversation as conversation_lib
-from model.llava1p5.constants import DEFAULT_IMAGE_TOKEN
+from model.llava1p5.constants import DEFAULT_IMAGE_TOKEN, IGNORE_INDEX
 from model.llava1p5.mm_utils import tokenizer_image_token
 from model.segment_anything.utils.transforms import ResizeLongestSide
 from utils.data_processing import get_mask_from_json
@@ -187,7 +187,7 @@ class MultimodalCalibrationExample(dict):
         return super().get(key, default)
 
 
-def calibration_collate_fn(batch, tokenizer, use_mm_start_end=True):
+def calibration_collate_fn(batch, tokenizer, use_mm_start_end=True, conv_type="llava_v1"):
     # Flatten multiple prompts from one image into a single token batch.
     image_paths = []
     images = []
@@ -227,12 +227,55 @@ def calibration_collate_fn(batch, tokenizer, use_mm_start_end=True):
         padding_value=tokenizer.pad_token_id,
     )
     attention_masks = input_ids.ne(tokenizer.pad_token_id)
+    labels = input_ids.clone()
+
+    conv = conversation_lib.conv_templates[conv_type].copy()
+    if conv_type == "llava_v1":
+        sep = conv.sep + conv.roles[1] + ": "
+    else:
+        sep = "[/INST] "
+
+    for conversation, target in zip(conversation_list, labels):
+        total_len = int(target.ne(tokenizer.pad_token_id).sum())
+        rounds = conversation.split(conv.sep2)
+        cur_len = 1
+        target[:cur_len] = IGNORE_INDEX
+
+        for rou in rounds:
+            if rou == "":
+                break
+
+            parts = rou.split(sep)
+            if len(parts) != 2:
+                raise ValueError(
+                    f"Unexpected conversation format during calibration: {conversation}"
+                )
+            parts[0] += sep
+
+            if DEFAULT_IMAGE_TOKEN in conversation:
+                round_len = len(tokenizer_image_token(rou, tokenizer))
+                instruction_len = len(tokenizer_image_token(parts[0], tokenizer)) - 2
+            else:
+                round_len = len(tokenizer(rou).input_ids)
+                instruction_len = len(tokenizer(parts[0]).input_ids) - 2
+
+            target[cur_len : cur_len + instruction_len] = IGNORE_INDEX
+            cur_len += round_len
+
+        target[cur_len:] = IGNORE_INDEX
+
+        if cur_len < tokenizer.model_max_length and cur_len != total_len:
+            raise ValueError(
+                "Calibration label construction mismatch: "
+                f"cur_len={cur_len}, total_len={total_len}"
+            )
 
     return {
         "image_paths": image_paths,
         "images": torch.stack(images, dim=0),
         "images_clip": torch.stack(images_clip, dim=0),
         "input_ids": input_ids,
+        "labels": labels,
         "attention_masks": attention_masks,
         "resize_list": resize_list,
         "questions_list": questions_list,
@@ -274,6 +317,7 @@ def build_calibration_loader(
         calibration_collate_fn,
         tokenizer=tokenizer,
         use_mm_start_end=use_mm_start_end,
+        conv_type=conv_type,
     )
 
     return DataLoader(

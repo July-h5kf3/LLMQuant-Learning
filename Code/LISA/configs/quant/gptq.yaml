@@ -15,6 +15,7 @@ questions_per_image: 1
 max_calib_samples: 128
 calibration_batch_size: 1
 calibration_num_workers: 0
+calibration_mode: "mbq"
 seed: 3407
 conv_type: "llava_v1"
 use_mm_start_end: false

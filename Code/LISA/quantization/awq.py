@@ -8,6 +8,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from quantization.quantization_utils import (
+    build_awq_layer_calibration_inputs,
     build_calibration_data,
     build_quant_artifact_dirs,
     checkpoint_exists,
@@ -80,6 +81,8 @@ def run_autoawq_quantization(model_path, output_dir, tokenizer, multimodal_input
         for entry in reversed(removed_entries):
             sys.path.insert(0, entry)
 
+    layer_calibration = build_awq_layer_calibration_inputs(multimodal_inputs)
+
     quant_config = {
         "zero_point": config["zero_point"],
         "q_group_size": config["group_size"],
@@ -125,12 +128,12 @@ def run_autoawq_quantization(model_path, output_dir, tokenizer, multimodal_input
         quant_config=quant_config,
         calib_data=["multimodal-calibration"],
         duo_scaling=config["duo_scaling"],
-        max_calib_samples=multimodal_inputs["num_samples"],
-        max_calib_seq_len=multimodal_inputs["max_seq_len"],
+        max_calib_samples=layer_calibration["num_samples"],
+        max_calib_seq_len=layer_calibration["max_seq_len"],
         quantizer_cls=MultimodalAwqQuantizer,
-        calib_inputs_embeds=multimodal_inputs["inputs_embeds"],
-        calib_attention_mask=multimodal_inputs["attention_mask"],
-        calib_position_ids=multimodal_inputs["position_ids"],
+        calib_inputs_embeds=layer_calibration["inputs_embeds"],
+        calib_attention_mask=layer_calibration["attention_mask"],
+        calib_position_ids=layer_calibration["position_ids"],
     )
     model.save_quantized(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))

@@ -22,6 +22,7 @@ from quantization import (
     build_quantization_kwargs,
     ensure_awq_checkpoint,
     ensure_gptq_checkpoint,
+    load_smoothquant_backbone_into_lisa,
     is_quantized_model,
     load_awq_weights_into_lisa,
     load_gptq_weights_into_lisa,
@@ -188,7 +189,7 @@ def parse_args(args):
     config.pop("load_in_8bit", None)
     config.pop("load_in_4bit", None)
 
-    if config["quant_method"] in {"hqq", "quanto"} and config["precision"] != "fp16":
+    if config["quant_method"] in {"hqq", "quanto", "smoothquant"} and config["precision"] != "fp16":
         old_precision = config["precision"]
         config["precision"] = "fp16"
         print(
@@ -273,6 +274,19 @@ def build_model(args):
             model,
             model_path,
             args.quant_method,
+            args.quant_kwargs,
+            device=get_device(args.local_rank),
+            torch_dtype=torch_dtype,
+        )
+    elif args.quant_method == "smoothquant":
+        model = LISAForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch_dtype,
+            **model_args,
+        )
+        model = load_smoothquant_backbone_into_lisa(
+            model,
+            model_path,
             args.quant_kwargs,
             device=get_device(args.local_rank),
             torch_dtype=torch_dtype,
@@ -599,8 +613,7 @@ def main(args):
         model = model.to(device=device, dtype=torch_dtype)
     load_checkpoint_for_eval(model, args.resume, device)
     metrics = evaluate(test_loader, model, args)
-    if not is_reasonseg_inst_dataset(args.test_dataset.split("|", 1)[0]):
-        write_markdown_result(args, metrics)
+    write_markdown_result(args, metrics)
 
 
 if __name__ == "__main__":

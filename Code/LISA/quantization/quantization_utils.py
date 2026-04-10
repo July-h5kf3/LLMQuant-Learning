@@ -31,7 +31,16 @@ def validate_quantization_config(quant_method, quant_kwargs=None):
     if quant_kwargs is None:
         quant_kwargs = {}
 
-    supported_methods = {"none", "bnb_8bit", "bnb_4bit", "awq", "gptq", "hqq", "quanto"}
+    supported_methods = {
+        "none",
+        "bnb_8bit",
+        "bnb_4bit",
+        "awq",
+        "gptq",
+        "hqq",
+        "quanto",
+        "smoothquant",
+    }
     if quant_method not in supported_methods:
         raise ValueError(
             f"Unsupported quant_method: {quant_method}. "
@@ -587,6 +596,332 @@ def collect_multimodal_calibration_inputs(model_path, config, tokenizer, loader)
     }
 
 
+def pad_token_tensor(tensor, target_len, *, pad_value=0):
+    if tensor is None or tensor.shape[1] == target_len:
+        return tensor
+
+    padded = tensor.new_full((tensor.shape[0], target_len), pad_value)
+    padded[:, : tensor.shape[1]] = tensor
+    return padded
+
+
+def build_default_position_ids(batch_size, seq_len, *, device, dtype=torch.long):
+    return (
+        torch.arange(seq_len, dtype=dtype, device=device)
+        .unsqueeze(0)
+        .expand(batch_size, -1)
+        .contiguous()
+    )
+
+
+def build_position_ids_from_attention_mask(attention_mask, *, dtype=torch.long):
+    if attention_mask is None:
+        return None
+
+    attention_mask = attention_mask.to(torch.bool)
+    position_ids = attention_mask.to(dtype).cumsum(dim=-1) - 1
+    position_ids.masked_fill_(~attention_mask, 0)
+    return position_ids
+
+
+def build_causal_decoder_attention_mask(attention_mask, *, dtype):
+    if attention_mask is None:
+        return None
+
+    attention_mask = attention_mask.to(torch.bool)
+    bsz, src_len = attention_mask.shape
+    tgt_len = src_len
+    device = attention_mask.device
+    fill_value = torch.finfo(dtype).min
+
+    causal_mask = torch.full((tgt_len, tgt_len), fill_value, dtype=dtype, device=device)
+    mask_cond = torch.arange(tgt_len, device=device)
+    causal_mask.masked_fill_(mask_cond < (mask_cond + 1).view(tgt_len, 1), 0)
+    causal_mask = causal_mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len)
+
+    expanded_mask = attention_mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+    inverted_mask = 1.0 - expanded_mask
+    expanded_mask = inverted_mask.masked_fill(inverted_mask.to(torch.bool), fill_value)
+    return expanded_mask + causal_mask
+
+
+def build_padded_layer_attention_mask(attention_mask, *, dtype):
+    if attention_mask is None:
+        return None
+
+    attention_mask = attention_mask.to(torch.bool)
+    bsz, seq_len = attention_mask.shape
+    device = attention_mask.device
+    fill_value = torch.finfo(dtype).min
+
+    layer_attention_mask = torch.full(
+        (bsz, 1, seq_len, seq_len),
+        fill_value,
+        dtype=dtype,
+        device=device,
+    )
+
+    for sample_idx in range(bsz):
+        valid_len = int(attention_mask[sample_idx].sum().item())
+        if valid_len <= 0:
+            continue
+
+        sample_mask = torch.full(
+            (valid_len, valid_len),
+            fill_value,
+            dtype=dtype,
+            device=device,
+        )
+        mask_cond = torch.arange(valid_len, device=device)
+        sample_mask.masked_fill_(mask_cond < (mask_cond + 1).view(valid_len, 1), 0)
+        layer_attention_mask[sample_idx, 0, :valid_len, :valid_len] = sample_mask
+
+    return layer_attention_mask
+
+
+def build_vision_mask_from_prepared_inputs(
+    input_ids,
+    input_attention_mask,
+    prepared_labels,
+    prepared_attention_mask,
+):
+    from model.llava1p5.constants import IMAGE_TOKEN_INDEX
+
+    if prepared_labels is None or prepared_attention_mask is None:
+        return None
+
+    vision_masks = []
+    for batch_idx, pre_input_ids in enumerate(input_ids):
+        post_attn_mask = prepared_attention_mask[batch_idx].bool()
+        current_vision_mask = torch.zeros_like(post_attn_mask, dtype=torch.bool)
+
+        num_images = int((pre_input_ids == IMAGE_TOKEN_INDEX).sum().item())
+        if num_images <= 0:
+            vision_masks.append(current_vision_mask)
+            continue
+
+        pre_len = int(input_attention_mask[batch_idx].bool().sum().item())
+        post_len = int(post_attn_mask.sum().item())
+        image_emb_len = int((post_len - pre_len + num_images) / num_images)
+
+        image_emb_start = torch.where(pre_input_ids == IMAGE_TOKEN_INDEX)[0]
+        image_emb_start = image_emb_start.clone()
+        for image_idx in range(len(image_emb_start)):
+            image_emb_start[image_idx] = image_emb_start[image_idx] + (image_emb_len - 1) * image_idx
+
+        image_emb_end = image_emb_start + image_emb_len
+        for image_start, image_end in zip(image_emb_start.tolist(), image_emb_end.tolist()):
+            current_vision_mask[image_start:image_end] = True
+
+        vision_masks.append(current_vision_mask)
+
+    return torch.stack(vision_masks, dim=0)
+
+
+@torch.no_grad()
+def prepare_multimodal_prompt_inputs(model, batch, device):
+    input_ids = batch["input_ids"].to(device)
+    attention_mask = batch["attention_masks"].to(device)
+    labels = batch["labels"].to(device)
+
+    vision_tower = model.get_vision_tower()
+    vision_dtype = getattr(vision_tower, "dtype", next(model.parameters()).dtype)
+    images_clip = expand_images_clip(batch["images_clip"], batch.get("offset")).to(
+        device=device,
+        dtype=vision_dtype,
+    )
+
+    (
+        _,
+        position_ids,
+        prepared_attention_mask,
+        _,
+        inputs_embeds,
+        prepared_labels,
+    ) = model.prepare_inputs_labels_for_multimodal(
+        input_ids,
+        None,
+        attention_mask,
+        None,
+        labels,
+        images_clip,
+    )
+
+    vision_mask = build_vision_mask_from_prepared_inputs(
+        input_ids,
+        attention_mask,
+        prepared_labels,
+        prepared_attention_mask,
+    )
+    caption_mask = (
+        prepared_labels.ne(-100) if prepared_labels is not None else None
+    )
+
+    return {
+        "inputs_embeds": inputs_embeds.detach().cpu(),
+        "attention_mask": (
+            prepared_attention_mask.detach().cpu()
+            if prepared_attention_mask is not None
+            else None
+        ),
+        "position_ids": position_ids.detach().cpu() if position_ids is not None else None,
+        "labels": prepared_labels.detach().cpu() if prepared_labels is not None else None,
+        "vision_mask": vision_mask.detach().cpu() if vision_mask is not None else None,
+        "caption_mask": caption_mask.detach().cpu() if caption_mask is not None else None,
+    }
+
+
+def collect_mbq_multimodal_calibration_inputs(model_path, config, tokenizer, loader):
+    model = build_lisa_model(model_path, config, tokenizer)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    vision_tower = model.get_vision_tower()
+    if vision_tower is not None:
+        projector_dtype = next(model.get_model().mm_projector.parameters()).dtype
+        vision_tower.to(device=device, dtype=projector_dtype)
+
+    prompt_input_batches = []
+    prompt_attention_batches = []
+    prompt_position_batches = []
+    prompt_label_batches = []
+    prompt_vision_mask_batches = []
+    prompt_caption_mask_batches = []
+    max_seq_len = 0
+
+    try:
+        for batch in loader:
+            prepared = prepare_multimodal_prompt_inputs(model, batch, device)
+            inputs_embeds = prepared["inputs_embeds"]
+            attention_mask = prepared["attention_mask"]
+            position_ids = prepared["position_ids"]
+            labels = prepared["labels"]
+            vision_mask = prepared["vision_mask"]
+            caption_mask = prepared["caption_mask"]
+
+            prompt_input_batches.append(inputs_embeds)
+            prompt_attention_batches.append(attention_mask)
+            prompt_position_batches.append(position_ids)
+            prompt_label_batches.append(labels)
+            prompt_vision_mask_batches.append(vision_mask)
+            prompt_caption_mask_batches.append(caption_mask)
+            max_seq_len = max(max_seq_len, inputs_embeds.shape[1])
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    finally:
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if not prompt_input_batches:
+        raise ValueError("MBQ-style multimodal calibration activations are empty.")
+
+    inputs_embeds = torch.cat(
+        [pad_hidden_states(hidden_states, max_seq_len) for hidden_states in prompt_input_batches],
+        dim=0,
+    )
+
+    attention_mask = torch.cat(
+        [
+            pad_token_tensor(mask, max_seq_len, pad_value=False)
+            for mask in prompt_attention_batches
+        ],
+        dim=0,
+    )
+
+    if all(position_ids is None for position_ids in prompt_position_batches):
+        position_ids = build_position_ids_from_attention_mask(attention_mask)
+    else:
+        position_ids = torch.cat(
+            [
+                pad_position_ids(position_ids, max_seq_len)
+                for position_ids in prompt_position_batches
+            ],
+            dim=0,
+        )
+
+    labels = torch.cat(
+        [
+            pad_token_tensor(label, max_seq_len, pad_value=-100)
+            for label in prompt_label_batches
+        ],
+        dim=0,
+    )
+
+    if all(mask is None for mask in prompt_vision_mask_batches):
+        vision_mask = None
+    else:
+        vision_mask = torch.cat(
+            [
+                pad_token_tensor(mask, max_seq_len, pad_value=False)
+                for mask in prompt_vision_mask_batches
+            ],
+            dim=0,
+        )
+
+    if all(mask is None for mask in prompt_caption_mask_batches):
+        caption_mask = None
+    else:
+        caption_mask = torch.cat(
+            [
+                pad_token_tensor(mask, max_seq_len, pad_value=False)
+                for mask in prompt_caption_mask_batches
+            ],
+            dim=0,
+        )
+
+    prompt_inputs = {"inputs_embeds": inputs_embeds}
+    prompt_kwargs = {
+        "attention_mask": attention_mask,
+        "labels": labels,
+    }
+    if position_ids is not None:
+        prompt_kwargs["position_ids"] = position_ids
+    if vision_mask is not None:
+        prompt_kwargs["vision_mask"] = vision_mask
+    if caption_mask is not None:
+        prompt_kwargs["caption_mask"] = caption_mask
+
+    return {
+        "inputs_embeds": inputs_embeds,
+        "attention_mask": attention_mask,
+        "position_ids": position_ids,
+        "labels": labels,
+        "vision_mask": vision_mask,
+        "caption_mask": caption_mask,
+        "prompt_inputs": prompt_inputs,
+        "prompt_kwargs": prompt_kwargs,
+        "max_seq_len": max_seq_len,
+        "num_samples": inputs_embeds.shape[0],
+        "calibration_mode": "mbq",
+    }
+
+
+def build_awq_layer_calibration_inputs(multimodal_inputs):
+    inputs_embeds = multimodal_inputs["inputs_embeds"]
+    attention_mask = multimodal_inputs.get("attention_mask")
+    position_ids = multimodal_inputs.get("position_ids")
+
+    if attention_mask is not None and attention_mask.ndim == 2:
+        layer_attention_mask = build_padded_layer_attention_mask(
+            attention_mask,
+            dtype=inputs_embeds.dtype,
+        )
+    else:
+        layer_attention_mask = attention_mask
+
+    if position_ids is None:
+        position_ids = build_position_ids_from_attention_mask(attention_mask)
+
+    return {
+        "inputs_embeds": inputs_embeds,
+        "attention_mask": layer_attention_mask,
+        "position_ids": position_ids,
+        "max_seq_len": multimodal_inputs["max_seq_len"],
+        "num_samples": multimodal_inputs["num_samples"],
+    }
+
+
 def build_calibration_data(model_path, config):
     from quantization.calibration_dataset import build_calibration_loader
 
@@ -607,9 +942,21 @@ def build_calibration_data(model_path, config):
         shuffle=False,
     )
     calibration_records = collect_calibration_records(loader)
-    multimodal_inputs = collect_multimodal_calibration_inputs(
-        str(model_path), config, tokenizer, loader
-    )
+    calibration_mode = config.get("calibration_mode", "mbq")
+    if calibration_mode == "legacy":
+        multimodal_inputs = collect_multimodal_calibration_inputs(
+            str(model_path), config, tokenizer, loader
+        )
+        multimodal_inputs["calibration_mode"] = "legacy"
+    elif calibration_mode == "mbq":
+        multimodal_inputs = collect_mbq_multimodal_calibration_inputs(
+            str(model_path), config, tokenizer, loader
+        )
+    else:
+        raise ValueError(
+            f"Unsupported calibration_mode: {calibration_mode}. "
+            "Supported values are 'mbq' and 'legacy'."
+        )
     return tokenizer, calibration_records, multimodal_inputs
 
 
@@ -942,7 +1289,7 @@ def build_quantization_kwargs(quant_method, torch_dtype, quant_kwargs=None):
         return build_bnb_4bit_kwargs(torch_dtype, quant_kwargs)
     if quant_method == "awq":
         return build_awq_kwargs(quant_kwargs)
-    if quant_method in {"gptq", "hqq", "quanto"}:
+    if quant_method in {"gptq", "hqq", "quanto", "smoothquant"}:
         raise ValueError(
             f"{quant_method} uses the exported-backbone quantization path and should "
             "not call build_quantization_kwargs()."
@@ -955,6 +1302,7 @@ def is_quantized_model(model):
     return bool(
         getattr(model, "is_loaded_in_4bit", False)
         or getattr(model, "is_loaded_in_8bit", False)
-        or getattr(model, "quantization_method", None) in {"awq", "gptq", "hqq", "quanto"}
+        or getattr(model, "quantization_method", None)
+        in {"awq", "gptq", "hqq", "quanto", "smoothquant"}
         or getattr(getattr(model, "config", None), "quantization_config", None) is not None
     )

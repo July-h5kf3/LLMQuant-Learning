@@ -26,6 +26,11 @@ def get_precision_label(args):
         return f"{args.precision}+{args.quant_kwargs.get('bits', 4)}bit"
     if args.quant_method == "quanto":
         return f"{args.precision}+{args.quant_kwargs.get('weights', 'int4')}"
+    if args.quant_method == "smoothquant":
+        return (
+            f"{args.precision}+w{args.quant_kwargs.get('w_bit', 4)}"
+            f"a{args.quant_kwargs.get('a_bit', 8)}"
+        )
     return f"{args.precision}+{args.precision}"
 
 
@@ -45,6 +50,8 @@ def get_method_label(args):
         return "hqq"
     if args.quant_method == "quanto":
         return f"quanto_{args.quant_kwargs.get('weights', 'int4')}"
+    if args.quant_method == "smoothquant":
+        return "smoothquant"
     return "none"
 
 
@@ -60,24 +67,52 @@ def write_markdown_result(args, metrics):
     report_path = get_report_path(args)
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
 
-    headers = [
-        "Exp_name",
-        "Precision",
-        "Method",
-        "cIOU",
-        "gIOU",
-        "mem_peak",
-        "avg_fwd",
-    ]
-    values = [
-        get_exp_name(args),
-        get_precision_label(args),
-        get_method_label(args),
-        f"{metrics['ciou']:.4f}" if metrics.get("ciou") is not None else "NA",
-        f"{metrics['giou']:.4f}" if metrics.get("giou") is not None else "NA",
-        f"{metrics['peak_mem_mib']:.2f} MiB" if metrics.get("peak_mem_mib") is not None else "NA",
-        f"{metrics['avg_fwd_ms']:.2f}" if metrics.get("avg_fwd_ms") is not None else "NA",
-    ]
+    if "mAP" in metrics:
+        headers = [
+            "Exp_name",
+            "Precision",
+            "Method",
+            "mAP",
+            "AP50",
+            "AP75",
+            "AP-small",
+            "AP-medium",
+            "AP-large",
+            "mem_peak",
+            "avg_fwd",
+        ]
+        values = [
+            get_exp_name(args),
+            get_precision_label(args),
+            get_method_label(args),
+            f"{metrics['mAP']:.4f}" if metrics.get("mAP") is not None else "NA",
+            f"{metrics['AP50']:.4f}" if metrics.get("AP50") is not None else "NA",
+            f"{metrics['AP75']:.4f}" if metrics.get("AP75") is not None else "NA",
+            f"{metrics['AP-small']:.4f}" if metrics.get("AP-small") is not None else "NA",
+            f"{metrics['AP-medium']:.4f}" if metrics.get("AP-medium") is not None else "NA",
+            f"{metrics['AP-large']:.4f}" if metrics.get("AP-large") is not None else "NA",
+            f"{metrics['peak_mem_mib']:.2f} MiB" if metrics.get("peak_mem_mib") is not None else "NA",
+            f"{metrics['avg_fwd_ms']:.2f}" if metrics.get("avg_fwd_ms") is not None else "NA",
+        ]
+    else:
+        headers = [
+            "Exp_name",
+            "Precision",
+            "Method",
+            "cIOU",
+            "gIOU",
+            "mem_peak",
+            "avg_fwd",
+        ]
+        values = [
+            get_exp_name(args),
+            get_precision_label(args),
+            get_method_label(args),
+            f"{metrics['ciou']:.4f}" if metrics.get("ciou") is not None else "NA",
+            f"{metrics['giou']:.4f}" if metrics.get("giou") is not None else "NA",
+            f"{metrics['peak_mem_mib']:.2f} MiB" if metrics.get("peak_mem_mib") is not None else "NA",
+            f"{metrics['avg_fwd_ms']:.2f}" if metrics.get("avg_fwd_ms") is not None else "NA",
+        ]
     table = tabulate([values], headers=headers, tablefmt="github")
 
     with open(report_path, "w", encoding="utf-8") as f:
