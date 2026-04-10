@@ -59,16 +59,32 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 本文提出了一个异常感知的权重量化方法OWQ，利用LLMs中的异常激活值挑选出Weak Column，对其采用全精度的方式在牺牲很小的性能的情况下提升了巨大的精度。此外为进一步提升其性能做了一定的硬件适配并提出了一个基于OWQ的WTC方案，简单来说就是在OWQ量化模型上微调只更新Weak Column的参数。
 
 - [ ] [大语言模型的量化，硬件适配问题，PTQ]ZeroQuant-HERO: Hardware-Enhanced Robust Optimized Post-Training Quantization Framework for W8A8 Transformers
+
 - [ ] [大语言模型的量化,量化框架,PTQ]OmniQuant: Omnidirectionally Calibrated Quantization for Large Language Models(ICLR'2024 Spotlight)
+
 - [ ] [大语言模型的量化,量化框架,3Bit量化]TEQUILA: TRAPPING-FREE TERNARY QUANTIZA TION FOR LARGE LANGUAGE MODEL
+
 - [ ] [RWKV架构的量化] RWKVQuant: Quantizing the RWKV Family with Proxy Guided Hybrid of Scalar and Vector Quantization(ICML'2025)
+
 - [ ] [MoE架构的量化] MoEQuant: Enhancing Quantization for Mixture-of-Experts Large Language Models via Expert-Balanced Sampling and Affinity Guidance(ICML'2025)
+
 - [ ] [大语言模型量化] OSTQuant: Refining Large Language Models via Optimizing Data Distribution(ICLR'2025)
+
 - [ ] [大语言模型量化,基于Hessian矩阵分析的权重感知]HAWQV3: Dyadic Neural Network Quantization(ICML'2021)
+
 - [ ] [大语言模型量化,华为盘古"小模型"]CBQ: Cross-Block Quantization for Large Language Models(ICLR'2025)
+
 - [x] [KV-Cache量化，Google Research]TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate(ICLR' 2026)
 
   本文主要介绍了一种针对高维向量量化的创新方法，旨在通过大幅度压缩数据规模来优化AI模型推理，KV Cache管理以及向量数据库检索的效率。其核心在于结合了随机旋转技术和最优标量量化器，能在极低的比特位宽下实现接近理论极限的MSE。针对内积检索中的偏置问题，作者设计了一个两阶段架构，利用 1-比特 QJL 变换补偿余数，从而确保了内积估算的无偏性。实验数据表明，该算法在 Llama-3.1 等大语言模型的长文本测试中，仅需 2.5 至 3.5 比特即可保持与全精度近乎一致的性能。此外，相较于传统的乘积量化 (PQ) 技术，TurboQuant在保持高召回率的同时，将索引构建时间降低至接近于零，展现出卓越的加速器友好性。
+  
+- [x] [多模态大模型的量化，Alibaba]MASQuant: Modality-Aware Smoothing Quantization for Multimodal Large Language Models(CVPR' 2026)
+
+  本文旨在解决基于通道级平滑的PTQ方法应用于多模态大模型时面临的一个核心挑战：Smoothing Misalignment。论文通过MAS为每个模态确定一个平滑因子来解决这个问题，并通过CMC方法来解决与之伴随而来的Cross-Modal Computation Invariance问题。
+  
+- [x] [多模态大模型的量化]MBQ: Modality-Balanced Quantization for Large Vision-Language Models(CVPR'2025)
+
+  这篇文章注意到了将最先进的LLM量化方法直接应用到视觉语言模型时，性能下降显著，并通过实验探明了一个很有可能的原因在于对于不同模态Token的同质化处理，针对这个发现在校准时的优化误差对不同模态按梯度进行加权，从而在一定程度上克服了这个问题。
 
 ### 前沿
 
@@ -94,5 +110,4 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 Awesome系类：[pprp/Awesome-LLM-Quantization: Awesome list for LLM quantization](https://github.com/pprp/Awesome-LLM-Quantization)
 
 [混合精度量化的paper\ List](https://zhuanlan.zhihu.com/p/365272572)(年代比较久远，挑一些顶会的来看吧)
-
 
