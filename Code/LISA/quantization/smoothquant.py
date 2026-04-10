@@ -361,6 +361,7 @@ def pseudo_quantize_backbone_weight_act(
                     w_bit=w_bit,
                     a_bit=a_bit,
                     quantize_output=quantize_bmm_input and module_name in bmm_linear_names,
+                    act_quant_mode="prefill",
                 ),
             )
 
@@ -466,6 +467,7 @@ def load_smoothquant_backbone_into_lisa(
         "w_bit": config.get("w_bit", 4),
         "a_bit": config.get("a_bit", 8),
         "alpha": config.get("alpha", 0.5),
+        "activation_quant_mode": "prefill_only",
     }
     return lisa_model
 

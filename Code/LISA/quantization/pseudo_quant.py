@@ -113,6 +113,7 @@ class PseudoQuantLinear(nn.Module):
         a_bit=8,
         w_bit=8,
         quantize_output=False,
+        act_quant_mode="always",
         dtype=torch.float32,
         device=None,
     ):
@@ -121,6 +122,12 @@ class PseudoQuantLinear(nn.Module):
         self.out_features = out_features
         self.a_bit = a_bit
         self.w_bit = w_bit
+        if act_quant_mode not in {"always", "prefill"}:
+            raise ValueError(
+                f"Unsupported activation quantization policy: {act_quant_mode}"
+            )
+        self.act_quant_mode = act_quant_mode
+        self.activation_stage = "prefill"
 
         self.register_buffer(
             "weight",
@@ -158,7 +165,8 @@ class PseudoQuantLinear(nn.Module):
 
     @torch.no_grad()
     def forward(self, x):
-        quantized_x = self.act_quant(x)
+        quantize_activation = self.should_quantize_activation()
+        quantized_x = self.act_quant(x) if quantize_activation else x
         weight = self.weight
         bias = self.bias
         if weight.dtype != quantized_x.dtype:
@@ -166,7 +174,19 @@ class PseudoQuantLinear(nn.Module):
         if bias is not None and bias.dtype != quantized_x.dtype:
             bias = bias.to(dtype=quantized_x.dtype)
         output = torch.nn.functional.linear(quantized_x, weight, bias)
-        return self.output_quant(output)
+        if quantize_activation:
+            return self.output_quant(output)
+        return output
+
+    def set_activation_stage(self, stage):
+        if stage not in {"prefill", "decode"}:
+            raise ValueError(f"Unsupported activation stage: {stage}")
+        self.activation_stage = stage
+
+    def should_quantize_activation(self):
+        if self.act_quant_mode == "always":
+            return True
+        return self.activation_stage == "prefill"
 
     @classmethod
     @torch.no_grad()
@@ -180,6 +200,7 @@ class PseudoQuantLinear(nn.Module):
         a_bit=8,
         weight_group=128,
         quantize_output=False,
+        act_quant_mode="always",
     ):
         if not isinstance(module, nn.Linear):
             raise TypeError(
@@ -194,6 +215,7 @@ class PseudoQuantLinear(nn.Module):
             a_bit=a_bit,
             w_bit=w_bit,
             quantize_output=quantize_output,
+            act_quant_mode=act_quant_mode,
             dtype=module.weight.dtype,
             device=module.weight.device,
         )
@@ -231,5 +253,6 @@ class PseudoQuantLinear(nn.Module):
         return (
             f"in_features={self.in_features}, out_features={self.out_features}, "
             f"bias={self.bias is not None}, w_bit={self.w_bit}, a_bit={self.a_bit}, "
-            f"weight_quant={self.weight_quant_name}, act_quant={self.act_quant_name}"
+            f"weight_quant={self.weight_quant_name}, act_quant={self.act_quant_name}, "
+            f"act_quant_mode={self.act_quant_mode}, activation_stage={self.activation_stage}"
         )

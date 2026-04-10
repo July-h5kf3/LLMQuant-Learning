@@ -288,6 +288,53 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
     def get_model(self):
         return self.model
 
+    def _get_pseudo_quant_linears(self):
+        try:
+            from quantization.pseudo_quant import PseudoQuantLinear
+        except ImportError:
+            return []
+
+        cached_modules = getattr(self, "_cached_pseudo_quant_linears", None)
+        if cached_modules is None or any(
+            not isinstance(module, PseudoQuantLinear) for module in cached_modules
+        ):
+            cached_modules = [
+                module for module in self.modules() if isinstance(module, PseudoQuantLinear)
+            ]
+            self._cached_pseudo_quant_linears = cached_modules
+        return cached_modules
+
+    def _set_activation_quant_stage(self, stage):
+        for module in self._get_pseudo_quant_linears():
+            module.set_activation_stage(stage)
+
+    def _begin_generation_activation_quant(self):
+        self._activation_quant_generation_active = True
+        self._activation_quant_generation_step = 0
+        self._set_activation_quant_stage("prefill")
+
+    def _end_generation_activation_quant(self):
+        self._activation_quant_generation_active = False
+        self._activation_quant_generation_step = 0
+        self._set_activation_quant_stage("prefill")
+
+    def _advance_generation_activation_quant(self):
+        if not getattr(self, "_activation_quant_generation_active", False):
+            return
+        generation_step = getattr(self, "_activation_quant_generation_step", 0)
+        stage = "prefill" if generation_step == 0 else "decode"
+        self._set_activation_quant_stage(stage)
+        self._activation_quant_generation_step = generation_step + 1
+
+    def generate(self, *args, **kwargs):
+        if kwargs.get("use_cache") is None:
+            kwargs["use_cache"] = True
+        self._begin_generation_activation_quant()
+        try:
+            return super().generate(*args, **kwargs)
+        finally:
+            self._end_generation_activation_quant()
+
     # def process_embeds(self, input_ids, inputs_embeds, correct_emb):
     #     # 1. 检查inputs_embeds和raw_input_ids第二个维度的差值是否为575
     #     assert inputs_embeds.shape[1] - input_ids.shape[1] == 575
@@ -394,6 +441,10 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
         elif correct_emb is not None and if_inference is not None:
             inputs_embeds = self.process_embeds_inference(raw_input_ids, inputs_embeds, correct_emb)
 
+        if not getattr(self, "_activation_quant_generation_active", False):
+            stage = "decode" if past_key_values is not None else "prefill"
+            self._set_activation_quant_stage(stage)
+
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -482,6 +533,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
         self,
         input_ids,
         past_key_values=None,
+        position_ids=None,
         attention_mask=None,
         inputs_embeds=None,
         images=None,
@@ -489,9 +541,18 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
         if_inference=None,
         **kwargs
     ):
-        past_key_values=None
+        # Keep generation cache-enabled so prefill and decode are separated in the
+        # runtime. We still treat the first generation step as prefill and the
+        # subsequent steps as decode for activation quantization.
+        self._advance_generation_activation_quant()
         if past_key_values:
             input_ids = input_ids[:, -1:]
+
+        if attention_mask is not None and position_ids is None:
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -1].unsqueeze(-1)
 
         if inputs_embeds is not None and past_key_values is None:
             model_inputs = {"inputs_embeds": inputs_embeds}
@@ -503,6 +564,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
                 "past_key_values": past_key_values,
                 "use_cache": kwargs.get("use_cache"),
                 "attention_mask": attention_mask,
+                "position_ids": position_ids,
                 "images": images,
                 "correct_emb":correct_emb,
                 "if_inference":if_inference,

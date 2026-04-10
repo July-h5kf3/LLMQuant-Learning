@@ -190,6 +190,36 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         )
         return torch.cat([seg_token_mask, pad], dim=1)
 
+    def _reconstruct_generation_last_hidden_state(self, generation_hidden_states):
+        if generation_hidden_states is None:
+            raise ValueError("Generation did not return hidden states.")
+
+        if torch.is_tensor(generation_hidden_states):
+            return generation_hidden_states
+
+        step_hidden_states = []
+        for step_hidden in generation_hidden_states:
+            if step_hidden is None:
+                continue
+            if isinstance(step_hidden, (tuple, list)):
+                if len(step_hidden) == 0:
+                    continue
+                step_hidden = step_hidden[-1]
+            if not torch.is_tensor(step_hidden):
+                raise TypeError(
+                    f"Unsupported generation hidden state type: {type(step_hidden)}"
+                )
+            step_hidden_states.append(step_hidden)
+
+        if not step_hidden_states:
+            raise ValueError("Generation hidden states are empty.")
+
+        if len(step_hidden_states) == 1:
+            return step_hidden_states[0]
+
+        continuation_states = [hidden[:, -1:, :] for hidden in step_hidden_states[1:]]
+        return torch.cat([step_hidden_states[0], *continuation_states], dim=1)
+
     def _hungarian_match_indices(
         self, pred_masks_flat: torch.Tensor, gt_masks_flat: torch.Tensor
     ):
@@ -460,10 +490,13 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 input_ids=input_ids,
                 max_new_tokens=max_new_tokens,
                 num_beams=1,
+                use_cache=True,
                 output_hidden_states=True,
                 return_dict_in_generate=True,
             )
-            output_hidden_states = outputs.hidden_states[-1]
+            output_hidden_states = self._reconstruct_generation_last_hidden_state(
+                outputs.hidden_states
+            )
             output_ids = outputs.sequences
 
             device = output_ids.device
