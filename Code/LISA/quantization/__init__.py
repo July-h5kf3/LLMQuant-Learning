@@ -11,6 +11,10 @@ from .hf_backbone_quant import (
     load_hf_quantized_backbone_into_lisa,
     prepare_hf_quantized_backbone,
 )
+from .mbq import (
+    ensure_mbq_scales,
+    load_mbq_backbone_into_lisa,
+)
 from .merge_weight import load_awq_weights_into_lisa, load_gptq_weights_into_lisa
 from .smoothquant import (
     ensure_smoothquant_scales,

@@ -5,7 +5,7 @@ image_size: 1024
 model_max_length: 1024
 lora_r: 8
 vision_tower: "/root/autodl-tmp/.cache/huggingface/transformers/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1"
-# Now support: "awq","bnb_4bit","bnb_8bit","gptq","hqq","quanto","smoothquant","none"
+# Now support: "awq","bnb_4bit","bnb_8bit","gptq","hqq","mbq","quanto","smoothquant","none"
 quant_method: "hqq"
 quant_config: "quant/hqq.yaml"
 

@@ -38,6 +38,7 @@ def validate_quantization_config(quant_method, quant_kwargs=None):
         "awq",
         "gptq",
         "hqq",
+        "mbq",
         "quanto",
         "smoothquant",
     }
@@ -1289,7 +1290,7 @@ def build_quantization_kwargs(quant_method, torch_dtype, quant_kwargs=None):
         return build_bnb_4bit_kwargs(torch_dtype, quant_kwargs)
     if quant_method == "awq":
         return build_awq_kwargs(quant_kwargs)
-    if quant_method in {"gptq", "hqq", "quanto", "smoothquant"}:
+    if quant_method in {"gptq", "hqq", "mbq", "quanto", "smoothquant"}:
         raise ValueError(
             f"{quant_method} uses the exported-backbone quantization path and should "
             "not call build_quantization_kwargs()."
@@ -1303,6 +1304,6 @@ def is_quantized_model(model):
         getattr(model, "is_loaded_in_4bit", False)
         or getattr(model, "is_loaded_in_8bit", False)
         or getattr(model, "quantization_method", None)
-        in {"awq", "gptq", "hqq", "quanto", "smoothquant"}
+        in {"awq", "gptq", "hqq", "mbq", "quanto", "smoothquant"}
         or getattr(getattr(model, "config", None), "quantization_config", None) is not None
     )
