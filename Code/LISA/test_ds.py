@@ -22,6 +22,7 @@ from quantization import (
     build_quantization_kwargs,
     ensure_awq_checkpoint,
     ensure_gptq_checkpoint,
+    load_masquant_backbone_into_lisa,
     load_mbq_backbone_into_lisa,
     load_smoothquant_backbone_into_lisa,
     is_quantized_model,
@@ -194,9 +195,14 @@ def parse_args(args):
         config["quant_method"] == "mbq"
         and bool(config["quant_kwargs"].get("wa_quant", False))
     )
+    masquant_requires_fp16 = (
+        config["quant_method"] == "masquant"
+        and bool(config["quant_kwargs"].get("wa_quant", False))
+    )
     if (
         config["quant_method"] in {"hqq", "quanto", "smoothquant"}
         or mbq_requires_fp16
+        or masquant_requires_fp16
     ) and config["precision"] != "fp16":
         old_precision = config["precision"]
         config["precision"] = "fp16"
@@ -306,6 +312,19 @@ def build_model(args):
             **model_args,
         )
         model = load_mbq_backbone_into_lisa(
+            model,
+            model_path,
+            args.quant_kwargs,
+            device=get_device(args.local_rank),
+            torch_dtype=torch_dtype,
+        )
+    elif args.quant_method == "masquant":
+        model = LISAForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch_dtype,
+            **model_args,
+        )
+        model = load_masquant_backbone_into_lisa(
             model,
             model_path,
             args.quant_kwargs,

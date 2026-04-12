@@ -11,6 +11,10 @@ from .hf_backbone_quant import (
     load_hf_quantized_backbone_into_lisa,
     prepare_hf_quantized_backbone,
 )
+from .masquant import (
+    ensure_masquant_scales,
+    load_masquant_backbone_into_lisa,
+)
 from .mbq import (
     ensure_mbq_scales,
     load_mbq_backbone_into_lisa,

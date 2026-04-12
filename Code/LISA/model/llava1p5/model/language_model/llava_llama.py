@@ -289,17 +289,15 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
         return self.model
 
     def _get_pseudo_quant_linears(self):
-        try:
-            from quantization.pseudo_quant import PseudoQuantLinear
-        except ImportError:
-            return []
-
         cached_modules = getattr(self, "_cached_pseudo_quant_linears", None)
-        if cached_modules is None or any(
-            not isinstance(module, PseudoQuantLinear) for module in cached_modules
+        if cached_modules is None or not cached_modules or any(
+            not callable(getattr(module, "set_activation_stage", None))
+            for module in cached_modules
         ):
             cached_modules = [
-                module for module in self.modules() if isinstance(module, PseudoQuantLinear)
+                module
+                for module in self.modules()
+                if callable(getattr(module, "set_activation_stage", None))
             ]
             self._cached_pseudo_quant_linears = cached_modules
         return cached_modules
@@ -307,6 +305,12 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM, GenerationMi
     def _set_activation_quant_stage(self, stage):
         for module in self._get_pseudo_quant_linears():
             module.set_activation_stage(stage)
+
+    def _set_quant_vision_mask(self, vision_mask):
+        for module in self._get_pseudo_quant_linears():
+            set_vision_mask = getattr(module, "set_vision_mask", None)
+            if callable(set_vision_mask):
+                set_vision_mask(vision_mask)
 
     def _begin_generation_activation_quant(self):
         self._activation_quant_generation_active = True

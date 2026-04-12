@@ -27,6 +27,46 @@ QUANTIZED_LINEAR_NAMES = (
 )
 
 
+# Shared helpers for local pseudo-quant methods that edit the LLaMA decoder in
+# place. They intentionally stay small so each method keeps its own algorithmic
+# logic nearby.
+def get_decoder_layers(model_or_backbone):
+    layers = getattr(model_or_backbone, "layers", None)
+    if layers is not None:
+        return layers
+
+    nested_model = getattr(model_or_backbone, "model", None)
+    if nested_model is not None and getattr(nested_model, "layers", None) is not None:
+        return nested_model.layers
+
+    raise TypeError("Expected a decoder backbone exposing `layers`.")
+
+
+def get_submodule_by_name(root_module, module_name):
+    module = root_module
+    for part in module_name.split("."):
+        if part.isdigit():
+            module = module[int(part)]
+        else:
+            module = getattr(module, part)
+    return module
+
+
+def set_submodule_by_name(root_module, module_name, new_module):
+    parts = module_name.split(".")
+    parent = root_module
+    for part in parts[:-1]:
+        if part.isdigit():
+            parent = parent[int(part)]
+        else:
+            parent = getattr(parent, part)
+
+    if parts[-1].isdigit():
+        parent[int(parts[-1])] = new_module
+    else:
+        setattr(parent, parts[-1], new_module)
+
+
 def validate_quantization_config(quant_method, quant_kwargs=None):
     if quant_kwargs is None:
         quant_kwargs = {}
@@ -38,6 +78,7 @@ def validate_quantization_config(quant_method, quant_kwargs=None):
         "awq",
         "gptq",
         "hqq",
+        "masquant",
         "mbq",
         "quanto",
         "smoothquant",
@@ -1290,7 +1331,7 @@ def build_quantization_kwargs(quant_method, torch_dtype, quant_kwargs=None):
         return build_bnb_4bit_kwargs(torch_dtype, quant_kwargs)
     if quant_method == "awq":
         return build_awq_kwargs(quant_kwargs)
-    if quant_method in {"gptq", "hqq", "mbq", "quanto", "smoothquant"}:
+    if quant_method in {"gptq", "hqq", "masquant", "mbq", "quanto", "smoothquant"}:
         raise ValueError(
             f"{quant_method} uses the exported-backbone quantization path and should "
             "not call build_quantization_kwargs()."
@@ -1304,6 +1345,6 @@ def is_quantized_model(model):
         getattr(model, "is_loaded_in_4bit", False)
         or getattr(model, "is_loaded_in_8bit", False)
         or getattr(model, "quantization_method", None)
-        in {"awq", "gptq", "hqq", "mbq", "quanto", "smoothquant"}
+        in {"awq", "gptq", "hqq", "masquant", "mbq", "quanto", "smoothquant"}
         or getattr(getattr(model, "config", None), "quantization_config", None) is not None
     )

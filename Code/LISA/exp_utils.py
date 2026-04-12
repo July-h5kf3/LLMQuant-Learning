@@ -24,6 +24,13 @@ def get_precision_label(args):
         return f"{args.precision}+{args.quant_kwargs.get('bits', 4)}bit"
     if args.quant_method == "hqq":
         return f"{args.precision}+{args.quant_kwargs.get('bits', 4)}bit"
+    if args.quant_method == "masquant":
+        if args.quant_kwargs.get("wa_quant", False):
+            return (
+                f"{args.precision}+w{args.quant_kwargs.get('w_bit', 4)}"
+                f"a{args.quant_kwargs.get('a_bit', 8)}"
+            )
+        return f"{args.precision}+w{args.quant_kwargs.get('w_bit', 4)}"
     if args.quant_method == "mbq":
         if args.quant_kwargs.get("wa_quant", False):
             return (
@@ -55,6 +62,10 @@ def get_method_label(args):
         return "gptq"
     if args.quant_method == "hqq":
         return "hqq"
+    if args.quant_method == "masquant":
+        suffix = "wa" if args.quant_kwargs.get("wa_quant", False) else "w"
+        cmc = "_cmc" if args.quant_kwargs.get("cmc", False) else ""
+        return f"masquant_{args.quant_kwargs.get('scale_mode', 'split')}{cmc}_{suffix}"
     if args.quant_method == "mbq":
         return "mbq_wa" if args.quant_kwargs.get("wa_quant", False) else "mbq"
     if args.quant_method == "quanto":

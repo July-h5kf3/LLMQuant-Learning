@@ -184,6 +184,8 @@ class PseudoQuantLinear(nn.Module):
         self.activation_stage = stage
 
     def should_quantize_activation(self):
+        if self.a_bit >= 16:
+            return False
         if self.act_quant_mode == "always":
             return True
         return self.activation_stage == "prefill"
