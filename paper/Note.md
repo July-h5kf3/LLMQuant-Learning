@@ -1207,6 +1207,10 @@ $$
 
 #### Fine-Grained Post-Training Quantization for Large Vision Language Modelswith Quantization-Aware Integrated Gradients
 
+<div style="background-color:#f9f9f9; padding:8px; border-radius:6px;">
+    <b>个人评价</b>:比较有意思的研究思路，从MBQ的Modality-Specific出发，通过实验发现，相较于Modality-Specific，更加细粒度的Token-Wise进行区分效果会更好。基于此研究了多种Token敏感度估计方法，最终采用基于公理化归因的积分梯度方法进行规约，取得不错的效果。但是问题在于文章对理论的分析严重不足！
+</div>
+
 假设你阅读过MBQ，它是按照模态去对优化目标进行加权的，那么我们可以仔细想想，不同模态最终都会以Token的形式输入模型，既然不同模态之间存在对量化噪声敏感性差异，那么我们其实可以说本质上是Token内部就存在差异，这个差异不仅仅存在于不同模态之间，还可能存在同一个模态之中。那么也就是说，我们完全可以仿照MBQ的思路去做更加细粒度的加权。
 
 一般而言，衡量这种Token之间的差异，可以通过敏感性估计进行。作者在文章中尝试了三种敏感性估计方式:

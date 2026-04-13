@@ -86,6 +86,10 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 
   这篇文章注意到了将最先进的LLM量化方法直接应用到视觉语言模型时，性能下降显著，并通过实验探明了一个很有可能的原因在于对于不同模态Token的同质化处理，针对这个发现在校准时的优化误差对不同模态按梯度进行加权，从而在一定程度上克服了这个问题。
 
+- [x] [多模态大模型的量化] Fine-Grained Post-Training Quantization for Large Vision Language Modelswith Quantization-Aware Integrated Gradients(CVPR' 2026)
+
+  这篇文章在MBQ的基础上，进一步加深了思考，在MBQ中是对不同模态之间的Token进行加权，但是事实上同一模态内的Token也存在差异，因此可以也进行加权，作者选用了按照量化感知的梯度积分作为加权的依据，在一定程度上取得了不错的效果，但是缺乏理论论证。
+
 ### 前沿
 
 这部分更多是收集一些大模型厂商的Technical Report，个人认为在资本趋利性下，对显存的”压榨“会做到极致
