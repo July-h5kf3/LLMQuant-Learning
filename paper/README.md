@@ -90,6 +90,10 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 
   这篇文章在MBQ的基础上，进一步加深了思考，在MBQ中是对不同模态之间的Token进行加权，但是事实上同一模态内的Token也存在差异，因此可以也进行加权，作者选用了按照量化感知的梯度积分作为加权的依据，在一定程度上取得了不错的效果，但是缺乏理论论证。
 
+- [x] [多模态大模型的量化 teleAI] VLMQ: Efficient Post-Training Quantization for Large Vision-Language Models via Hessian Augmentation
+
+  这篇文章将不同Token的重要性引入到Hessian矩阵的计算中，从而实现了对GPTQ以及GPTAQ等基于Hessian的方法改进，理论分析也较为扎实，但是实验量较少。
+
 ### 前沿
 
 这部分更多是收集一些大模型厂商的Technical Report，个人认为在资本趋利性下，对显存的”压榨“会做到极致
