@@ -37,9 +37,17 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 
 ​	本篇文章的主要贡献在于提出了一个基于小数据集（校验集）的训练后量化方法AdaQuant，AdaQuant通过提出一个block/layer-wise的损失函数，通过在校验集上的训练学习量化参数(重点包括了一个最优的权重扰动，类似于AdaRound来避免四舍五入的不足),实现了减少量化的精度损失；提出了基于PI(整数规划)的bit精度分配方案，但是并没有解释精确损失的累加合理性；提出量化对BN融合造成的统计量偏移问题，并提出了PN(Para-Normalization)来解决这个问题。并在Bert-base网络上实现了不到1%的损失(4-8bit)
 
-- [ ] **Smoothquant**:Accurate and efficient post-training quantization for large language models (ICML 2023)
+- [x] [大语言模型量化,PTQ，激活值异常值处理，硬件适配]**Smoothquant**:Accurate and efficient post-training quantization for large language models (ICML 2023)
 
-- [ ] **SpinQuant**: Spinquant: Llm quantization with learned rotations (ICLR 2025)
+  本文指出LLMs中激活值Outlier是W8A8量化精度下降的主要原因，而权重相对更容易量化。基于这一观察，作者提出了SmoothQuant，通过一个数学等价的通道缩放变换，将激活值中的量化困难迁移到权重中，从而平滑激活值的异常通道。其核心在于利用$s$对输入激活做除法、对权重做乘法，使得线性层输出保持不变，同时通过迁移强度$\alpha$控制量化难度在权重和激活之间的分配。SmoothQuant不需要训练，只需要少量校准数据统计激活范围，就可以实现较稳定的W8A8量化，并且适配INT8 GEMM硬件。但是本质上它更适合8bit量化，在更低比特下仅靠平滑很难完全解决量化误差问题。
+
+- [x] [大语言模型量化,PTQ，旋转变换，低比特量化]**SpinQuant**: Spinquant: Llm quantization with learned rotations (ICLR 2025)
+
+  这篇文章可以看作是QuaRot这类旋转量化方法的进一步优化。其出发点在于：对权重、激活值和KV-Cache施加正交旋转不会改变Transformer中线性计算的数学等价性，但是可以改变数值分布，使Outlier被扩散到更多维度，从而降低低比特量化难度。不同于直接使用随机Hadamard旋转，SpinQuant提出使用少量校准数据学习旋转矩阵，并通过Cayley Transform等方式保证旋转矩阵的正交性。简单来说，就是把“找一个能让量化后分布更好看的坐标系”也纳入校准优化中。实验上SpinQuant在W4A4KV4等极低比特设置下相比随机旋转和SmoothQuant都有明显提升，说明旋转矩阵本身的选择非常重要。但是它引入了学习旋转和推理时旋转变换的额外成本，工程落地时需要继续考虑算子融合以及硬件友好性。
+
+- [x] [大语言模型量化,PTQ，可学习等价变换，低比特量化]**FlatQuant**: Flatquant: Flatness matters for llm quantization (ICML 2025)
+
+  本文延续了SmoothQuant和QuaRot/SpinQuant中的一个核心思路：在量化之前先通过数学等价变换改变权重和激活值的分布，使其更加适合均匀量化。作者认为仅仅依靠Per-channel Scaling或Hadamard旋转仍然可能留下陡峭且离散的分布，因此提出了FlatQuant(Fast and Learnable Affine Transformation)，为每个线性层学习一个仿射变换来同时拉平权重和激活值分布，从而减少Outlier对量化区间的浪费。为了降低这类变换带来的推理开销，FlatQuant进一步使用Kronecker分解压缩变换矩阵，并将相关操作融合到单个Kernel中。实验上它在W4A4等低比特设置下取得了很强的效果，可以看作是“平滑/旋转”这一类预量化等价变换方法的增强版。不过个人感觉这类方法的关键并不只在理论上的等价变换，而在于最终能不能把额外变换真正融合进高效算子，否则精度收益可能会被推理开销吃掉。
 
 - [ ] **Q-dit:Q-dit**: Accurate post-training quantization for diffusion transformers (CVPR 2025)
 
@@ -126,4 +134,3 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 Awesome系类：[pprp/Awesome-LLM-Quantization: Awesome list for LLM quantization](https://github.com/pprp/Awesome-LLM-Quantization)
 
 [混合精度量化的paper\ List](https://zhuanlan.zhihu.com/p/365272572)(年代比较久远，挑一些顶会的来看吧)
-
