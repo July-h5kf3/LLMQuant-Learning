@@ -94,6 +94,14 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 
   这篇文章将不同Token的重要性引入到Hessian矩阵的计算中，从而实现了对GPTQ以及GPTAQ等基于Hessian的方法改进，理论分析也较为扎实，但是实验量较少。
 
+- [x] [多模态大模型剪枝量化协同] QAPruner: Quantization-Aware Vision Token Pruning for Multimodal Large Language Models
+
+  这篇文章提到，将基于语义感知的视觉Token剪枝方法直接应用到PTQ后的模型上时，会带来严重的性能下降问题，提出的解决方法是在给Per-Token打分的时候考虑量化的影响
+
+- [x] [多模态大模型剪枝量化协同] Towards Joint Quantization and Token Pruning of Vision-Language Models
+
+  这篇文章提出了一种协作式量化与剪枝框架，和QAPruner的思路类似，就是在剪枝的时候考虑量化带来的影响，且Token分数在量化下给出。实际上本质上还是先量化再剪枝
+
 ### 前沿
 
 这部分更多是收集一些大模型厂商的Technical Report，个人认为在资本趋利性下，对显存的”压榨“会做到极致
