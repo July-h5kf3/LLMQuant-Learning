@@ -47,7 +47,7 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 | 综述, 白皮书 | [**A White Paper on Neural Network Quantization**](https://arxiv.org/abs/2106.08295) | White Paper | No | 起点很好 | 高通写的量化过程综述，适合作为入门中的入门。 |
 | 综述 | [**Scaling Laws for Precision**](https://arxiv.org/abs/2411.04330) | - | No | - | - |
 | 综述, 腾讯混元 | [**Scaling Laws for Floating Point Quantization Training**](https://arxiv.org/abs/2501.02423) | - | No | - | - |
-
+| 多模态大模型剪枝 | [**Task-related token compression  in multi-modal large language  models from an ex-plainability perspective**](https://arxiv.org/pdf/2506.01097) | ICLR 2026 | Yes | 很有意思的想法 | 出发点是发现了一种较好的可解释性的剪枝方法，但是剪枝决策需要在推理完成后得到，因此通过加入可学习模块的方式进行改良。 |
 
 
 
