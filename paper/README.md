@@ -48,8 +48,7 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 | 综述 | [**Scaling Laws for Precision**](https://arxiv.org/abs/2411.04330) | - | No | - | - |
 | 综述, 腾讯混元 | [**Scaling Laws for Floating Point Quantization Training**](https://arxiv.org/abs/2501.02423) | - | No | - | - |
 | 多模态大模型剪枝 | [**Task-related token compression  in multi-modal large language  models from an ex-plainability perspective**](https://arxiv.org/pdf/2506.01097) | ICLR 2026 | Yes | 很有意思的想法 | 出发点是发现了一种较好的可解释性的剪枝方法，但是剪枝决策需要在推理完成后得到，因此通过加入可学习模块的方式进行改良。 |
-
-
+| 大语言模型量化, PTQ, 低比特, 滑动窗口 | [**SliderQuant**: Accurate Post-Training Quantization for LLMs](https://arxiv.org/abs/2603.25284) | ICLR 2026 | Yes | 很有启发 | 针对首尾层更敏感和逐层量化误差累积问题，提出层间自适应滑动窗口与层内增量式滑动量化，在跨层协同中结合通道缩放和低秩补偿降低低比特 PTQ 误差。 |
 
 
 Awesome系类：[pprp/Awesome-LLM-Quantization: Awesome list for LLM quantization](https://github.com/pprp/Awesome-LLM-Quantization)
