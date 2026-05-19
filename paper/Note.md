@@ -1594,3 +1594,41 @@ $$
 \hat{X_{i+1}} = \text{quantizer}(\hat X_i)\cdot \text{quantizer}(\hat{W_i})
 $$
 其中$\alpha_i$表示一个可学习的通道缩放参数，$A_i,B_i$为两个低秩矩阵。
+
+#### OSAQ: Outlier Self-Absorption for Accurate Low-bit LLM Quantization
+
+目前针对大语言模型中存在的系统性异常值问题，现有方法主要依赖层内乘法变换来抑制异常值，包括:
+
+1. 缩放:如AWQ，SmoothQuant等方法通过激活分布特征对权重进行缩放
+2. 旋转:如QuIP等方法通过正交矩阵旋转权重矩阵
+
+然而这些方法在极低比特量化时，性能仍远未达到理想水平，表明单一乘法策略在根本上不足以充分处理异常值问题。
+
+本方法基于如下发现:
+
+![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/OSAQ_fig1.png)
+
+即任务损失关于权重的Hessian矩阵具有低秩一致性，即
+
+- 特征值沿特定方向趋于0零
+- 对应的特征向量构成稳定的零空间
+- 该零空间在不同输入样本间保持高度一致
+
+而我们知道，通过泰勒展开，我们可以知道权重收到扰动时，任务损失L关于权重的二阶泰勒展开可以写作:
+$$
+\mathbb{E}[L(w+\Delta w)-L(w)]\approx\frac{1}{2}\Delta w^\top H_w \Delta w
+$$
+而我们又发现$H_w$具有低秩一致性，因此根据零空间的定义，用$H_w$乘以零空间中的任意向量都会得到零。因此，通过对这些零空间向量进行加权组合，我们可以构造出$\Delta w$。这使得一种加性变换成为可能，并且保证损失保持不变:
+$$
+W' = W +\Delta W\quad s.t. \quad \Delta w^\top H_w \Delta w = 0
+$$
+基于这个发现，我们旨在构建一个由低秩结构引导的$\Delta w$，对权重执行加性变换，从而实现异常值的子吸收，同时保持模型的性能。
+
+给定一个权重矩阵$W\in \mathbb{R}^{M\times N}$,其中M表示输出通道维度，N表示输入通道维度，$\Delta W$的构造过程如下所述:
+
+1. 零空间提取: 首先我们对Hessian矩阵$H_w$进行特征分解，并按照特征值幅度的非递减顺序进行排序，如下所示:
+
+$$
+H_w = V \text{diag}(\lambda_1,\dots,\lambda_N)V^\top
+$$
+
