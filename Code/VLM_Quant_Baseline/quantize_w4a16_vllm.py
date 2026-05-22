@@ -178,7 +178,10 @@ def main():
 
     try:
         from llmcompressor import oneshot
-        from llmcompressor.modifiers.gptq import GPTQModifier
+        try:
+            from llmcompressor.modifiers.gptq import GPTQModifier
+        except ImportError:
+            from llmcompressor.modifiers.quantization.gptq import GPTQModifier
     except ImportError as exc:
         raise ImportError("Install llm-compressor first: `pip install llmcompressor`.") from exc
 
