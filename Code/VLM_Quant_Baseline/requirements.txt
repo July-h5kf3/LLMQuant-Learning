@@ -39,3 +39,8 @@ decord
 easydict
 imageio
 qwen-vl-utils
+
+# real W4A16 checkpoint export and vLLM inference
+llmcompressor
+compressed-tensors
+vllm
