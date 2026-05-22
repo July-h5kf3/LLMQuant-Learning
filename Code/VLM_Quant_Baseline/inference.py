@@ -29,6 +29,8 @@ try:
 except Exception:
     DEFAULT_IMAGE_TOKEN = "<image>"
 
+_PROCESSOR_CACHE = {}
+
 def parse_quant_infer_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--config", default="", help="Path to a yaml file specifying all eval arguments, will ignore cli arguments if specified")
@@ -83,6 +85,21 @@ def parse_quant_infer_args() -> argparse.Namespace:
     parser.add_argument("--max_new_tokens", default=256, type=int)
     parser.add_argument("--temperature", default=0.2, type=float)
     parser.add_argument("--do_sample", action="store_true")
+    parser.add_argument("--inference_engine", default="hf", choices=["hf", "vllm"],
+                        help="Inference backend. Use 'vllm' for real W4A16/packed-weight inference.")
+    parser.add_argument("--vllm_model_path", default=None, type=str,
+                        help="Path or HF id of a vLLM-loadable quantized checkpoint. "
+                             "Defaults to model_args.pretrained.")
+    parser.add_argument("--vllm_quantization", default=None, type=str,
+                        help="Optional vLLM quantization method, e.g. awq, gptq, compressed-tensors. "
+                             "Leave empty when the checkpoint config already declares it.")
+    parser.add_argument("--vllm_dtype", default="auto", type=str)
+    parser.add_argument("--vllm_tensor_parallel_size", default=1, type=int)
+    parser.add_argument("--vllm_gpu_memory_utilization", default=0.9, type=float)
+    parser.add_argument("--vllm_max_model_len", default=None, type=int)
+    parser.add_argument("--vllm_max_num_seqs", default=8, type=int)
+    parser.add_argument("--vllm_trust_remote_code", action="store_true")
+    parser.add_argument("--vllm_enforce_eager", action="store_true")
 
     
     args = parser.parse_args()
@@ -118,6 +135,32 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
     # here we load MLLMs outside of the evaluator.
     if args.model_args is None:
         args.model_args = ""
+
+    if args.inference_engine == "vllm":
+        if not args.infer_pairs or not args.save_path:
+            raise ValueError("--inference_engine vllm requires --infer_pairs and --save_path")
+        if args.w_bit != 4 or args.a_bit != 16:
+            raise ValueError("The vLLM path currently supports W4A16 only: set --w_bit 4 --a_bit 16")
+
+        quant_meta = build_quant_meta(args)
+        quant_meta.update({
+            "real_quant": True,
+            "engine": "vllm",
+            "vllm_model_path": args.vllm_model_path or parse_model_args(args.model_args).get("pretrained"),
+            "vllm_quantization": args.vllm_quantization,
+        })
+        run_vllm_inference(
+            arch=args.model,
+            infer_pairs=args.infer_pairs,
+            save_path=args.save_path,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            do_sample=args.do_sample,
+            model_args_str=args.model_args,
+            quant_meta=quant_meta,
+            args=args,
+        )
+        return
     
     ModelClass = get_model(args.model)
     lm = ModelClass.create_from_arg_string(
@@ -155,18 +198,7 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
     
     
     if args.infer_pairs and args.save_path:
-        quant_meta = {
-            "method": args.method,
-            "w_bit": args.w_bit,
-            "a_bit": args.a_bit,
-            "w_group": args.w_group,
-            "alpha": args.alpha,
-            "reweight": bool(args.reweight),
-            "distort": bool(args.distort),
-            "loss_mode": args.loss_mode,
-            "scale_path": args.scale_path,
-            "pseudo_quant": bool(args.pseudo_quant),
-        }
+        quant_meta = build_quant_meta(args)
 
         run_inference(
             arch=args.model,
@@ -184,6 +216,70 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
         )
 
 #################### inferece ######################
+def build_quant_meta(args) -> Dict[str, Any]:
+    return {
+        "method": args.method,
+        "w_bit": args.w_bit,
+        "a_bit": args.a_bit,
+        "w_group": args.w_group,
+        "alpha": args.alpha,
+        "reweight": bool(args.reweight),
+        "distort": bool(args.distort),
+        "loss_mode": args.loss_mode,
+        "scale_path": args.scale_path,
+        "pseudo_quant": bool(args.pseudo_quant),
+    }
+
+
+def split_arg_items(arg_string: str) -> List[str]:
+    items = []
+    start = 0
+    quote = None
+    depth = 0
+    for i, ch in enumerate(arg_string or ""):
+        if quote:
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            items.append(arg_string[start:i].strip())
+            start = i + 1
+    tail = (arg_string or "")[start:].strip()
+    if tail:
+        items.append(tail)
+    return [item for item in items if item]
+
+
+def parse_scalar(value: str):
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "none":
+        return None
+    return value
+
+
+def parse_model_args(arg_string: str) -> Dict[str, Any]:
+    parsed = {}
+    for item in split_arg_items(arg_string):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        parsed[key.strip()] = parse_scalar(value)
+    return parsed
+
+
 def load_pairs(path: str):
     if not os.path.exists(path):
         raise FileNotFoundError(f"--infer_pairs not found: {path}")
@@ -239,6 +335,143 @@ def open_pils(paths: List[str]):
         with Image.open(p) as im:
             imgs.append(im.convert("RGB"))
     return imgs
+
+
+def build_vllm_prompt(
+    arch: str,
+    model_path: str,
+    question: str,
+    image_paths: List[str],
+    images: List[Image.Image],
+) -> str:
+    arch = arch.lower()
+    n_img = len(images or [])
+
+    if arch in {"qwen2_vl", "qwen2_5_vl"}:
+        from transformers import AutoProcessor
+
+        processor = _PROCESSOR_CACHE.get(model_path)
+        if processor is None:
+            processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+            _PROCESSOR_CACHE[model_path] = processor
+        content = [
+            {"type": "image", "image": image_paths[i] if i < len(image_paths) else ""}
+            for i in range(n_img)
+        ]
+        content.append({"type": "text", "text": question})
+        messages = [{"role": "user", "content": content}]
+        return processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+    if arch == "internvl2":
+        image_prefix = ("<image>\n" * n_img)
+        return f"{image_prefix}{question}".strip()
+
+    if arch == "llava_onevision":
+        image_prefix = (DEFAULT_IMAGE_TOKEN + "\n") * n_img
+        return f"{image_prefix}{question}".strip()
+
+    image_prefix = (DEFAULT_IMAGE_TOKEN + "\n") * n_img
+    return f"{image_prefix}{question}".strip()
+
+
+def run_vllm_inference(
+    arch: str,
+    infer_pairs: str,
+    save_path: str,
+    max_new_tokens=256,
+    temperature=0.2,
+    do_sample=False,
+    model_args_str: str = "",
+    quant_meta: Dict[str, Any] = None,
+    args=None,
+):
+    try:
+        from vllm import LLM, SamplingParams
+    except ImportError as exc:
+        raise ImportError(
+            "vLLM is required for --inference_engine vllm. Install it with `pip install vllm` "
+            "and use a vLLM-loadable W4A16 checkpoint."
+        ) from exc
+
+    model_arg_map = parse_model_args(model_args_str)
+    model_path = args.vllm_model_path or model_arg_map.get("pretrained")
+    if not model_path:
+        raise ValueError("Provide --vllm_model_path or include pretrained=... in --model_args")
+
+    pairs = load_pairs(infer_pairs)
+    max_images = max((len(ensure_list_images(item.get("images"))) for item in pairs), default=0)
+    limit_mm_per_prompt = {"image": max_images} if max_images > 0 else None
+
+    llm_kwargs = {
+        "model": model_path,
+        "dtype": args.vllm_dtype,
+        "tensor_parallel_size": args.vllm_tensor_parallel_size,
+        "gpu_memory_utilization": args.vllm_gpu_memory_utilization,
+        "max_num_seqs": args.vllm_max_num_seqs,
+        "trust_remote_code": args.vllm_trust_remote_code,
+        "enforce_eager": args.vllm_enforce_eager,
+    }
+    if args.vllm_quantization:
+        llm_kwargs["quantization"] = args.vllm_quantization
+    if args.vllm_max_model_len is not None:
+        llm_kwargs["max_model_len"] = args.vllm_max_model_len
+    if limit_mm_per_prompt is not None:
+        llm_kwargs["limit_mm_per_prompt"] = limit_mm_per_prompt
+
+    llm = LLM(**llm_kwargs)
+    sampling_params = SamplingParams(
+        temperature=temperature if do_sample else 0.0,
+        max_tokens=max_new_tokens,
+    )
+
+    requests = []
+    item_meta = []
+    for i, item in enumerate(pairs):
+        q = item.get("question", "")
+        img_paths = ensure_list_images(item.get("images"))
+        pils = open_pils(img_paths) if img_paths else []
+        request = {
+            "prompt": build_vllm_prompt(arch, model_path, q, img_paths, pils),
+        }
+        if pils:
+            request["multi_modal_data"] = {"image": pils if len(pils) > 1 else pils[0]}
+        requests.append(request)
+        item_meta.append((item.get("id", i), q, img_paths))
+
+    generations = llm.generate(requests, sampling_params=sampling_params)
+    outputs = []
+    for (item_id, q, img_paths), generation in zip(item_meta, generations):
+        text = generation.outputs[0].text.strip() if generation.outputs else ""
+        if text.lower().startswith("assistant"):
+            text = text[len("assistant"):].lstrip(":： \n\t")
+        outputs.append({
+            "id": item_id,
+            "question": q,
+            "images": img_paths,
+            "answer": text,
+        })
+
+    export = {
+        "meta": {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "arch": arch,
+            "model_args": model_args_str,
+            "engine": "vllm",
+            "quant": quant_meta or {},
+        },
+        "results": outputs,
+    }
+
+    save_dir = os.path.dirname(save_path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+    with open(save_path, "w", encoding="utf-8") as f:
+        json.dump(export, f, ensure_ascii=False, indent=2)
+    print(f"[OK] Saved {len(outputs)} vLLM results to: {save_path}")
 
 def pick_language_model(top_model):
     m = top_model
@@ -588,7 +821,9 @@ def run_inference(
         "results": outputs
     }
 
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    save_dir = os.path.dirname(save_path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
     with open(save_path, "w", encoding="utf-8") as f:
         json.dump(export, f, ensure_ascii=False, indent=2)
     print(f"[OK] Saved {len(outputs)} results to: {save_path}")
@@ -597,4 +832,3 @@ def run_inference(
 
 if __name__ == "__main__":
     model = cli_quant()
-    
