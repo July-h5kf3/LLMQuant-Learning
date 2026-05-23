@@ -17,8 +17,25 @@
 - `inference.py`: 推理示例入口。
 - `REAL_QUANTIZATION.md`: 将 pseudo quant baseline 迁移到真实推理加速后端的设计说明。
 - `configs/`: 不同模型与量化设置的配置文件。
+- `scripts/run_w3a16_eval.sh`: 使用本机已准备好的权重和样本对比 pseudo W3A16 与 real GPTQ W3A16 推理速度。
 - `qmllm/`: 模型、数据、校准与量化方法实现。
 - `3rdparty/`: 第三方依赖项目说明。
+
+## W3A16 Speed Check
+
+在 AutoDL 服务器的实际工作目录中运行：
+
+```bash
+cd /root/autodl-tmp/LLMQuant-Learning/Code/VLM_Quant_Baseline
+bash scripts/run_w3a16_eval.sh
+```
+
+脚本会用同一份 `inference/question.json` 样本分别测试：
+
+- pseudo QIG W3A16：FP16 权重 + QIG scale + `--pseudo_quant`
+- real GPTQ W3A16：AutoGPTQ W3A16 checkpoint + vLLM `quantization=gptq`
+
+输出位于 `/root/autodl-tmp/eval/QIG/w3a16_speed/`，每条结果旁边会生成 `.time` 文件记录总耗时。
 
 ## Upstream Reference
 

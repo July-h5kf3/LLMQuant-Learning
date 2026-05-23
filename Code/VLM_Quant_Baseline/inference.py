@@ -284,6 +284,27 @@ def parse_model_args(arg_string: str) -> Dict[str, Any]:
     return parsed
 
 
+def resolve_image_path(image_path: str, pairs_path: str) -> str:
+    if os.path.exists(image_path):
+        return image_path
+
+    candidates = []
+    if not os.path.isabs(image_path):
+        candidates.append(os.path.join(os.path.dirname(pairs_path), image_path))
+        candidates.append(os.path.join(os.getcwd(), image_path))
+
+    basename = os.path.basename(image_path)
+    candidates.extend([
+        os.path.join(os.path.dirname(pairs_path), "data", basename),
+        os.path.join(os.getcwd(), "inference", "data", basename),
+    ])
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return image_path
+
+
 def load_pairs(path: str):
     if not os.path.exists(path):
         raise FileNotFoundError(f"--infer_pairs not found: {path}")
@@ -298,7 +319,7 @@ def load_pairs(path: str):
             imgs = []
         elif isinstance(imgs, tuple):
             imgs = list(imgs)
-        it["images"] = imgs
+        it["images"] = [resolve_image_path(str(img), path) for img in imgs]
 
         q = it.get("question", "")
         if not isinstance(q, str):
