@@ -132,8 +132,13 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
     if args.inference_engine == "vllm":
         if not args.infer_pairs or not args.save_path:
             raise ValueError("--inference_engine vllm requires --infer_pairs and --save_path")
-        if args.w_bit not in (3, 4, 8) or args.a_bit != 16:
-            raise ValueError("The vLLM path currently supports WNA16 only: set --w_bit 3/4/8 --a_bit 16")
+        if args.a_bit != 16:
+            raise ValueError("The vLLM path currently supports weight-only quantization: set --a_bit 16")
+        if args.vllm_quantization in {"compressed-tensors", "compressed_tensors"} and args.w_bit not in (4, 8):
+            raise ValueError(
+                "vLLM compressed-tensors WNA16 currently supports W4/W8 only. "
+                "Use a GPTQ-format checkpoint for W3A16."
+            )
 
         quant_meta = build_quant_meta(args)
         quant_meta.update({

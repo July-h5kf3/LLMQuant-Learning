@@ -1,7 +1,7 @@
 # Real Quantization Workflow
 
 This baseline keeps the original pseudo-quant search and eval path, and adds a
-real W4A16 path for vLLM-loadable checkpoints.
+real W4A16/W8A16 path for vLLM-loadable compressed-tensors checkpoints.
 
 ## Export a W4A16 Checkpoint
 
@@ -23,10 +23,13 @@ python quantize_w4a16_vllm.py \
 Notes:
 
 - The current exporter supports Qwen2-VL and Qwen2.5-VL.
-- The scheme is W4A16 with group size 128, matching vLLM's compressed-tensors
-  loading path.
+- The compressed-tensors WNA16 path supports W4/W8 with group size 128 in the
+  tested vLLM environment.
 - Vision modules and `lm_head` are excluded from weight packing by default.
 - For a full run, increase `--n_samples` once the smoke test is healthy.
+- W3A16 is not loadable through vLLM's compressed-tensors WNA16 path in the
+  tested environment: `CompressedTensorsWNA16` reports supported bits `[4, 8]`.
+  W3A16 would need a GPTQ-format checkpoint rather than this exporter.
 
 ## Run Real-Quant Inference
 

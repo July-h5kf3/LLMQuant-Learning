@@ -17,7 +17,7 @@ DEFAULT_IGNORE = ["lm_head", "re:visual.*", "re:model.visual.*", "re:.*vision_to
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Create a vLLM-loadable WNA16 checkpoint with llm-compressor."
+        description="Create a vLLM-loadable compressed-tensors WNA16 checkpoint with llm-compressor."
     )
     parser.add_argument("--model", default="qwen2_vl", choices=["qwen2_vl", "qwen2_5_vl"])
     parser.add_argument("--model_id", required=True, help="HF model id or local fp16/bf16 checkpoint path.")
@@ -30,7 +30,9 @@ def parse_args():
     parser.add_argument("--n_samples", type=int, default=512)
     parser.add_argument("--max_seq_length", type=int, default=2048)
     parser.add_argument("--question", default="What does this image show?")
-    parser.add_argument("--w_bit", type=int, default=4, choices=[3, 4, 8])
+    parser.add_argument("--w_bit", type=int, default=4, choices=[4, 8],
+                        help="Weight bits for the compressed-tensors WNA16 vLLM path. "
+                             "Current vLLM supports 4/8 here; W3 needs a GPTQ-format checkpoint.")
     parser.add_argument("--w_group", type=int, default=128)
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--seed", type=int, default=42)
