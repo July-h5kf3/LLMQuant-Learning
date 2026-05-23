@@ -291,6 +291,18 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument("--scale_path", default=None, type=str)
     parser.add_argument("--run_process", action="store_true")
     parser.add_argument("--pseudo_quant", action="store_true")
+    parser.add_argument("--real_quant", action="store_true")
+    parser.add_argument("--inference_engine", default="hf", choices=["hf", "vllm"])
+    parser.add_argument("--vllm_model_path", default=None, type=str)
+    parser.add_argument("--vllm_processor_path", default=None, type=str)
+    parser.add_argument("--vllm_quantization", default="gptq", type=str)
+    parser.add_argument("--vllm_dtype", default="float16", type=str)
+    parser.add_argument("--vllm_tensor_parallel_size", default=1, type=int)
+    parser.add_argument("--vllm_gpu_memory_utilization", default=0.9, type=float)
+    parser.add_argument("--vllm_max_model_len", default=None, type=int)
+    parser.add_argument("--vllm_max_num_seqs", default=8, type=int)
+    parser.add_argument("--vllm_trust_remote_code", action="store_true")
+    parser.add_argument("--vllm_enforce_eager", action="store_true")
     # for GPTQ
     parser.add_argument("--percdamp", default=0.01, type=float)
 
@@ -485,14 +497,35 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
     if args.model_args is None:
         args.model_args = ""
     
-    ModelClass = get_model(args.model)
-    lm = ModelClass.create_from_arg_string(
-        args.model_args,
-        {
-            "batch_size": args.batch_size,
-            "device": args.device,
-        },
-    )
+    if args.real_quant and args.inference_engine == "vllm":
+        if args.model != "qwen2_vl":
+            raise ValueError("The real-quant vLLM eval path currently supports --model qwen2_vl")
+        if not args.vllm_model_path:
+            raise ValueError("--real_quant --inference_engine vllm requires --vllm_model_path")
+        from qmllm.vllm_eval import VLLMRealQuantQwen2VL
+
+        lm = VLLMRealQuantQwen2VL(
+            pretrained=args.vllm_model_path,
+            processor_path=args.vllm_processor_path,
+            quantization=args.vllm_quantization,
+            dtype=args.vllm_dtype,
+            tensor_parallel_size=args.vllm_tensor_parallel_size,
+            gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+            max_model_len=args.vllm_max_model_len,
+            max_num_seqs=args.vllm_max_num_seqs,
+            trust_remote_code=args.vllm_trust_remote_code,
+            enforce_eager=args.vllm_enforce_eager,
+            batch_size=args.batch_size,
+        )
+    else:
+        ModelClass = get_model(args.model)
+        lm = ModelClass.create_from_arg_string(
+            args.model_args,
+            {
+                "batch_size": args.batch_size,
+                "device": args.device,
+            },
+        )
     # 
     if args.pseudo_quant:
         print("Pseudo quant...")
