@@ -76,7 +76,16 @@ run_timed() {
   if [[ "$DRY_RUN" == "1" ]]; then
     run_cmd "$@"
   else
-    /usr/bin/time -f "elapsed_sec=%e" -o "${output_path}.time" "$@" 2>&1 | tee "$log_path"
+    local start end elapsed status
+    start="$(date +%s)"
+    set +e
+    "$@" 2>&1 | tee "$log_path"
+    status="${PIPESTATUS[0]}"
+    set -e
+    end="$(date +%s)"
+    elapsed="$((end - start))"
+    printf 'elapsed_sec=%s\n' "$elapsed" > "${output_path}.time"
+    return "$status"
   fi
 }
 
