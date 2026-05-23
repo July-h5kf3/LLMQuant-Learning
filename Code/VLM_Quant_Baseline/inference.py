@@ -17,11 +17,6 @@ warnings.simplefilter("ignore", category=DeprecationWarning)
 
 from typing import Union, List, Dict, Any
 
-from qmllm.quantization.quant_wrapper import qwrapper
-from qmllm.models import get_process_model
-from qmllm.calibration.pileval import get_calib_dataset
-from qmllm.calibration.coco_vl import get_multimodal_calib_dataset
-
 try:
     from llava.constants import DEFAULT_IMAGE_TOKEN
 except Exception:
@@ -161,6 +156,10 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
         return
 
     from lmms_eval.models import get_model
+    from qmllm.calibration.coco_vl import get_multimodal_calib_dataset
+    from qmllm.calibration.pileval import get_calib_dataset
+    from qmllm.models import get_process_model
+    from qmllm.quantization.quant_wrapper import qwrapper
 
     ModelClass = get_model(args.model)
     lm = ModelClass.create_from_arg_string(
@@ -389,6 +388,8 @@ def run_vllm_inference(
     quant_meta: Dict[str, Any] = None,
     args=None,
 ):
+    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+
     try:
         from vllm import LLM, SamplingParams
     except ImportError as exc:
