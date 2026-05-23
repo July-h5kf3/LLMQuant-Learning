@@ -20,7 +20,8 @@ VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-8}"
 REAL_CHECKPOINT="${REAL_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq-smoke}"
 FP16_CHECKPOINT="${FP16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct}"
 PSEUDO_MODEL_ARGS="${PSEUDO_MODEL_ARGS:-pretrained=${FP16_CHECKPOINT},use_flash_attention_2=False}"
-SCALE_PATH="${SCALE_PATH:-/root/autodl-tmp/scale/QIG/qig/qwen2_vl_7b_w3a16.pt}"
+PSEUDO_METHOD="${PSEUDO_METHOD:-rtn}"
+SCALE_PATH="${SCALE_PATH:-}"
 
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -94,19 +95,20 @@ main() {
   setup_env
 
   run_timed \
-    "pseudo QIG W3A16 HF inference" \
-    "${EVAL_ROOT}/pseudo_qig_w3a16.json" \
-    "${LOG_ROOT}/pseudo_qig_w3a16.log" \
+    "pseudo ${PSEUDO_METHOD} W3A16 HF inference" \
+    "${EVAL_ROOT}/pseudo_${PSEUDO_METHOD}_w3a16.json" \
+    "${LOG_ROOT}/pseudo_${PSEUDO_METHOD}_w3a16.log" \
     python -W ignore inference.py \
       --model qwen2_vl \
       --model_args "$PSEUDO_MODEL_ARGS" \
-      --method qig \
+      --method "$PSEUDO_METHOD" \
+      --calib_data None \
       --pseudo_quant \
       --w_bit 3 \
       --a_bit 16 \
       --scale_path "$SCALE_PATH" \
       --infer_pairs "$INFER_PAIRS" \
-      --save_path "${EVAL_ROOT}/pseudo_qig_w3a16.json" \
+      --save_path "${EVAL_ROOT}/pseudo_${PSEUDO_METHOD}_w3a16.json" \
       --max_new_tokens "$MAX_NEW_TOKENS" \
       --temperature "$TEMPERATURE"
 
