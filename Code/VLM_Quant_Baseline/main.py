@@ -14,6 +14,7 @@ import yaml
 warnings.simplefilter("ignore", category=DeprecationWarning)
 
 import hashlib
+import inspect
 from pathlib import Path
 from typing import Union
 
@@ -553,37 +554,40 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
 
         qwrapper(process_model, prompt_inputs, prompt_kwargs, args)
 
-    results = evaluator.simple_evaluate(
-        # model=args.model,
-        # lm=lm,
-        model=lm,
-        model_args=args.model_args,
-        tasks=task_names,
-        num_fewshot=args.num_fewshot,
-        batch_size=args.batch_size,
-        max_batch_size=args.max_batch_size,
-        device=args.device,
-        use_cache=args.use_cache,
-        limit=args.limit,
-        check_integrity=args.check_integrity,
-        write_out=args.write_out,
-        log_samples=args.log_samples,
-        evaluation_tracker=evaluation_tracker,
-        system_instruction=args.system_instruction,
-        apply_chat_template=args.apply_chat_template,
-        fewshot_as_multiturn=args.fewshot_as_multiturn,
-        gen_kwargs=args.gen_kwargs,
-        task_manager=task_manager,
-        verbosity=args.verbosity,
-        predict_only=args.predict_only,
-        random_seed=args.seed[0],
-        numpy_random_seed=args.seed[1],
-        torch_random_seed=args.seed[2],
-        fewshot_random_seed=args.seed[3],
-        cli_args=args,
-        datetime_str=datetime_str,
+    evaluate_kwargs = {
+        "model_args": args.model_args,
+        "tasks": task_names,
+        "num_fewshot": args.num_fewshot,
+        "batch_size": args.batch_size,
+        "max_batch_size": args.max_batch_size,
+        "device": args.device,
+        "use_cache": args.use_cache,
+        "limit": args.limit,
+        "check_integrity": args.check_integrity,
+        "write_out": args.write_out,
+        "log_samples": args.log_samples,
+        "evaluation_tracker": evaluation_tracker,
+        "system_instruction": args.system_instruction,
+        "apply_chat_template": args.apply_chat_template,
+        "fewshot_as_multiturn": args.fewshot_as_multiturn,
+        "gen_kwargs": args.gen_kwargs,
+        "task_manager": task_manager,
+        "verbosity": args.verbosity,
+        "predict_only": args.predict_only,
+        "random_seed": args.seed[0],
+        "numpy_random_seed": args.seed[1],
+        "torch_random_seed": args.seed[2],
+        "fewshot_random_seed": args.seed[3],
+        "cli_args": args,
+        "datetime_str": datetime_str,
         **request_caching_args,
-    )
+    }
+    if "lm" in inspect.signature(evaluator.simple_evaluate).parameters:
+        evaluate_kwargs.update({"model": args.model, "lm": lm})
+    else:
+        evaluate_kwargs.update({"model": lm})
+
+    results = evaluator.simple_evaluate(**evaluate_kwargs)
 
     if results is not None:
         if args.log_samples:
