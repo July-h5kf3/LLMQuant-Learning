@@ -102,7 +102,6 @@ main() {
       --model qwen2_vl \
       --model_args "$PSEUDO_MODEL_ARGS" \
       --method "$PSEUDO_METHOD" \
-      --calib_data None \
       --pseudo_quant \
       --w_bit 3 \
       --a_bit 16 \
