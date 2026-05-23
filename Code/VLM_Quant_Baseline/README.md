@@ -18,6 +18,7 @@
 - `REAL_QUANTIZATION.md`: 将 pseudo quant baseline 迁移到真实推理加速后端的设计说明。
 - `configs/`: 不同模型与量化设置的配置文件。
 - `scripts/run_w3a16_eval.sh`: 使用本机已准备好的权重和样本对比 pseudo W3A16 与 real GPTQ W3A16 推理速度。
+- `scripts/run_qig_w3a16_real_vllm_eval.sh`: 使用 real GPTQ W3A16 checkpoint 和 vLLM 后端运行正式 lmms-eval/QIG 任务。
 - `qmllm/`: 模型、数据、校准与量化方法实现。
 - `3rdparty/`: 第三方依赖项目说明。
 
@@ -36,6 +37,21 @@ bash scripts/run_w3a16_eval.sh
 - real GPTQ W3A16：AutoGPTQ W3A16 checkpoint + vLLM `quantization=gptq`
 
 输出位于 `/root/autodl-tmp/eval/QIG/w3a16_speed/`，每条结果旁边会生成 `.time` 文件记录总耗时。
+
+## Real W3A16 Eval
+
+在 AutoDL 服务器运行正式 lmms-eval 任务：
+
+```bash
+cd /root/autodl-tmp/LLMQuant-Learning/Code/VLM_Quant_Baseline
+bash scripts/run_qig_w3a16_real_vllm_eval.sh
+```
+
+默认任务为 `mmmu_val,vizwiz_vqa_val,chartqa,ai2d,scienceqa_img`。可先做 smoke test：
+
+```bash
+LIMIT=1 TASKS=mmmu_val bash scripts/run_qig_w3a16_real_vllm_eval.sh
+```
 
 ## Upstream Reference
 
