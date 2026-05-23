@@ -666,7 +666,14 @@ def auto_scale_block(
 # =========================
 @torch.no_grad()
 def apply_scale(module, scales_list, input_feat_dict=None):
+    def _resolve_name(name):
+        if name.startswith("model.layers.") and hasattr(getattr(module, "model", None), "language_model"):
+            return name.replace("model.layers.", "model.language_model.layers.", 1)
+        return name
+
     for prev_op_name, layer_names, scales in scales_list:
+        prev_op_name = _resolve_name(prev_op_name)
+        layer_names = [_resolve_name(name) for name in layer_names]
         prev_op = get_op_by_name(module, prev_op_name)
         layers = [get_op_by_name(module, name) for name in layer_names]
 
