@@ -125,6 +125,14 @@ class VLLMRealQuantQwen2VL(lmms):
             request["multi_modal_data"] = {"image": mm_images if len(mm_images) > 1 else mm_images[0]}
         return request
 
+    def _generate(self, requests, sampling_params):
+        try:
+            return self.llm.generate(requests, sampling_params=sampling_params, use_tqdm=False)
+        except TypeError as exc:
+            if "use_tqdm" not in str(exc):
+                raise
+            return self.llm.generate(requests, sampling_params=sampling_params)
+
     def generate_until(self, requests: List[Instance]) -> List[str]:
         from vllm import SamplingParams
 
@@ -167,7 +175,7 @@ class VLLMRealQuantQwen2VL(lmms):
                 self._build_request(context, doc_to_visual, doc_id, task, split)
                 for context, doc_to_visual, doc_id, task, split in zip(contexts, doc_to_visuals, doc_ids, tasks, splits)
             ]
-            outputs = self.llm.generate(vllm_requests, sampling_params=sampling_params)
+            outputs = self._generate(vllm_requests, sampling_params)
 
             for output, context in zip(outputs, contexts):
                 ans = output.outputs[0].text.strip() if output.outputs else ""
