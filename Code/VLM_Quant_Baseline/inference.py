@@ -17,8 +17,6 @@ warnings.simplefilter("ignore", category=DeprecationWarning)
 
 from typing import Union, List, Dict, Any
 
-from lmms_eval.models import get_model
-
 from qmllm.quantization.quant_wrapper import qwrapper
 from qmllm.models import get_process_model
 from qmllm.calibration.pileval import get_calib_dataset
@@ -161,7 +159,9 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
             args=args,
         )
         return
-    
+
+    from lmms_eval.models import get_model
+
     ModelClass = get_model(args.model)
     lm = ModelClass.create_from_arg_string(
         args.model_args,
