@@ -47,6 +47,12 @@ class Qwen2_VL(BaseModel):
     def fetch_llm(self):
         return self.model.language_model
 
+    def fetch_embed_tokens(self):
+        try:
+            return self.model.model.embed_tokens
+        except AttributeError:
+            return self.model.model.language_model.embed_tokens
+
     def fetch_proj(self):
         return self.model.mlp1
 
@@ -378,7 +384,7 @@ class Qwen2_VL(BaseModel):
 
         # generate input embeddings
         # copied from the Qwen2VLForConditionalGeneration.forward
-        inputs_embeds = self.model.model.embed_tokens(input_ids) 
+        inputs_embeds = self.fetch_embed_tokens()(input_ids)
         pixel_values = pixel_values.type(self.model.visual.get_dtype())
         image_embeds = self.model.visual(pixel_values, grid_thw=image_grid_thw)
         image_mask = (input_ids == self.model.config.image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
