@@ -79,7 +79,7 @@ def parse_quant_infer_args() -> argparse.Namespace:
     parser.add_argument("--temperature", default=0.2, type=float)
     parser.add_argument("--do_sample", action="store_true")
     parser.add_argument("--inference_engine", default="hf", choices=["hf", "vllm"],
-                        help="Inference backend. Use 'vllm' for real W4A16/packed-weight inference.")
+                        help="Inference backend. Use 'vllm' for real WNA16/packed-weight inference.")
     parser.add_argument("--vllm_model_path", default=None, type=str,
                         help="Path or HF id of a vLLM-loadable quantized checkpoint. "
                              "Defaults to model_args.pretrained.")
@@ -132,8 +132,8 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
     if args.inference_engine == "vllm":
         if not args.infer_pairs or not args.save_path:
             raise ValueError("--inference_engine vllm requires --infer_pairs and --save_path")
-        if args.w_bit != 4 or args.a_bit != 16:
-            raise ValueError("The vLLM path currently supports W4A16 only: set --w_bit 4 --a_bit 16")
+        if args.w_bit not in (3, 4, 8) or args.a_bit != 16:
+            raise ValueError("The vLLM path currently supports WNA16 only: set --w_bit 3/4/8 --a_bit 16")
 
         quant_meta = build_quant_meta(args)
         quant_meta.update({

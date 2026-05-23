@@ -17,7 +17,7 @@ DEFAULT_IGNORE = ["lm_head", "re:visual.*", "re:model.visual.*", "re:.*vision_to
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Create a vLLM-loadable W4A16 checkpoint with llm-compressor."
+        description="Create a vLLM-loadable WNA16 checkpoint with llm-compressor."
     )
     parser.add_argument("--model", default="qwen2_vl", choices=["qwen2_vl", "qwen2_5_vl"])
     parser.add_argument("--model_id", required=True, help="HF model id or local fp16/bf16 checkpoint path.")
@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--n_samples", type=int, default=512)
     parser.add_argument("--max_seq_length", type=int, default=2048)
     parser.add_argument("--question", default="What does this image show?")
+    parser.add_argument("--w_bit", type=int, default=4, choices=[3, 4, 8])
     parser.add_argument("--w_group", type=int, default=128)
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--seed", type=int, default=42)
@@ -174,7 +175,7 @@ def data_collator(batch):
 def main():
     args = parse_args()
     if args.w_group != 128:
-        raise ValueError("llm-compressor scheme='W4A16' uses group size 128; keep --w_group 128 for now.")
+        raise ValueError("The vLLM WNA16 path is configured for group size 128; keep --w_group 128 for now.")
 
     try:
         from llmcompressor import oneshot
@@ -182,6 +183,12 @@ def main():
             from llmcompressor.modifiers.gptq import GPTQModifier
         except ImportError:
             from llmcompressor.modifiers.quantization import GPTQModifier
+        from compressed_tensors.quantization import (
+            QuantizationArgs,
+            QuantizationScheme,
+            QuantizationStrategy,
+            QuantizationType,
+        )
     except ImportError as exc:
         raise ImportError("Install llm-compressor first: `pip install llmcompressor`.") from exc
 
@@ -207,10 +214,19 @@ def main():
     tokenize = make_tokenizer_fn(processor, args.max_seq_length, args.question)
     ds = ds.map(tokenize, remove_columns=ds.column_names)
 
+    weight_scheme = QuantizationScheme(
+        targets=["Linear"],
+        weights=QuantizationArgs(
+            num_bits=args.w_bit,
+            type=QuantizationType.INT,
+            symmetric=True,
+            group_size=args.w_group,
+            strategy=QuantizationStrategy.GROUP,
+        ),
+    )
     recipe = [
         GPTQModifier(
-            targets="Linear",
-            scheme="W4A16",
+            config_groups={"group_0": weight_scheme},
             sequential_targets=[sequential_target],
             ignore=DEFAULT_IGNORE,
         )
@@ -252,7 +268,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     model.save_pretrained(args.output_dir, save_compressed=True)
     processor.save_pretrained(args.output_dir)
-    print(f"[OK] Saved vLLM W4A16 checkpoint to: {args.output_dir}")
+    print(f"[OK] Saved vLLM W{args.w_bit}A16 checkpoint to: {args.output_dir}")
 
 
 if __name__ == "__main__":
