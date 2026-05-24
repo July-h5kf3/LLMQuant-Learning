@@ -46,6 +46,7 @@ def load_model_and_processor(
     device_map: str = "auto",
     trust_remote_code: bool = True,
     local_files_only: bool = True,
+    attn_implementation: str | None = None,
     **kwargs: Any,
 ) -> tuple[Any, Any]:
     """
@@ -82,6 +83,8 @@ def load_model_and_processor(
             "device_map": device_map,
             **kwargs,
         }
+        if attn_implementation is not None:
+            model_kwargs["attn_implementation"] = attn_implementation
         if quantization_config is not None:
             model_kwargs["quantization_config"] = quantization_config
         model = model_cls.from_pretrained(model_id_or_path, **model_kwargs)

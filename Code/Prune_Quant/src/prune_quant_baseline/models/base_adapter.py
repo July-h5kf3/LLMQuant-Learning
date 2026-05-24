@@ -18,3 +18,8 @@ class MLLMAdapter(ABC):
     @abstractmethod
     def build_inputs_embeds(self, model: Any, inputs: dict):
         raise NotImplementedError
+
+    def build_position_ids(self, model: Any, inputs: dict):
+        """Optionally build model-specific position ids before pruning."""
+
+        return inputs.get("position_ids")

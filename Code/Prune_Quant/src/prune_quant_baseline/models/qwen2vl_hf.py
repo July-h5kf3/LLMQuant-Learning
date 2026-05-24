@@ -1,5 +1,6 @@
 from typing import Any
 
+import torch
 from PIL import Image
 
 from prune_quant_baseline.core.datatypes import VisualTokenMeta
@@ -50,10 +51,70 @@ class Qwen2VLHFAdapter(MLLMAdapter):
             inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in inputs.items()}
         return dict(inputs)
 
+    def prepare_teacher_forcing_inputs(
+        self,
+        processor: Any,
+        sample: dict,
+        answer: str,
+        device: str | torch.device | None = None,
+    ) -> tuple[dict, int]:
+        """Prepare prompt+answer inputs and return the answer start offset."""
+
+        prompt = _sample_prompt(sample)
+        image = _sample_image(sample)
+        if hasattr(processor, "apply_chat_template"):
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+            prompt_text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            prompt_text = prompt
+        prompt_inputs = processor(images=image, text=prompt_text, return_tensors="pt")
+        answer_start = int(prompt_inputs["input_ids"].shape[-1])
+        combined_inputs = processor(images=image, text=prompt_text + answer, return_tensors="pt")
+        if device is not None:
+            combined_inputs = {
+                key: value.to(device) if hasattr(value, "to") else value for key, value in combined_inputs.items()
+            }
+        return dict(combined_inputs), answer_start
+
     def get_visual_token_meta(self, model: Any, inputs: dict) -> VisualTokenMeta:
-        raise NotImplementedError(
-            "Reliable Qwen2-VL visual-token position extraction must be implemented against the remote HF model. "
-            "Preserve image_grid_thw, video_grid_thw, rope_deltas, and gather existing position_ids after pruning."
+        if "input_ids" not in inputs:
+            raise ValueError("Qwen2-VL visual-token metadata requires input_ids.")
+        input_ids = inputs["input_ids"]
+        if input_ids.shape[0] != 1:
+            raise ValueError(f"Qwen2VLHFAdapter currently supports B=1, got B={input_ids.shape[0]}.")
+        image_token_id = getattr(model.config, "image_token_id", None)
+        if image_token_id is None:
+            raise ValueError("model.config.image_token_id is missing; cannot locate Qwen2-VL visual tokens.")
+        ids = input_ids[0]
+        visual_indices = torch.nonzero(ids == image_token_id, as_tuple=False).flatten().to(dtype=torch.long)
+        if visual_indices.numel() == 0:
+            raise ValueError("No Qwen2-VL image tokens found in input_ids.")
+        special_ids = {
+            getattr(model.config, "image_token_id", None),
+            getattr(model.config, "video_token_id", None),
+            getattr(model.config, "vision_start_token_id", None),
+            getattr(model.config, "vision_end_token_id", None),
+        }
+        special_ids = {int(token_id) for token_id in special_ids if token_id is not None}
+        text_mask = torch.ones_like(ids, dtype=torch.bool)
+        text_mask[visual_indices] = False
+        for token_id in special_ids:
+            text_mask &= ids != token_id
+        text_indices = torch.nonzero(text_mask, as_tuple=False).flatten().to(dtype=torch.long)
+        return VisualTokenMeta(
+            visual_indices=visual_indices,
+            text_indices=text_indices,
+            image_grid_thw=inputs.get("image_grid_thw"),
+            video_grid_thw=inputs.get("video_grid_thw"),
+            rope_deltas=inputs.get("rope_deltas"),
         )
 
     def build_inputs_embeds(self, model: Any, inputs: dict):
@@ -61,4 +122,33 @@ class Qwen2VLHFAdapter(MLLMAdapter):
             return inputs["inputs_embeds"]
         if "input_ids" not in inputs:
             raise ValueError("inputs must include input_ids or inputs_embeds.")
-        return model.get_input_embeddings()(inputs["input_ids"])
+        model_core = getattr(model, "model", model)
+        inputs_embeds = model_core.get_input_embeddings()(inputs["input_ids"])
+        if inputs.get("pixel_values") is not None:
+            image_features = model_core.get_image_features(inputs["pixel_values"], inputs.get("image_grid_thw"))
+            image_features = torch.cat(image_features, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
+            image_mask, _ = model_core.get_placeholder_mask(
+                inputs["input_ids"], inputs_embeds=inputs_embeds, image_features=image_features
+            )
+            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_features)
+        if inputs.get("pixel_values_videos") is not None:
+            video_features = model_core.get_video_features(inputs["pixel_values_videos"], inputs.get("video_grid_thw"))
+            video_features = torch.cat(video_features, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
+            _, video_mask = model_core.get_placeholder_mask(
+                inputs["input_ids"], inputs_embeds=inputs_embeds, video_features=video_features
+            )
+            inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_features)
+        return inputs_embeds
+
+    def build_position_ids(self, model: Any, inputs: dict):
+        if inputs.get("position_ids") is not None:
+            return inputs["position_ids"]
+        model_core = getattr(model, "model", model)
+        position_ids, rope_deltas = model_core.get_rope_index(
+            inputs.get("input_ids"),
+            inputs.get("image_grid_thw"),
+            inputs.get("video_grid_thw"),
+            inputs.get("attention_mask"),
+        )
+        inputs["rope_deltas"] = rope_deltas
+        return position_ids

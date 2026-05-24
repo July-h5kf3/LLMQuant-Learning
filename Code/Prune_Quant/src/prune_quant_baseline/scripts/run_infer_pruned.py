@@ -7,7 +7,13 @@ from prune_quant_baseline.core.config import load_config
 from prune_quant_baseline.core.logging_utils import configure_logging, get_logger
 from prune_quant_baseline.models.llava_onevision_hf import LlavaOneVisionHFAdapter
 from prune_quant_baseline.models.qwen2vl_hf import Qwen2VLHFAdapter
+from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, compute_answer_logprob_target
 from prune_quant_baseline.pruners.attention_proxy import AttentionProxyPruner
+from prune_quant_baseline.pruners.token_gather import (
+    build_keep_indices,
+    gather_sequence_tensors,
+    select_topk_visual_tokens,
+)
 from prune_quant_baseline.quant.loaders import load_model_and_processor
 
 
@@ -29,6 +35,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-map")
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--limit", type=int, help="Optional max number of samples to process.")
+    parser.add_argument("--attn-implementation", default="eager")
+    parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
+    parser.add_argument("--allow-vanilla-fallback", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -55,6 +64,9 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "device_map": args.device_map or model.get("device_map", "auto"),
         "max_new_tokens": args.max_new_tokens or inference.get("max_new_tokens", 128),
         "limit": args.limit,
+        "attn_implementation": args.attn_implementation,
+        "gae_answer_source": args.gae_answer_source,
+        "allow_vanilla_fallback": args.allow_vanilla_fallback,
         "trust_remote_code": model.get("trust_remote_code", True),
         "local_files_only": model.get("local_files_only", True),
     }
@@ -71,6 +83,8 @@ def _make_adapter(model_type: str):
 def _make_pruner(name: str):
     if name == "attention_proxy":
         return AttentionProxyPruner()
+    if name == "gae_oracle":
+        return GAEOraclePruner()
     raise NotImplementedError(f"Pruner {name!r} is not implemented for first-stage remote inference.")
 
 
@@ -105,6 +119,115 @@ def _decode_prediction(processor: Any, generated_ids: Any, input_len: int | None
     raise ValueError("Processor does not provide decode or batch_decode.")
 
 
+def _generate_vanilla(model: Any, processor: Any, inputs: dict[str, Any], max_new_tokens: int) -> str:
+    input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else None
+    with __import__("torch").no_grad():
+        generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    return _decode_prediction(processor, generated_ids, input_len)
+
+
+def _build_pruned_generation_inputs(
+    *,
+    model: Any,
+    adapter: Any,
+    inputs: dict[str, Any],
+    scores: Any,
+    retention_ratio: float,
+    min_keep: int,
+) -> tuple[dict[str, Any], int, int]:
+    import torch
+
+    meta = adapter.get_visual_token_meta(model, inputs)
+    if scores.numel() != meta.visual_indices.numel():
+        raise ValueError(
+            f"Score count {scores.numel()} does not match visual token count {meta.visual_indices.numel()}."
+        )
+    kept_visual = select_topk_visual_tokens(
+        meta.visual_indices,
+        scores.to(meta.visual_indices.device),
+        retention_ratio=retention_ratio,
+        min_keep=min_keep,
+    )
+    keep_indices = build_keep_indices(
+        seq_len=inputs["input_ids"].shape[-1],
+        visual_indices=meta.visual_indices,
+        kept_visual_indices=kept_visual,
+        device=inputs["input_ids"].device,
+    )
+    with torch.no_grad():
+        inputs_embeds = adapter.build_inputs_embeds(model, inputs)
+        position_ids = adapter.build_position_ids(model, inputs)
+    pruned_embeds, pruned_mask, pruned_pos = gather_sequence_tensors(
+        inputs_embeds=inputs_embeds,
+        keep_indices=keep_indices,
+        attention_mask=inputs.get("attention_mask"),
+        position_ids=position_ids,
+    )
+    gen_inputs = {
+        "inputs_embeds": pruned_embeds,
+        "attention_mask": pruned_mask,
+        "position_ids": pruned_pos,
+    }
+    gen_inputs = {key: value for key, value in gen_inputs.items() if value is not None}
+    return gen_inputs, int(meta.visual_indices.numel()), int(kept_visual.numel())
+
+
+def _score_attention_proxy(model: Any, pruner: AttentionProxyPruner, inputs: dict[str, Any], meta: Any):
+    import torch
+
+    with torch.no_grad():
+        outputs = model(**inputs, output_attentions=True, use_cache=False)
+    return pruner.score(attentions=outputs.attentions, meta=meta)
+
+
+def _freeze_parameters(model: Any) -> None:
+    for param in model.parameters():
+        param.requires_grad_(False)
+
+
+def _score_gae_oracle(
+    *,
+    model: Any,
+    processor: Any,
+    adapter: Any,
+    pruner: GAEOraclePruner,
+    sample: dict[str, Any],
+    answer: str,
+) -> Any:
+    import torch
+
+    _freeze_parameters(model)
+    device = next(model.parameters()).device
+    teacher_inputs, answer_start = adapter.prepare_teacher_forcing_inputs(processor, sample, answer, device=device)
+    teacher_meta = adapter.get_visual_token_meta(model, teacher_inputs)
+    with torch.no_grad():
+        inputs_embeds = adapter.build_inputs_embeds(model, teacher_inputs)
+        position_ids = adapter.build_position_ids(model, teacher_inputs)
+    inputs_embeds = inputs_embeds.detach().requires_grad_(True)
+    model.zero_grad(set_to_none=True)
+    outputs = model(
+        inputs_embeds=inputs_embeds,
+        attention_mask=teacher_inputs.get("attention_mask"),
+        position_ids=position_ids,
+        output_attentions=True,
+        use_cache=False,
+    )
+    if outputs.attentions is None:
+        raise ValueError("Model did not return attentions; use attn_implementation='eager'.")
+    for attn in outputs.attentions:
+        if attn is not None and attn.requires_grad:
+            attn.retain_grad()
+    target, query_indices = compute_answer_logprob_target(
+        logits=outputs.logits,
+        input_ids=teacher_inputs["input_ids"],
+        answer_start=answer_start,
+    )
+    target.backward()
+    scores = pruner.score(attentions=outputs.attentions, meta=teacher_meta, query_indices=query_indices)
+    model.zero_grad(set_to_none=True)
+    return scores
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     configure_logging(args.log_level)
@@ -121,9 +244,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         device_map=cfg["device_map"],
         trust_remote_code=cfg["trust_remote_code"],
         local_files_only=cfg["local_files_only"],
+        attn_implementation=cfg["attn_implementation"],
     )
+    model.eval()
     adapter = _make_adapter(cfg["model_type"])
-    _make_pruner(cfg["pruner"])
+    pruner = _make_pruner(cfg["pruner"])
 
     output_path = Path(cfg["output_jsonl"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,7 +259,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             prompt = sample.get("prompt") or sample.get("question") or sample.get("text") or ""
             inputs = adapter.prepare_inputs(processor, sample)
             inputs = _move_inputs_to_model_device(model, inputs)
-            input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else None
 
             pruning_applied = False
             num_visual_tokens_before = None
@@ -142,11 +266,41 @@ def main(argv: Sequence[str] | None = None) -> None:
             try:
                 meta = adapter.get_visual_token_meta(model, inputs)
                 num_visual_tokens_before = int(meta.visual_indices.numel())
-            except NotImplementedError as exc:
-                LOGGER.warning("Pruning metadata unavailable; falling back to vanilla generation: %s", exc)
-
-            generated_ids = model.generate(**inputs, max_new_tokens=cfg["max_new_tokens"])
-            prediction = _decode_prediction(processor, generated_ids, input_len)
+                if isinstance(pruner, AttentionProxyPruner):
+                    scores = _score_attention_proxy(model, pruner, inputs, meta)
+                elif isinstance(pruner, GAEOraclePruner):
+                    answer = str(sample.get("answer") or "").strip()
+                    if cfg["gae_answer_source"] == "generated" or not answer:
+                        LOGGER.info("Generating oracle replay answer for sample %s.", sample.get("id", row_idx))
+                        answer = _generate_vanilla(model, processor, inputs, cfg["max_new_tokens"])
+                    if not answer:
+                        raise ValueError("GAE oracle requires a non-empty sample answer or generated answer.")
+                    scores = _score_gae_oracle(
+                        model=model,
+                        processor=processor,
+                        adapter=adapter,
+                        pruner=pruner,
+                        sample=sample,
+                        answer=answer,
+                    )
+                else:
+                    raise NotImplementedError(f"Unsupported pruner type: {type(pruner)!r}")
+                pruned_inputs, num_visual_tokens_before, num_visual_tokens_after = _build_pruned_generation_inputs(
+                    model=model,
+                    adapter=adapter,
+                    inputs=inputs,
+                    scores=scores,
+                    retention_ratio=float(cfg["retention_ratio"]),
+                    min_keep=int(cfg["min_keep"]),
+                )
+                generated_ids = model.generate(**pruned_inputs, max_new_tokens=cfg["max_new_tokens"])
+                prediction = _decode_prediction(processor, generated_ids, input_len=None)
+                pruning_applied = True
+            except Exception as exc:
+                if not cfg["allow_vanilla_fallback"]:
+                    raise
+                LOGGER.warning("Pruned generation failed; falling back to vanilla generation: %s", exc)
+                prediction = _generate_vanilla(model, processor, inputs, cfg["max_new_tokens"])
             record = {
                 **sample,
                 "id": sample.get("id", str(row_idx)),
