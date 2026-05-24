@@ -28,6 +28,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype")
     parser.add_argument("--device-map")
     parser.add_argument("--max-new-tokens", type=int)
+    parser.add_argument("--limit", type=int, help="Optional max number of samples to process.")
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -53,6 +54,7 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "dtype": args.dtype or model.get("dtype", "bfloat16"),
         "device_map": args.device_map or model.get("device_map", "auto"),
         "max_new_tokens": args.max_new_tokens or inference.get("max_new_tokens", 128),
+        "limit": args.limit,
         "trust_remote_code": model.get("trust_remote_code", True),
         "local_files_only": model.get("local_files_only", True),
     }
@@ -73,10 +75,34 @@ def _make_pruner(name: str):
 
 
 def _read_jsonl(path: str | Path):
-    with Path(path).open("r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                yield json.loads(line)
+    text = Path(path).read_text(encoding="utf-8").strip()
+    if not text:
+        return
+    if text.startswith("["):
+        for item in json.loads(text):
+            yield item
+        return
+    for line in text.splitlines():
+        if line.strip():
+            yield json.loads(line)
+
+
+def _move_inputs_to_model_device(model: Any, inputs: dict[str, Any]) -> dict[str, Any]:
+    try:
+        device = next(model.parameters()).device
+    except StopIteration:
+        return inputs
+    return {key: value.to(device) if hasattr(value, "to") else value for key, value in inputs.items()}
+
+
+def _decode_prediction(processor: Any, generated_ids: Any, input_len: int | None) -> str:
+    if input_len is not None:
+        generated_ids = generated_ids[:, input_len:]
+    if hasattr(processor, "batch_decode"):
+        return processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+    if hasattr(processor, "decode"):
+        return processor.decode(generated_ids[0], skip_special_tokens=True).strip()
+    raise ValueError("Processor does not provide decode or batch_decode.")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -102,21 +128,34 @@ def main(argv: Sequence[str] | None = None) -> None:
     output_path = Path(cfg["output_jsonl"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as out_f:
-        for sample in _read_jsonl(cfg["input_jsonl"]):
-            prompt = sample.get("prompt", "")
+        for row_idx, sample in enumerate(_read_jsonl(cfg["input_jsonl"])):
+            if cfg["limit"] is not None and row_idx >= cfg["limit"]:
+                break
+            prompt = sample.get("prompt") or sample.get("question") or sample.get("text") or ""
             inputs = adapter.prepare_inputs(processor, sample)
-            meta = adapter.get_visual_token_meta(model, inputs)
-            raise NotImplementedError(
-                "End-to-end compressed generate is not implemented until the adapter can reliably "
-                "locate visual token positions and the target HF model accepts compressed inputs_embeds."
-            )
+            inputs = _move_inputs_to_model_device(model, inputs)
+            input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else None
+
+            pruning_applied = False
+            num_visual_tokens_before = None
+            num_visual_tokens_after = None
+            try:
+                meta = adapter.get_visual_token_meta(model, inputs)
+                num_visual_tokens_before = int(meta.visual_indices.numel())
+            except NotImplementedError as exc:
+                LOGGER.warning("Pruning metadata unavailable; falling back to vanilla generation: %s", exc)
+
+            generated_ids = model.generate(**inputs, max_new_tokens=cfg["max_new_tokens"])
+            prediction = _decode_prediction(processor, generated_ids, input_len)
             record = {
-                "id": sample.get("id"),
+                **sample,
+                "id": sample.get("id", str(row_idx)),
                 "prompt": prompt,
-                "prediction": "",
+                "prediction": prediction,
                 "retention_ratio": cfg["retention_ratio"],
-                "num_visual_tokens_before": int(meta.visual_indices.numel()),
-                "num_visual_tokens_after": None,
+                "num_visual_tokens_before": num_visual_tokens_before,
+                "num_visual_tokens_after": num_visual_tokens_after,
+                "pruning_applied": pruning_applied,
                 "quant_method": cfg["quant_method"],
                 "model_type": cfg["model_type"],
             }
