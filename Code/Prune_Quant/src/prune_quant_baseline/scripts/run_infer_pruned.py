@@ -119,11 +119,81 @@ def _decode_prediction(processor: Any, generated_ids: Any, input_len: int | None
     raise ValueError("Processor does not provide decode or batch_decode.")
 
 
+def _decode_token_ids(processor: Any, token_ids: Any) -> str:
+    if hasattr(processor, "batch_decode"):
+        return processor.batch_decode(token_ids, skip_special_tokens=True)[0].strip()
+    if hasattr(processor, "decode"):
+        return processor.decode(token_ids[0], skip_special_tokens=True).strip()
+    raise ValueError("Processor does not provide decode or batch_decode.")
+
+
 def _generate_vanilla(model: Any, processor: Any, inputs: dict[str, Any], max_new_tokens: int) -> str:
     input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else None
     with __import__("torch").no_grad():
         generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     return _decode_prediction(processor, generated_ids, input_len)
+
+
+def _generate_from_pruned_inputs(
+    *,
+    model: Any,
+    processor: Any,
+    pruned_inputs: dict[str, Any],
+    max_new_tokens: int,
+) -> str:
+    """Greedy decode from a compressed prompt represented by inputs_embeds."""
+
+    import torch
+
+    generated: list[torch.Tensor] = []
+    attention_mask = pruned_inputs.get("attention_mask")
+    position_ids = pruned_inputs.get("position_ids")
+    if attention_mask is None:
+        attention_mask = torch.ones(
+            pruned_inputs["inputs_embeds"].shape[:2],
+            dtype=torch.long,
+            device=pruned_inputs["inputs_embeds"].device,
+        )
+    with torch.no_grad():
+        outputs = model(
+            inputs_embeds=pruned_inputs["inputs_embeds"],
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            use_cache=True,
+        )
+        next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+        past_key_values = outputs.past_key_values
+        eos_token_id = getattr(getattr(processor, "tokenizer", processor), "eos_token_id", None)
+        next_position_ids = None
+        if position_ids is not None:
+            if position_ids.dim() == 3:
+                next_position_ids = position_ids[:, :, -1:] + 1
+            elif position_ids.dim() == 2:
+                next_position_ids = position_ids[:, -1:] + 1
+        for _ in range(max_new_tokens):
+            generated.append(next_token)
+            if eos_token_id is not None and bool((next_token == eos_token_id).all()):
+                break
+            attention_mask = torch.cat(
+                [attention_mask, torch.ones_like(next_token, dtype=attention_mask.dtype)],
+                dim=-1,
+            )
+            step_kwargs: dict[str, Any] = {
+                "input_ids": next_token,
+                "attention_mask": attention_mask,
+                "past_key_values": past_key_values,
+                "use_cache": True,
+            }
+            if next_position_ids is not None:
+                step_kwargs["position_ids"] = next_position_ids
+            outputs = model(**step_kwargs)
+            past_key_values = outputs.past_key_values
+            next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            if next_position_ids is not None:
+                next_position_ids = next_position_ids + 1
+    if not generated:
+        return ""
+    return _decode_token_ids(processor, torch.cat(generated, dim=-1))
 
 
 def _build_pruned_generation_inputs(
@@ -293,8 +363,12 @@ def main(argv: Sequence[str] | None = None) -> None:
                     retention_ratio=float(cfg["retention_ratio"]),
                     min_keep=int(cfg["min_keep"]),
                 )
-                generated_ids = model.generate(**pruned_inputs, max_new_tokens=cfg["max_new_tokens"])
-                prediction = _decode_prediction(processor, generated_ids, input_len=None)
+                prediction = _generate_from_pruned_inputs(
+                    model=model,
+                    processor=processor,
+                    pruned_inputs=pruned_inputs,
+                    max_new_tokens=cfg["max_new_tokens"],
+                )
                 pruning_applied = True
             except Exception as exc:
                 if not cfg["allow_vanilla_fallback"]:
