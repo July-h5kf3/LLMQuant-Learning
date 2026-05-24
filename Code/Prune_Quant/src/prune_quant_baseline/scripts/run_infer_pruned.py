@@ -145,6 +145,17 @@ def _generate_from_pruned_inputs(
 
     import torch
 
+    try:
+        with torch.no_grad():
+            generated_ids = model.generate(
+                **pruned_inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+            )
+        return _decode_token_ids(processor, generated_ids)
+    except Exception as exc:
+        LOGGER.warning("model.generate on pruned inputs failed; using manual greedy loop: %s", exc)
+
     generated: list[torch.Tensor] = []
     attention_mask = pruned_inputs.get("attention_mask")
     position_ids = pruned_inputs.get("position_ids")
@@ -218,6 +229,8 @@ def _build_pruned_generation_inputs(
         retention_ratio=retention_ratio,
         min_keep=min_keep,
     )
+    if kept_visual.numel() == meta.visual_indices.numel():
+        return inputs, int(meta.visual_indices.numel()), int(kept_visual.numel())
     keep_indices = build_keep_indices(
         seq_len=inputs["input_ids"].shape[-1],
         visual_indices=meta.visual_indices,
@@ -298,6 +311,23 @@ def _score_gae_oracle(
     return scores
 
 
+def _generate_from_inputs(
+    *,
+    model: Any,
+    processor: Any,
+    inputs: dict[str, Any],
+    max_new_tokens: int,
+) -> str:
+    if "inputs_embeds" not in inputs and "input_ids" in inputs:
+        return _generate_vanilla(model, processor, inputs, max_new_tokens)
+    return _generate_from_pruned_inputs(
+        model=model,
+        processor=processor,
+        pruned_inputs=inputs,
+        max_new_tokens=max_new_tokens,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     configure_logging(args.log_level)
@@ -363,10 +393,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                     retention_ratio=float(cfg["retention_ratio"]),
                     min_keep=int(cfg["min_keep"]),
                 )
-                prediction = _generate_from_pruned_inputs(
+                prediction = _generate_from_inputs(
                     model=model,
                     processor=processor,
-                    pruned_inputs=pruned_inputs,
+                    inputs=pruned_inputs,
                     max_new_tokens=cfg["max_new_tokens"],
                 )
                 pruning_applied = True

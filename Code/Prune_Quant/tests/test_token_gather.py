@@ -6,6 +6,7 @@ from prune_quant_baseline.pruners.token_gather import (
     gather_sequence_tensors,
     select_topk_visual_tokens,
 )
+from prune_quant_baseline.scripts.run_infer_pruned import _build_pruned_generation_inputs
 
 
 def test_topk_returns_original_sequence_order() -> None:
@@ -61,3 +62,36 @@ def test_gather_position_ids_b_3_s() -> None:
     )
     assert pos.shape == (1, 3, 2)
     assert pos.tolist() == [[[1, 3], [6, 8], [11, 13]]]
+
+
+class _DummyAdapter:
+    def get_visual_token_meta(self, model, inputs):
+        from prune_quant_baseline.core.datatypes import VisualTokenMeta
+
+        return VisualTokenMeta(visual_indices=torch.tensor([1, 3]))
+
+    def build_inputs_embeds(self, model, inputs):  # pragma: no cover - should not be called.
+        raise AssertionError("100% retention should bypass pruning tensor rebuild.")
+
+    def build_position_ids(self, model, inputs):  # pragma: no cover - should not be called.
+        raise AssertionError("100% retention should bypass pruning tensor rebuild.")
+
+
+def test_build_pruned_generation_inputs_bypasses_full_retention() -> None:
+    inputs = {
+        "input_ids": torch.tensor([[10, 20, 30, 40]]),
+        "attention_mask": torch.ones(1, 4),
+    }
+
+    gen_inputs, before, after = _build_pruned_generation_inputs(
+        model=object(),
+        adapter=_DummyAdapter(),
+        inputs=inputs,
+        scores=torch.tensor([0.1, 0.2]),
+        retention_ratio=1.0,
+        min_keep=1,
+    )
+
+    assert gen_inputs is inputs
+    assert before == 2
+    assert after == 2

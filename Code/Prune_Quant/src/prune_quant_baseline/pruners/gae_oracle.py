@@ -21,7 +21,7 @@ class GAEOraclePruner(VisualTokenPruner):
         meta: VisualTokenMeta,
         **kwargs: Any,
     ) -> torch.Tensor:
-        """Compute oracle relevance scores for visual tokens."""
+        """Compute GAE rollout relevance scores for visual tokens."""
 
         query_indices = kwargs.get("query_indices")
         if attentions is None:
@@ -33,7 +33,7 @@ class GAEOraclePruner(VisualTokenPruner):
         if meta.visual_indices.numel() == 0:
             raise ValueError("visual_indices is empty; cannot compute GAE scores.")
         query_indices = query_indices.to(dtype=torch.long)
-        scores: torch.Tensor | None = None
+        rollout: torch.Tensor | None = None
         for layer_idx, attn in enumerate(attentions):
             if attn is None:
                 continue
@@ -43,14 +43,20 @@ class GAEOraclePruner(VisualTokenPruner):
                 )
             if attn.dim() != 4 or attn.shape[0] != 1:
                 raise ValueError(f"Expected attention shape [1, H, S, S], got {tuple(attn.shape)}.")
-            visual_idx = meta.visual_indices.to(attn.device, dtype=torch.long)
-            query_idx = query_indices.to(attn.device, dtype=torch.long)
-            relevance = F.relu(attn * attn.grad)
-            sub = relevance[0].index_select(dim=1, index=query_idx).index_select(dim=2, index=visual_idx)
-            layer_scores = sub.mean(dim=(0, 1))
-            scores = layer_scores if scores is None else scores + layer_scores
-        if scores is None:
+            relevance = F.relu(attn * attn.grad).mean(dim=1)[0]
+            if rollout is None:
+                seq_len = relevance.shape[-1]
+                rollout = torch.eye(seq_len, device=attn.device, dtype=relevance.dtype)
+            rollout = rollout + relevance @ rollout
+        if rollout is None:
             raise ValueError("No usable attention tensors were provided.")
+        visual_idx = meta.visual_indices.to(rollout.device, dtype=torch.long)
+        query_idx = query_indices.to(rollout.device, dtype=torch.long)
+        if query_idx.min() < 0 or query_idx.max() >= rollout.shape[0]:
+            raise ValueError("query_indices contain positions outside the attention sequence length.")
+        if visual_idx.min() < 0 or visual_idx.max() >= rollout.shape[1]:
+            raise ValueError("visual_indices contain positions outside the attention sequence length.")
+        scores = rollout.index_select(dim=0, index=query_idx).index_select(dim=1, index=visual_idx).mean(dim=0)
         if self.normalize:
             denom = scores.sum().clamp_min(torch.finfo(scores.dtype).eps)
             scores = scores / denom
