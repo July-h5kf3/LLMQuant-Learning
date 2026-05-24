@@ -95,3 +95,38 @@ def test_build_pruned_generation_inputs_bypasses_full_retention() -> None:
     assert gen_inputs is inputs
     assert before == 2
     assert after == 2
+
+
+class _GatherAdapter:
+    def get_visual_token_meta(self, model, inputs):
+        from prune_quant_baseline.core.datatypes import VisualTokenMeta
+
+        return VisualTokenMeta(visual_indices=torch.tensor([1, 3]))
+
+    def build_inputs_embeds(self, model, inputs):
+        return torch.arange(1 * 5 * 2).view(1, 5, 2)
+
+    def build_position_ids(self, model, inputs):
+        return torch.arange(5).view(1, 5)
+
+
+def test_build_pruned_generation_inputs_gathers_input_ids() -> None:
+    inputs = {
+        "input_ids": torch.tensor([[10, 20, 30, 40, 50]]),
+        "attention_mask": torch.ones(1, 5),
+    }
+
+    gen_inputs, before, after = _build_pruned_generation_inputs(
+        model=object(),
+        adapter=_GatherAdapter(),
+        inputs=inputs,
+        scores=torch.tensor([0.9, 0.1]),
+        retention_ratio=0.5,
+        min_keep=1,
+    )
+
+    assert gen_inputs["input_ids"].tolist() == [[10, 20, 30, 50]]
+    assert gen_inputs["inputs_embeds"].shape == (1, 4, 2)
+    assert gen_inputs["position_ids"].tolist() == [[0, 1, 2, 4]]
+    assert before == 2
+    assert after == 1

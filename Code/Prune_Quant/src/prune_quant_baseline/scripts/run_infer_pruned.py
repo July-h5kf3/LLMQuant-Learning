@@ -152,7 +152,8 @@ def _generate_from_pruned_inputs(
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
             )
-        return _decode_token_ids(processor, generated_ids)
+        input_len = pruned_inputs["input_ids"].shape[-1] if "input_ids" in pruned_inputs else None
+        return _decode_prediction(processor, generated_ids, input_len)
     except Exception as exc:
         LOGGER.warning("model.generate on pruned inputs failed; using manual greedy loop: %s", exc)
 
@@ -165,11 +166,17 @@ def _generate_from_pruned_inputs(
             dtype=torch.long,
             device=pruned_inputs["inputs_embeds"].device,
         )
+    cache_position = torch.arange(
+        pruned_inputs["inputs_embeds"].shape[1],
+        device=pruned_inputs["inputs_embeds"].device,
+        dtype=torch.long,
+    )
     with torch.no_grad():
         outputs = model(
             inputs_embeds=pruned_inputs["inputs_embeds"],
             attention_mask=attention_mask,
             position_ids=position_ids,
+            cache_position=cache_position,
             use_cache=True,
         )
         next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
@@ -193,6 +200,7 @@ def _generate_from_pruned_inputs(
                 "input_ids": next_token,
                 "attention_mask": attention_mask,
                 "past_key_values": past_key_values,
+                "cache_position": cache_position[-1:] + 1,
                 "use_cache": True,
             }
             if next_position_ids is not None:
@@ -200,6 +208,7 @@ def _generate_from_pruned_inputs(
             outputs = model(**step_kwargs)
             past_key_values = outputs.past_key_values
             next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            cache_position = torch.cat([cache_position, step_kwargs["cache_position"]])
             if next_position_ids is not None:
                 next_position_ids = next_position_ids + 1
     if not generated:
@@ -246,7 +255,9 @@ def _build_pruned_generation_inputs(
         attention_mask=inputs.get("attention_mask"),
         position_ids=position_ids,
     )
+    pruned_input_ids = inputs["input_ids"].index_select(dim=1, index=keep_indices.to(inputs["input_ids"].device))
     gen_inputs = {
+        "input_ids": pruned_input_ids,
         "inputs_embeds": pruned_embeds,
         "attention_mask": pruned_mask,
         "position_ids": pruned_pos,
