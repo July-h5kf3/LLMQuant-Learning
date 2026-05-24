@@ -145,18 +145,6 @@ def _generate_from_pruned_inputs(
 
     import torch
 
-    try:
-        with torch.no_grad():
-            generated_ids = model.generate(
-                **pruned_inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-            )
-        input_len = pruned_inputs["input_ids"].shape[-1] if "input_ids" in pruned_inputs else None
-        return _decode_prediction(processor, generated_ids, input_len)
-    except Exception as exc:
-        LOGGER.warning("model.generate on pruned inputs failed; using manual greedy loop: %s", exc)
-
     generated: list[torch.Tensor] = []
     attention_mask = pruned_inputs.get("attention_mask")
     position_ids = pruned_inputs.get("position_ids")
