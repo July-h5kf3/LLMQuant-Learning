@@ -72,21 +72,27 @@ def _format_question(dataset: str, row: dict[str, Any]) -> str:
             "Answer with the option letter only, one of A, B, C, or D."
         )
     if dataset == "MME":
-        return f"{question}\nAnswer yes or no."
+        question = question.replace(" Please answer yes or no.", "")
+        return f"{question}\nAnswer the question using a single word or phrase."
     return question
 
 
 def _extract_yes_no(text: str) -> str:
-    lowered = text.lower()
-    yes_pos = lowered.find("yes")
-    no_pos = lowered.find("no")
-    if yes_pos == -1 and no_pos == -1:
+    pred = text.lower().strip().replace(".", "")
+    if pred in ["yes", "no"]:
+        return pred.capitalize()
+    if len(pred) == 1:
+        if pred == "y":
+            return "Yes"
+        if pred == "n":
+            return "No"
         return ""
-    if yes_pos == -1:
-        return "No"
-    if no_pos == -1:
+    prefix = pred[:4]
+    if "yes" in prefix:
         return "Yes"
-    return "Yes" if yes_pos < no_pos else "No"
+    if "no" in prefix:
+        return "No"
+    return ""
 
 
 def _extract_option(text: str) -> str:
