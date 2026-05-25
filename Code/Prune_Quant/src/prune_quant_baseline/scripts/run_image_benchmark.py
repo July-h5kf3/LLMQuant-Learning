@@ -49,6 +49,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="default",
         choices=["default", "qwen_vl", "gpt4v", "original"],
     )
+    parser.add_argument("--jpeg-reencode", action="store_true")
     parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--limit", type=int)
@@ -179,6 +180,13 @@ def _score_predictions(dataset: str, records: list[dict[str, Any]]) -> dict[str,
     raise ValueError(f"Unsupported dataset: {dataset}")
 
 
+def _jpeg_reencode(image: Image.Image) -> Image.Image:
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="JPEG")
+    buffer.seek(0)
+    return Image.open(buffer).convert("RGB")
+
+
 def _load_done(output_jsonl: Path) -> tuple[set[str], list[dict[str, Any]]]:
     done: set[str] = set()
     records: list[dict[str, Any]] = []
@@ -236,6 +244,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "prompt": _format_question(args.dataset, row_dict, mme_prompt_style=args.mme_prompt_style),
                 "answer": str(row_dict.get("answer", "")),
             }
+            if args.jpeg_reencode:
+                sample["image"] = _jpeg_reencode(sample["image"])
             inputs = _move_inputs_to_model_device(model, adapter.prepare_inputs(processor, sample))
             pruning_applied = False
             num_visual_tokens_before = None
@@ -297,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "pruner": args.pruner,
                 "retention_ratio": args.retention_ratio,
                 "mme_prompt_style": args.mme_prompt_style if args.dataset == "MME" else None,
+                "jpeg_reencode": args.jpeg_reencode,
                 "num_visual_tokens_before": num_visual_tokens_before,
                 "num_visual_tokens_after": num_visual_tokens_after,
                 "pruning_applied": pruning_applied,
