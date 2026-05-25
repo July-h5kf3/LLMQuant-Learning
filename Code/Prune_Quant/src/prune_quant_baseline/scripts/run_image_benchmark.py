@@ -44,6 +44,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--attn-implementation", default="eager")
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
+    parser.add_argument(
+        "--mme-prompt-style",
+        default="default",
+        choices=["default", "qwen_vl", "gpt4v", "original"],
+    )
     parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--limit", type=int)
@@ -64,7 +69,7 @@ def _decode_image(value: Any, cache_key: str, image_cache: dict[str, Image.Image
     raise ValueError(f"Missing base64 image and no cached image for {cache_key!r}.")
 
 
-def _format_question(dataset: str, row: dict[str, Any]) -> str:
+def _format_question(dataset: str, row: dict[str, Any], *, mme_prompt_style: str = "default") -> str:
     question = str(row["question"])
     if dataset == "MMStar":
         options = "\n".join(f"{opt}. {row[opt]}" for opt in ["A", "B", "C", "D"])
@@ -73,7 +78,13 @@ def _format_question(dataset: str, row: dict[str, Any]) -> str:
             "Answer with the option letter only, one of A, B, C, or D."
         )
     if dataset == "MME":
+        if mme_prompt_style == "original":
+            return question
         question = question.replace(" Please answer yes or no.", "")
+        if mme_prompt_style == "qwen_vl":
+            return f"{question} Answer:"
+        if mme_prompt_style == "gpt4v":
+            return f"{question}\nAnswer the question with Yes or No."
         return f"{question}\nAnswer the question using a single word or phrase."
     return question
 
@@ -222,7 +233,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             sample = {
                 "id": index,
                 "image": _decode_image(row_dict.get("image"), image_key, image_cache),
-                "prompt": _format_question(args.dataset, row_dict),
+                "prompt": _format_question(args.dataset, row_dict, mme_prompt_style=args.mme_prompt_style),
                 "answer": str(row_dict.get("answer", "")),
             }
             inputs = _move_inputs_to_model_device(model, adapter.prepare_inputs(processor, sample))
@@ -285,6 +296,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "image_path": str(row_dict.get("image_path", "")),
                 "pruner": args.pruner,
                 "retention_ratio": args.retention_ratio,
+                "mme_prompt_style": args.mme_prompt_style if args.dataset == "MME" else None,
                 "num_visual_tokens_before": num_visual_tokens_before,
                 "num_visual_tokens_after": num_visual_tokens_after,
                 "pruning_applied": pruning_applied,
