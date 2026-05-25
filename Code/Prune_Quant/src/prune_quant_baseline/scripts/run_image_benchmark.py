@@ -154,7 +154,8 @@ def _score_predictions(dataset: str, records: list[dict[str, Any]]) -> dict[str,
             acc = sum(int(item["correct"]) for item in items) / len(items) * 100
             grouped: dict[str, list[dict[str, Any]]] = {}
             for item in items:
-                grouped.setdefault(str(item.get("image_path", item.get("index"))), []).append(item)
+                group_key = item.get("question_id") or item.get("image_path") or item.get("index")
+                grouped.setdefault(str(group_key), []).append(item)
             acc_plus = sum(all(x["correct"] for x in group) for group in grouped.values()) / len(grouped) * 100
             score = acc + acc_plus
             category_scores[category] = {"accuracy": acc, "accuracy_plus": acc_plus, "score": score}
@@ -303,6 +304,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "answer": str(row_dict.get("answer", "")),
                 "prediction": prediction,
                 "category": str(row_dict.get("category", "")),
+                "question_id": str(row_dict.get("question_id", "")),
                 "image_path": str(row_dict.get("image_path", "")),
                 "pruner": args.pruner,
                 "retention_ratio": args.retention_ratio,
