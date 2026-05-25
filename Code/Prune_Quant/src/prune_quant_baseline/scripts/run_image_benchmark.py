@@ -31,7 +31,11 @@ LOGGER = get_logger(__name__)
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Qwen2-VL image benchmark TSV files.")
     parser.add_argument("--dataset", required=True, choices=["MME", "MMStar", "MMVet"])
-    parser.add_argument("--tsv", required=True)
+    parser.add_argument("--dataset-source", default="tsv", choices=["tsv", "hf"])
+    parser.add_argument("--tsv")
+    parser.add_argument("--hf-dataset", default="lmms-lab/MME")
+    parser.add_argument("--hf-split", default="test")
+    parser.add_argument("--hf-cache-dir")
     parser.add_argument("--output-jsonl", required=True)
     parser.add_argument("--metrics-json")
     parser.add_argument("--model-path", required=True)
@@ -60,6 +64,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _decode_image(value: Any, cache_key: str, image_cache: dict[str, Image.Image]) -> Image.Image:
+    if isinstance(value, Image.Image):
+        image = value.convert("RGB")
+        image_cache[cache_key] = image
+        return image.copy()
     raw = "" if pd.isna(value) else str(value)
     if len(raw) > 16:
         image = Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGB")
@@ -203,6 +211,27 @@ def _load_done(output_jsonl: Path) -> tuple[set[str], list[dict[str, Any]]]:
     return done, records
 
 
+def _iter_rows(args: argparse.Namespace):
+    if args.dataset_source == "hf":
+        if args.dataset != "MME":
+            raise ValueError("HF dataset input is currently implemented for MME only.")
+        from datasets import load_dataset
+
+        dataset = load_dataset(args.hf_dataset, split=args.hf_split, cache_dir=args.hf_cache_dir)
+        if args.limit is not None:
+            dataset = dataset.select(range(min(args.limit, len(dataset))))
+        for row_idx, row in enumerate(dataset):
+            yield row_idx, dict(row)
+        return
+    if not args.tsv:
+        raise ValueError("--tsv is required when --dataset-source=tsv.")
+    df = pd.read_csv(args.tsv, sep="\t")
+    if args.limit is not None:
+        df = df.head(args.limit)
+    for row_idx, row in df.iterrows():
+        yield row_idx, row.to_dict()
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     configure_logging(args.log_level)
@@ -210,10 +239,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     output_jsonl = Path(args.output_jsonl)
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     done, records = _load_done(output_jsonl) if args.resume else (set(), [])
-
-    df = pd.read_csv(args.tsv, sep="\t")
-    if args.limit is not None:
-        df = df.head(args.limit)
 
     model, processor = load_model_and_processor(
         model_id_or_path=args.model_path,
@@ -233,12 +258,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     mode = "a" if args.resume else "w"
     with output_jsonl.open(mode, encoding="utf-8") as out_f:
-        for row_idx, row in df.iterrows():
-            row_dict = row.to_dict()
-            index = str(row_dict.get("index", row_idx))
+        for row_idx, row_dict in _iter_rows(args):
+            question_id = str(row_dict.get("question_id", ""))
+            index = str(row_dict.get("index", f"{question_id or 'row'}::{row_idx}"))
             if index in done:
                 continue
-            image_key = str(row_dict.get("image_path", index))
+            image_key = str(row_dict.get("question_id", row_dict.get("image_path", index)))
             sample = {
                 "id": index,
                 "image": _decode_image(row_dict.get("image"), image_key, image_cache),
@@ -304,8 +329,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "answer": str(row_dict.get("answer", "")),
                 "prediction": prediction,
                 "category": str(row_dict.get("category", "")),
-                "question_id": str(row_dict.get("question_id", "")),
-                "image_path": str(row_dict.get("image_path", "")),
+                "question_id": question_id,
+                "image_path": str(row_dict.get("image_path", question_id)),
                 "pruner": args.pruner,
                 "retention_ratio": args.retention_ratio,
                 "mme_prompt_style": args.mme_prompt_style if args.dataset == "MME" else None,
