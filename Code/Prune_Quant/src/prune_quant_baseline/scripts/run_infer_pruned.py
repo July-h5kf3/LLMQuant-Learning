@@ -132,7 +132,15 @@ def _decode_token_ids(processor: Any, token_ids: Any) -> str:
 def _generate_vanilla(model: Any, processor: Any, inputs: dict[str, Any], max_new_tokens: int) -> str:
     input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else None
     with __import__("torch").no_grad():
-        generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            temperature=None,
+            top_p=None,
+            num_beams=1,
+            use_cache=True,
+        )
     return _decode_prediction(processor, generated_ids, input_len)
 
 
@@ -172,6 +180,12 @@ def _generate_from_pruned_inputs(
         next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
         past_key_values = outputs.past_key_values
         eos_token_id = getattr(getattr(processor, "tokenizer", processor), "eos_token_id", None)
+        if isinstance(eos_token_id, int):
+            eos_token_ids = {eos_token_id}
+        elif eos_token_id is None:
+            eos_token_ids = set()
+        else:
+            eos_token_ids = {int(item) for item in eos_token_id}
         next_position_ids = None
         if position_ids is not None:
             if position_ids.dim() == 3:
@@ -180,7 +194,7 @@ def _generate_from_pruned_inputs(
                 next_position_ids = position_ids[:, -1:] + 1
         for _ in range(max_new_tokens):
             generated.append(next_token)
-            if eos_token_id is not None and bool((next_token == eos_token_id).all()):
+            if eos_token_ids and int(next_token.item()) in eos_token_ids:
                 break
             attention_mask = torch.cat(
                 [attention_mask, torch.ones_like(next_token, dtype=attention_mask.dtype)],
