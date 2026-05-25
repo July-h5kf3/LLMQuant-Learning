@@ -4,6 +4,9 @@ from typing import Any
 def _resolve_torch_dtype(dtype: str) -> Any:
     import torch
 
+    if dtype == "auto":
+        return "auto"
+
     mapping = {
         "float16": torch.float16,
         "fp16": torch.float16,

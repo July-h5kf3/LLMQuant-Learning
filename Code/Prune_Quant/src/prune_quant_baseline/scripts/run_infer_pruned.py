@@ -35,7 +35,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-map")
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--limit", type=int, help="Optional max number of samples to process.")
-    parser.add_argument("--attn-implementation", default="eager")
+    parser.add_argument("--attn-implementation", default="eager", help="Use 'none' to leave the HF default unchanged.")
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--allow-vanilla-fallback", action="store_true")
@@ -65,7 +65,7 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "device_map": args.device_map or model.get("device_map", "auto"),
         "max_new_tokens": args.max_new_tokens or inference.get("max_new_tokens", 128),
         "limit": args.limit,
-        "attn_implementation": args.attn_implementation,
+        "attn_implementation": None if args.attn_implementation == "none" else args.attn_implementation,
         "processor_use_fast": None if args.processor_use_fast is None else args.processor_use_fast == "true",
         "gae_answer_source": args.gae_answer_source,
         "allow_vanilla_fallback": args.allow_vanilla_fallback,

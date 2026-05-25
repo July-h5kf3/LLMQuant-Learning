@@ -42,7 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quant-method", default="none", choices=["none", "bnb4", "bnb8", "gptq", "awq"])
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--device-map", default="auto")
-    parser.add_argument("--attn-implementation", default="eager")
+    parser.add_argument("--attn-implementation", default="eager", help="Use 'none' to leave the HF default unchanged.")
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
     parser.add_argument(
         "--mme-prompt-style",
@@ -222,7 +222,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         device_map=args.device_map,
         local_files_only=True,
         trust_remote_code=True,
-        attn_implementation=args.attn_implementation,
+        attn_implementation=None if args.attn_implementation == "none" else args.attn_implementation,
         processor_use_fast=None if args.processor_use_fast is None else args.processor_use_fast == "true",
     )
     model.eval()
