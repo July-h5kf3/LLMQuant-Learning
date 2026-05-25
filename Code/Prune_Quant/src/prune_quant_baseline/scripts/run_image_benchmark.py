@@ -43,6 +43,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--attn-implementation", default="eager")
+    parser.add_argument("--processor-use-fast", choices=["true", "false"])
     parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--limit", type=int)
@@ -203,6 +204,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         local_files_only=True,
         trust_remote_code=True,
         attn_implementation=args.attn_implementation,
+        processor_use_fast=None if args.processor_use_fast is None else args.processor_use_fast == "true",
     )
     model.eval()
     adapter = _make_adapter(args.model_type)

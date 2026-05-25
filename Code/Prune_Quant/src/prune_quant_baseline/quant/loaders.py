@@ -47,6 +47,7 @@ def load_model_and_processor(
     trust_remote_code: bool = True,
     local_files_only: bool = True,
     attn_implementation: str | None = None,
+    processor_use_fast: bool | None = None,
     **kwargs: Any,
 ) -> tuple[Any, Any]:
     """
@@ -75,8 +76,11 @@ def load_model_and_processor(
         "trust_remote_code": trust_remote_code,
         "local_files_only": local_files_only,
     }
+    processor_kwargs = dict(common_kwargs)
+    if processor_use_fast is not None:
+        processor_kwargs["use_fast"] = processor_use_fast
     try:
-        processor = AutoProcessor.from_pretrained(model_id_or_path, **common_kwargs)
+        processor = AutoProcessor.from_pretrained(model_id_or_path, **processor_kwargs)
         model_kwargs: dict[str, Any] = {
             **common_kwargs,
             "torch_dtype": torch_dtype,
