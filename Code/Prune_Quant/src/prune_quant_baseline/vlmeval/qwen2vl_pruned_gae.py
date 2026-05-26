@@ -115,9 +115,10 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
             raise NotImplementedError("Qwen2VLPrunedGAE currently supports image-only inputs.")
         inputs = self.processor(text=text, images=images, videos=videos, padding=True, return_tensors="pt")
         inputs = inputs.to("cuda")
+        plain_prompt = "\n".join(item["value"] for item in message if item["type"] == "text")
         sample = {
             "image": images[0] if images else None,
-            "prompt": text[0] if isinstance(text, list) else text,
+            "prompt": plain_prompt,
         }
         return sample, dict(inputs)
 
