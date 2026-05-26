@@ -23,6 +23,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--input-jsonl", required=True)
     parser.add_argument("--output-path", required=True)
+    parser.add_argument("--image-root", help="Optional root used to resolve relative image/image_path fields.")
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--limit", type=int)
@@ -59,6 +60,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         for row_idx, sample in enumerate(_read_jsonl(args.input_jsonl)):
             if args.limit is not None and row_idx >= args.limit:
                 break
+            if args.image_root:
+                for key in ("image", "image_path"):
+                    value = sample.get(key)
+                    if isinstance(value, str) and not Path(value).is_absolute():
+                        sample[key] = str(Path(args.image_root) / value)
             inputs = adapter.prepare_inputs(processor, sample)
             inputs = _move_inputs_to_model_device(model, inputs)
             meta = adapter.get_visual_token_meta(model, inputs)
