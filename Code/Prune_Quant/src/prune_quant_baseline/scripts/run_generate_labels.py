@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Sequence
 
@@ -24,6 +25,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-jsonl", required=True)
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--image-root", help="Optional root used to resolve relative image/image_path fields.")
+    parser.add_argument("--skip-missing-images", action="store_true")
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--limit", type=int)
@@ -65,7 +67,13 @@ def main(argv: Sequence[str] | None = None) -> None:
                     value = sample.get(key)
                     if isinstance(value, str) and not Path(value).is_absolute():
                         sample[key] = str(Path(args.image_root) / value)
-            inputs = adapter.prepare_inputs(processor, sample)
+            try:
+                inputs = adapter.prepare_inputs(processor, sample)
+            except FileNotFoundError:
+                if not args.skip_missing_images:
+                    raise
+                logging.warning("Skipping sample %s because its image file is missing.", sample.get("id", row_idx))
+                continue
             inputs = _move_inputs_to_model_device(model, inputs)
             meta = adapter.get_visual_token_meta(model, inputs)
             proxy_scores = _score_attention_proxy(model, proxy_pruner, inputs, meta)
