@@ -35,7 +35,8 @@ class LearnedCompressorPruner(VisualTokenPruner):
         **kwargs: Any,
     ) -> torch.Tensor:
         proxy_scores = self.proxy.score(attentions=attentions, hidden_states=hidden_states, meta=meta)
-        x = proxy_scores.to(self.device).unsqueeze(0)
+        dtype = next(self.compressor.parameters()).dtype
+        x = proxy_scores.to(device=self.device, dtype=dtype).unsqueeze(0)
         with torch.no_grad():
             scores = self.compressor(x).squeeze(0)
         return scores.to(proxy_scores.device)
