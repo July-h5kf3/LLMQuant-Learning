@@ -15,7 +15,7 @@ def _sample_prompt(sample: dict) -> str:
 
 
 def _sample_image(sample: dict) -> Image.Image:
-    image = sample.get("image")
+    image = sample.get("image") or sample.get("image_path")
     if image is None and sample.get("images"):
         image = sample["images"][0]
     if image is None:
