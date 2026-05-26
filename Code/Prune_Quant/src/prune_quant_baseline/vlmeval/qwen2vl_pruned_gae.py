@@ -5,6 +5,7 @@ from typing import Any
 
 import torch
 from vlmeval.vlm.base import BaseModel
+from vlmeval.vlm.qwen2_vl.prompt import Qwen2VLPromptMixin
 
 from prune_quant_baseline.models.qwen2vl_hf import Qwen2VLHFAdapter
 from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner
@@ -21,7 +22,7 @@ def _is_omni_model(model_path: str) -> bool:
     return "omni" in model_path.lower()
 
 
-class Qwen2VLPrunedGAE(BaseModel):
+class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
     """VLMEvalKit Qwen2-VL wrapper with GAE-guided visual token pruning."""
 
     INSTALL_REQ = False
@@ -76,9 +77,7 @@ class Qwen2VLPrunedGAE(BaseModel):
         return self.use_custom_prompt_flag
 
     def build_prompt(self, line: Any, dataset: str | None = None):
-        from vlmeval.vlm.qwen2_vl.prompt import Qwen2VLPromptMixin
-
-        return Qwen2VLPromptMixin.build_prompt(self, line, dataset)
+        return super().build_prompt(line, dataset)
 
     def generate(self, message: Any, dataset: str | None = None) -> str:
         return super().generate(message, dataset)
