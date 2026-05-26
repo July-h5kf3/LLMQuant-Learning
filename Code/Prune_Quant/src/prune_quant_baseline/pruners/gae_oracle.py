@@ -24,6 +24,7 @@ class GAEOraclePruner(VisualTokenPruner):
         """Compute GAE rollout relevance scores for visual tokens."""
 
         query_indices = kwargs.get("query_indices")
+        normalize = bool(kwargs.get("normalize", self.normalize))
         if attentions is None:
             raise ValueError("GAEOraclePruner requires differentiable attentions.")
         if len(attentions) == 0:
@@ -57,19 +58,24 @@ class GAEOraclePruner(VisualTokenPruner):
         if visual_idx.min() < 0 or visual_idx.max() >= rollout.shape[1]:
             raise ValueError("visual_indices contain positions outside the attention sequence length.")
         scores = rollout.index_select(dim=0, index=query_idx).index_select(dim=1, index=visual_idx).mean(dim=0)
-        if self.normalize:
+        if normalize:
             denom = scores.sum().clamp_min(torch.finfo(scores.dtype).eps)
             scores = scores / denom
         return scores.detach().to(meta.visual_indices.device)
 
 
-def compute_answer_logprob_target(
+def normalize_relevance_scores(scores: torch.Tensor) -> torch.Tensor:
+    denom = scores.sum().clamp_min(torch.finfo(scores.dtype).eps)
+    return scores / denom
+
+
+def compute_answer_token_logprobs(
     *,
     logits: torch.Tensor,
     input_ids: torch.LongTensor,
     answer_start: int,
 ) -> tuple[torch.Tensor, torch.LongTensor]:
-    """Return summed answer log-prob target and attention query positions."""
+    """Return per-answer-token log-probs and their prediction query positions."""
 
     if logits.shape[0] != 1 or input_ids.shape[0] != 1:
         raise ValueError("GAE oracle currently supports B=1.")
@@ -81,6 +87,22 @@ def compute_answer_logprob_target(
     log_probs = F.log_softmax(pred_logits.float(), dim=-1)
     selected = log_probs.gather(dim=-1, index=target_ids.unsqueeze(-1)).squeeze(-1)
     query_indices = torch.arange(answer_start - 1, seq_len - 1, device=input_ids.device, dtype=torch.long)
+    return selected.squeeze(0), query_indices
+
+
+def compute_answer_logprob_target(
+    *,
+    logits: torch.Tensor,
+    input_ids: torch.LongTensor,
+    answer_start: int,
+) -> tuple[torch.Tensor, torch.LongTensor]:
+    """Return summed answer log-prob target and attention query positions."""
+
+    selected, query_indices = compute_answer_token_logprobs(
+        logits=logits,
+        input_ids=input_ids,
+        answer_start=answer_start,
+    )
     return selected.sum(), query_indices
 
 

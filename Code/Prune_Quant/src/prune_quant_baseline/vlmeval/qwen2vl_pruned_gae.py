@@ -38,6 +38,7 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         retention_ratio: float = 0.5,
         min_keep: int = 1,
         gae_answer_source: str = "generated",
+        gae_per_token: bool = True,
         attn_implementation: str = "eager",
         use_custom_prompt: bool = True,
         system_prompt: str | None = None,
@@ -58,6 +59,7 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         self.retention_ratio = float(retention_ratio)
         self.min_keep = int(min_keep)
         self.gae_answer_source = gae_answer_source
+        self.gae_per_token = gae_per_token
         self.use_custom_prompt_flag = use_custom_prompt
         self.system_prompt = system_prompt
         self.verbose = verbose
@@ -141,6 +143,7 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
                 pruner=self._pq_pruner,
                 sample=sample,
                 answer=sample["answer"],
+                per_token=self.gae_per_token,
             )
         pruned_inputs, _, _ = _build_pruned_generation_inputs(
             model=self.model,

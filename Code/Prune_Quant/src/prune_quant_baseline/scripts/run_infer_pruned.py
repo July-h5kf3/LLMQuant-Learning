@@ -7,7 +7,12 @@ from prune_quant_baseline.core.config import load_config
 from prune_quant_baseline.core.logging_utils import configure_logging, get_logger
 from prune_quant_baseline.models.llava_onevision_hf import LlavaOneVisionHFAdapter
 from prune_quant_baseline.models.qwen2vl_hf import Qwen2VLHFAdapter
-from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, compute_answer_logprob_target
+from prune_quant_baseline.pruners.gae_oracle import (
+    GAEOraclePruner,
+    compute_answer_logprob_target,
+    compute_answer_token_logprobs,
+    normalize_relevance_scores,
+)
 from prune_quant_baseline.pruners.attention_proxy import AttentionProxyPruner
 from prune_quant_baseline.pruners.learned_compressor import LearnedCompressorPruner
 from prune_quant_baseline.pruners.token_gather import (
@@ -39,6 +44,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attn-implementation", default="eager", help="Use 'none' to leave the HF default unchanged.")
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
+    parser.add_argument("--gae-per-token", choices=["true", "false"], default="true")
     parser.add_argument("--compressor-checkpoint")
     parser.add_argument("--allow-vanilla-fallback", action="store_true")
     parser.add_argument("--log-level", default="INFO")
@@ -70,6 +76,7 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "attn_implementation": None if args.attn_implementation == "none" else args.attn_implementation,
         "processor_use_fast": None if args.processor_use_fast is None else args.processor_use_fast == "true",
         "gae_answer_source": args.gae_answer_source,
+        "gae_per_token": args.gae_per_token == "true",
         "compressor_checkpoint": args.compressor_checkpoint or pruning.get("compressor_checkpoint"),
         "allow_vanilla_fallback": args.allow_vanilla_fallback,
         "trust_remote_code": model.get("trust_remote_code", True),
@@ -298,6 +305,7 @@ def _score_gae_oracle(
     pruner: GAEOraclePruner,
     sample: dict[str, Any],
     answer: str,
+    per_token: bool = True,
 ) -> Any:
     import torch
 
@@ -305,30 +313,64 @@ def _score_gae_oracle(
     device = next(model.parameters()).device
     teacher_inputs, answer_start = adapter.prepare_teacher_forcing_inputs(processor, sample, answer, device=device)
     teacher_meta = adapter.get_visual_token_meta(model, teacher_inputs)
-    with torch.no_grad():
-        inputs_embeds = adapter.build_inputs_embeds(model, teacher_inputs)
-        position_ids = adapter.build_position_ids(model, teacher_inputs)
-    inputs_embeds = inputs_embeds.detach().requires_grad_(True)
-    model.zero_grad(set_to_none=True)
-    outputs = model(
-        inputs_embeds=inputs_embeds,
-        attention_mask=teacher_inputs.get("attention_mask"),
-        position_ids=position_ids,
-        output_attentions=True,
-        use_cache=False,
-    )
-    if outputs.attentions is None:
-        raise ValueError("Model did not return attentions; use attn_implementation='eager'.")
-    for attn in outputs.attentions:
-        if attn is not None and attn.requires_grad:
-            attn.retain_grad()
-    target, query_indices = compute_answer_logprob_target(
-        logits=outputs.logits,
-        input_ids=teacher_inputs["input_ids"],
-        answer_start=answer_start,
-    )
-    target.backward()
-    scores = pruner.score(attentions=outputs.attentions, meta=teacher_meta, query_indices=query_indices)
+
+    def forward_with_retained_attentions():
+        with torch.no_grad():
+            inputs_embeds = adapter.build_inputs_embeds(model, teacher_inputs)
+            position_ids = adapter.build_position_ids(model, teacher_inputs)
+        inputs_embeds = inputs_embeds.detach().requires_grad_(True)
+        model.zero_grad(set_to_none=True)
+        outputs = model(
+            inputs_embeds=inputs_embeds,
+            attention_mask=teacher_inputs.get("attention_mask"),
+            position_ids=position_ids,
+            output_attentions=True,
+            use_cache=False,
+        )
+        if outputs.attentions is None:
+            raise ValueError("Model did not return attentions; use attn_implementation='eager'.")
+        for attn in outputs.attentions:
+            if attn is not None and attn.requires_grad:
+                attn.retain_grad()
+        return outputs
+
+    def clear_attention_grads(attentions: Any) -> None:
+        for attn in attentions:
+            if attn is not None:
+                attn.grad = None
+
+    if per_token:
+        outputs = forward_with_retained_attentions()
+        token_logprobs, query_indices = compute_answer_token_logprobs(
+            logits=outputs.logits,
+            input_ids=teacher_inputs["input_ids"],
+            answer_start=answer_start,
+        )
+        if token_logprobs.numel() == 0:
+            raise ValueError("GAE oracle requires at least one answer token.")
+        token_scores = []
+        for token_logprob, query_idx in zip(token_logprobs, query_indices):
+            model.zero_grad(set_to_none=True)
+            clear_attention_grads(outputs.attentions)
+            token_logprob.backward(retain_graph=True)
+            token_scores.append(
+                pruner.score(
+                    attentions=outputs.attentions,
+                    meta=teacher_meta,
+                    query_indices=query_idx.view(1),
+                    normalize=False,
+                )
+            )
+        scores = normalize_relevance_scores(torch.stack(token_scores, dim=0).mean(dim=0))
+    else:
+        outputs = forward_with_retained_attentions()
+        target, query_indices = compute_answer_logprob_target(
+            logits=outputs.logits,
+            input_ids=teacher_inputs["input_ids"],
+            answer_start=answer_start,
+        )
+        target.backward()
+        scores = pruner.score(attentions=outputs.attentions, meta=teacher_meta, query_indices=query_indices)
     model.zero_grad(set_to_none=True)
     return scores
 
@@ -405,6 +447,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                         pruner=pruner,
                         sample=sample,
                         answer=answer,
+                        per_token=bool(cfg["gae_per_token"]),
                     )
                 else:
                     raise NotImplementedError(f"Unsupported pruner type: {type(pruner)!r}")
