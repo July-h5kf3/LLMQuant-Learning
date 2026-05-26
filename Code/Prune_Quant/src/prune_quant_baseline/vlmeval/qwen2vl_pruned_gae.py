@@ -129,6 +129,9 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         sample, inputs = self._build_inputs(message)
         inputs = _move_inputs_to_model_device(self.model, inputs)
 
+        if self.retention_ratio >= 1.0:
+            return _generate_vanilla(self.model, self.processor, inputs, self.max_new_tokens)
+
         with torch.no_grad():
             answer = _generate_vanilla(self.model, self.processor, inputs, self.max_new_tokens)
         if self.gae_answer_source == "empty":
