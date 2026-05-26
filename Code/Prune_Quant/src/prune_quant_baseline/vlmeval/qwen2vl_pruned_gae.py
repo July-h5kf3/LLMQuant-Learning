@@ -133,14 +133,15 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
             answer = ""
         sample["answer"] = answer or "Yes"
 
-        scores = _score_gae_oracle(
-            model=self.model,
-            processor=self.processor,
-            adapter=self._pq_adapter,
-            pruner=self._pq_pruner,
-            sample=sample,
-            answer=sample["answer"],
-        )
+        with torch.enable_grad():
+            scores = _score_gae_oracle(
+                model=self.model,
+                processor=self.processor,
+                adapter=self._pq_adapter,
+                pruner=self._pq_pruner,
+                sample=sample,
+                answer=sample["answer"],
+            )
         pruned_inputs, _, _ = _build_pruned_generation_inputs(
             model=self.model,
             adapter=self._pq_adapter,
