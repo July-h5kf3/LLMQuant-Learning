@@ -24,9 +24,12 @@ def main() -> None:
 
     init_path = vlmeval_root / "vlmeval" / "vlm" / "__init__.py"
     text = init_path.read_text(encoding="utf-8")
+    text = text.replace("from .prune_quant import Qwen2VLPrunedGAE\n", "")
     line = "from .prune_quant import Qwen2VLPrunedCompressor, Qwen2VLPrunedGAE\n"
     if line not in text:
         init_path.write_text(text + line, encoding="utf-8")
+    elif text != init_path.read_text(encoding="utf-8"):
+        init_path.write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":
