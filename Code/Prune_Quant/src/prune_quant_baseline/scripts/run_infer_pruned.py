@@ -9,6 +9,7 @@ from prune_quant_baseline.models.llava_onevision_hf import LlavaOneVisionHFAdapt
 from prune_quant_baseline.models.qwen2vl_hf import Qwen2VLHFAdapter
 from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, compute_answer_logprob_target
 from prune_quant_baseline.pruners.attention_proxy import AttentionProxyPruner
+from prune_quant_baseline.pruners.learned_compressor import LearnedCompressorPruner
 from prune_quant_baseline.pruners.token_gather import (
     build_keep_indices,
     gather_sequence_tensors,
@@ -38,6 +39,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attn-implementation", default="eager", help="Use 'none' to leave the HF default unchanged.")
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
+    parser.add_argument("--compressor-checkpoint")
     parser.add_argument("--allow-vanilla-fallback", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     return parser
@@ -68,6 +70,7 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "attn_implementation": None if args.attn_implementation == "none" else args.attn_implementation,
         "processor_use_fast": None if args.processor_use_fast is None else args.processor_use_fast == "true",
         "gae_answer_source": args.gae_answer_source,
+        "compressor_checkpoint": args.compressor_checkpoint or pruning.get("compressor_checkpoint"),
         "allow_vanilla_fallback": args.allow_vanilla_fallback,
         "trust_remote_code": model.get("trust_remote_code", True),
         "local_files_only": model.get("local_files_only", True),
@@ -82,12 +85,16 @@ def _make_adapter(model_type: str):
     raise ValueError("model_type must be one of: llava_onevision, qwen2vl.")
 
 
-def _make_pruner(name: str):
+def _make_pruner(name: str, *, checkpoint_path: str | None = None):
     if name == "attention_proxy":
         return AttentionProxyPruner()
     if name == "gae_oracle":
         return GAEOraclePruner()
-    raise NotImplementedError(f"Pruner {name!r} is not implemented for first-stage remote inference.")
+    if name == "learned_compressor":
+        if not checkpoint_path:
+            raise ValueError("learned_compressor requires --compressor-checkpoint.")
+        return LearnedCompressorPruner(checkpoint_path)
+    raise NotImplementedError(f"Pruner {name!r} is not implemented.")
 
 
 def _read_jsonl(path: str | Path):
@@ -364,7 +371,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     model.eval()
     adapter = _make_adapter(cfg["model_type"])
-    pruner = _make_pruner(cfg["pruner"])
+    pruner = _make_pruner(cfg["pruner"], checkpoint_path=cfg["compressor_checkpoint"])
 
     output_path = Path(cfg["output_jsonl"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,7 +389,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             try:
                 meta = adapter.get_visual_token_meta(model, inputs)
                 num_visual_tokens_before = int(meta.visual_indices.numel())
-                if isinstance(pruner, AttentionProxyPruner):
+                if isinstance(pruner, (AttentionProxyPruner, LearnedCompressorPruner)):
                     scores = _score_attention_proxy(model, pruner, inputs, meta)
                 elif isinstance(pruner, GAEOraclePruner):
                     answer = str(sample.get("answer") or "").strip()

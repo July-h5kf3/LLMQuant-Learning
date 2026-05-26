@@ -17,8 +17,10 @@ class LearnedCompressorPruner(VisualTokenPruner):
         if not self.checkpoint_path.exists():
             raise FileNotFoundError(f"Compressor checkpoint does not exist: {self.checkpoint_path}")
         self.device = torch.device(device) if device is not None else torch.device("cpu")
-        self.compressor = RelevanceCompressor().to(self.device)
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+        channels = checkpoint.get("channels", 32) if isinstance(checkpoint, dict) else 32
+        num_blocks = checkpoint.get("num_blocks", 5) if isinstance(checkpoint, dict) else 5
+        self.compressor = RelevanceCompressor(channels=channels, num_blocks=num_blocks).to(self.device)
         state_dict = checkpoint.get("model_state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
         self.compressor.load_state_dict(state_dict)
         self.compressor.eval()
