@@ -44,7 +44,7 @@ class GAEOraclePruner(VisualTokenPruner):
                 )
             if attn.dim() != 4 or attn.shape[0] != 1:
                 raise ValueError(f"Expected attention shape [1, H, S, S], got {tuple(attn.shape)}.")
-            relevance = F.relu(attn * attn.grad).mean(dim=1)[0]
+            relevance = attn.grad.mul_(attn).relu_().mean(dim=1)[0]
             if rollout is None:
                 seq_len = relevance.shape[-1]
                 rollout = torch.eye(seq_len, device=attn.device, dtype=relevance.dtype)
