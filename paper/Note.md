@@ -1569,7 +1569,7 @@ $$
 
 可以参考下面的gif
 
-![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/sliderquant_gif2.gif)
+![](/figure/sliderquant_gif2.gif)
 
 **Intra-Layer Sliding Quantization**
 
@@ -1579,9 +1579,9 @@ $$
 
 这里从语言上描述比较抽象，可以参考下面的GIF，简单来说就是对于权重/激活值矩阵，沿着某个维度逐渐进行量化（而非一次性量化）。
 
-![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/sliderquant_gif1.gif)
+![](/figure/sliderquant_gif1.gif)
 
-![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/SliderQuant_fig2.png)
+![](/figure/SliderQuant_fig2.png)
 
 层内滑动量化在层间滑动量化当前滑动窗口内部，建立了一种从局部到全局的跨层参数协同关系，从而降低量化误差。
 
@@ -1701,7 +1701,7 @@ $$
 
 可以见下图:
 
-![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/SERQ_fig1.png)
+![](/figure/SERQ_fig1.png)
 
 此外，传统的低秩误差重构方法通常对整个误差矩阵$E = W - Q(W)$做截断SVD，这带来的问题是固定 rank budget 会被分散到整个矩阵的所有行列上，而造成真正大影响的可能只是少数几个权重，这样会稀释低秩补偿能力。
 
@@ -1768,7 +1768,7 @@ $$
 
 至此，完整的流程可见下图:
 
-![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/SERQ_fig2.png)
+![](/figure/SERQ_fig2.png)
 
 #### ReSpinQuant: Efficient Layer-Wise LLM Quantization via Subspace Residual Rotation Approximation
 
@@ -1780,7 +1780,7 @@ ReSpinQuant克服了这一限制。实现了可融合的Layer-Wise Rotation base
 
 具体方法如下:
 
-![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/respinquant_fig1.png)
+![](/figure/respinquant_fig1.png)
 
 上图是respinquant应用于标准Transformer层时的完整架构。
 
