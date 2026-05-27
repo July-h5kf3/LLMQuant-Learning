@@ -1686,3 +1686,186 @@ $$
 $$
 \beta^* = [b_1^*,\dots,b_M^*]^\top,\quad b_i = -A_i^{-1}\rho_i,i = 1,\dots,M
 $$
+
+#### SERQ: Saliency-Aware Low-Rank Error Reconstruction For LLM Quantization
+
+这篇文章将LLM PTQ做到了W4A4，是通过低秩误差重建的方式做到的。
+
+传统的W4A4量化方法一般是通过Rotation-Based的方式进行的，这种方式虽然有效，但是一方面可能不存在鲁棒性，另一方面校准/训练成本高。
+
+相较于Rotation-Base的PTQ方法， 基于低秩误差重建的方法有不用重训练太多，也不需要复杂在线层的优势，但仅在W4A8下表现优异，在W4A4下会呈现出明显的性能损失。更加关键的是，传统低秩补偿是两个矩阵$L_1,L_2$,推理时需要进行:
+$$
+X_qW_q + X_qL_1L_2
+$$
+这意味着第二项$X_qL_1L_2$我们除了要对$X_q$进行量化以外，我们还需要在线对$X_qL_1$的结果进行在线量化，这带来的额外开销对低精度的kernel而言并不友好。
+
+可以见下图:
+
+![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/SERQ_fig1.png)
+
+此外，传统的低秩误差重构方法通常对整个误差矩阵$E = W - Q(W)$做截断SVD，这带来的问题是固定 rank budget 会被分散到整个矩阵的所有行列上，而造成真正大影响的可能只是少数几个权重，这样会稀释低秩补偿能力。
+
+基于上述问题，论文提出了SERQ方法，一种显著性感知的误差重构算法，它在单个低秩矩阵中同时考虑权重显著性和激活显著性。
+
+具体而言该方法的步骤如下：
+
+- 静态激活平滑
+
+激活值量化通常因为异常值的存在而十分脆弱，通常的方法是通过旋转变换或者辅助层对异常值进行在线处理，这些方法虽然有效，但是会引入额外的推理时延，因此这里选用的是SmoothQuant的方式，即采用静态的逐通道缩放来平滑激活分布。
+
+具体来说，激活会被一个缩放因子s缩放，同时对应的缩放因子会被折叠进权重中。因此，线性层中的操作可以表示为：
+$$
+Y = XW = (X\cdot \text{diag}(S^{-1}))(\text{diag}(S)\cdot W) = XW
+$$
+这些缩放因子在校准阶段获得，并在线下合并到相邻层中，因此不会带来运行时开销。
+
+- 显著性感知的误差重建
+
+逐通道静态平滑过程会把激活离群值的尺度转移到对应的权重中。假设原始权重符合正态分布，那么在折叠后的权重中，显著行可以直接通过它们的尺度来识别。
+
+这些显著行在反复与激活矩阵相乘时，会累积较大的量化误差。为了缓解这一问题，我们引入了一个低秩补偿矩阵:
+$$
+R \in \mathbb{R}^{r \times d}
+$$
+它用于修正r个显著权重行中的量化误差，记这些显著权重行为$W_s$
+
+考虑将权重行按照显著性降序排列，即通过置换矩阵P进行重排，则折叠后的矩阵W和显著性感知的低秩矩阵R可以定义为:
+$$
+W = P\cdot \text{diag}(S)\cdot W = P\cdot W = [W_s;W_r]\\
+R = W_s - Q(W_s)
+$$
+其中$W_r$表示剩余的非显著行
+
+随后，整体线性操作可以描述为:
+$$
+Y = (X\cdot \text{diag}(s^{-1})\cdot P^{-1})(P\cdot \text{diag}(s)W) = XW\\
+Q(X)\cdot Q(W)=Q([X_s;X_r])\cdot Q([W_s;W_r])+Q(X_s)\cdot R \approx X_q\cdot W_q + X_{s,q}\cdot Q(R)
+$$
+需要注意的是我们也会对低秩矩阵R进行量化，从而保证整个推理流程都可以使用低精度算子。
+
+通过提取出敏感行的方法，我们将原本的在线量化成本省去，并保留了低秩乘法的便捷！此时残差分支只需要执行一个计算量较低的低秩乘法:
+$$
+\mathbb{R}^{s\times r}\times \mathbb{R}^{r\times d}
+$$
+
+- 离线置换权重
+
+我们为了提取敏感行将激活值和权重通过置换矩阵P变换为了:
+$$
+X = [X_s;X_r]\quad W = [W_s;W_r]
+$$
+为了不引入额外的在线计算开销，会做一个简单的融合。
+
+一共有两部分，一个是权重上的，$P\cdot \text{diag}(s)\cdot W$,那这个很简单，我们一般的做法是会把scale离线融到W中，按照同样的思路我们也把P融合进去。另一部分则是激活值上的$X\cdot \text{diag}(s^{-1})\cdot P^{-1}$因为激活值X在推理时才有，我们无法离线融合，因此选用的方法是不在当前层进行融合，而是把这个重排继续传播到前一层中。因为我们知道当前层l的激活值X:
+$$
+X = X^{l-1}W^{l-1}
+$$
+因此我们令:
+$$
+W^{l-1} = W^{l-1}\cdot \text{diag}(s^{-1})\cdot P^{-1}
+$$
+即可，这个操作可以离线执行，因此不会带来额外的计算开销
+
+至此，完整的流程可见下图:
+
+![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/SERQ_fig2.png)
+
+#### ReSpinQuant: Efficient Layer-Wise LLM Quantization via Subspace Residual Rotation Approximation
+
+在LLM的权重-激活值量化中，目前的主流是基于旋转的方法，总体而言可以分为两类，一种是以SpinQuant，QuaRot为代表的全局旋转方法，另一种是以FlatQuant，OSTQuant为代表的layer-wise 变换方法。
+
+二者的区别在于前者全局共享旋转矩阵，可以实现激活旋转与权重的离线融合，这种方式推理时无额外开销，效率高，但是表达能力有限；而Layer-Wise变换方法为每层分配独特的旋转矩阵，可以通过局部适应实现更优的异常值抑制，但是会产生额外的推理开销，因为这个旋转矩阵在激活侧无法融合进前一层的权重层。
+
+ReSpinQuant克服了这一限制。实现了可融合的Layer-Wise Rotation base PTQ。
+
+具体方法如下:
+
+![](/Users/lorn/Documents/Playground/周汇报/LLMQuant-Learning/paper/figure/respinquant_fig1.png)
+
+上图是respinquant应用于标准Transformer层时的完整架构。
+
+我们设L表示总层数，对于第i层:
+
+- $R_1^i$:用于旋转MHSA模块的激活输入，以及FFN模块的输出激活（来自于下一层）
+- $R_2^i$:用于旋转FFN模块的输入，以及MHSA的输出。
+- $R_3^i$:作用于注意力机制的中间旋转，如Value projection
+- $R_4,R_5$:通过快速 Hadamard 变换实现的结构化旋转。与SpinQuant中保持一致。
+
+上述旋转矩阵均可被MHSA，FFN内部的线性变换吸收，例如$W_v^i$会被融合为:$\hat W_v^i = {R_1^i}^\top W_v^i R_3^i$
+
+上述吸收可以离线进行，因此基本上在保证计算不变性的同时，几乎没有带来额外的推理开销。
+
+但是上述公式仅在Transfomer Block内部成立，当使用逐层旋转时，残差连接会带来挑战。
+
+我们设$R_{in}$和$R_{out}$分别表示每个MHSA或FFN block的输入和输出所对应的最优逐层旋转矩阵。原始残差连接为:
+$$
+x_{out} = x_{in} + \text{Block}(x_{in})
+$$
+在旋转后，我们可以写作:
+$$
+\hat{x_{out}} = R_{out}R_{in}^{\top}\hat{x_{in}}+R_{out}\text{Block}(R_{in}^{\top}\hat{x_{in}})
+$$
+如果采用类似于SpinQuant的全局旋转策略，那么有$R_{out} = R_{in}$,此时:
+$$
+T = R_{out}R_{in}^\top  = I
+$$
+因此可以消除残差连接中的额外计算开销（也就是我们不需要显式计算）。然而，这会限制模型的表达能力，因为它强制所有层共享同一个旋转基。
+
+为了解决这个问题，我们采用完整大小的逐层旋转矩阵，以最大化表达能力；同时，通过对子空间旋转近似来逼近残差旋转矩阵 T。
+
+作者团队通过实验发现，用Hadamard矩阵初始化旋转矩阵，并通过Caley Optimizer对其进行优化，学习到的旋转矩阵$(R_1,R_2)$在收敛后并不会显著偏离初始的Hadamard结构。因此，残差旋转矩阵T表现出很强的对角占优特性:
+$$
+T = R_{out}R_{in}^\top\approx HH^\top = I
+$$
+我们将其相对于单位矩阵I的偏差记为:
+$$
+\Delta T = T - I
+$$
+随后，对偏差矩阵进行SVD分解,以识别基空间不匹配的主要方向（按照我们对SVD的理解，经过矩阵T的线性变换后，向量所在空间以Q为基底，也就是Q所在的线性空间）:
+$$
+Q,S,V^\top = \text{SVD}(T-I)
+$$
+我们截断分解，只保留前r个奇异向量，从而构造投影矩阵（即我们认为在空间上只有少数方向上残差不匹配）:
+$$
+Q \in \mathbb{R}^{D\times r}
+$$
+推理出这个子空间基后，我们便可以在子空间内推导最优旋转矩阵:
+$$
+\hat{R}_{sub}\in \mathbb{R}^{r\times r}
+$$
+首先，将完整的变换矩阵投影到该子空间中:
+$$
+T_{\text{sub}} = Q^\top T Q \in \mathbb{R}^{r\times r}
+$$
+由于投影操作不严格保持正交性，因此我们通过极分解提取最接近的正交矩阵。具体而言，我们对投影后的分量进行 SVD：
+$$
+U_{sub},\Sigma_{sub},V_{sub}^\top = \text{SVD}(T_{sub})
+$$
+由此得到正交化后的子空间旋转矩阵:
+$$
+\hat{R}_{\text{sub}} = U_{\text{sub}}V_{\text{sub}}^\top
+$$
+我们通过仅在识别出的子空间内施加变换，同时保持其正交补空间不变，来近似完整旋转矩阵T。近似后的变换矩阵$\hat T$定义为:
+$$
+\hat T = \underbrace{I-QQ^\top}_{(D-r)维恒等变换}+\underbrace{Q\hat R_{\text{sub}}Q^\top}_{子空间旋转}
+$$
+那么残差流的整体流程如下：
+
+1. 投影: $y = Q^\top \hat x_{in} \in \mathbb{R}^{r}$
+2. 子空间变换,在r维子空间内应用可学习的稠密变换，我们定义有效子空间矩阵：
+
+$$
+M = \hat{R_{\text{sub}}} - I_r
+$$
+
+以合并加法操作，因此有：
+$$
+z = My \in \mathbb{R}^{r}
+$$
+
+3. 重投影与残差相加:
+
+将原始结果投影回原始维度，并与输入相加:
+$$
+\hat{x_{\text{out}}} = \hat{x_{in}}+Qz
+$$

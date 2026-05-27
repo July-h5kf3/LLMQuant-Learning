@@ -1,5 +1,7 @@
 paper/*.pdf
 paper/**/*.pdf
+paper/*.har
+paper/cookie.txt
 
 .DS_Store
 __pycache__/

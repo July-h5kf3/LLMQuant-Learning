@@ -50,7 +50,8 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 | 多模态大模型剪枝 | [**Task-related token compression  in multi-modal large language  models from an ex-plainability perspective**](https://arxiv.org/pdf/2506.01097) | ICLR 2026 | Yes | 很有意思的想法 | 出发点是发现了一种较好的可解释性的剪枝方法，但是剪枝决策需要在推理完成后得到，因此通过加入可学习模块的方式进行改良。 |
 | 大语言模型量化, PTQ, 低比特, 滑动窗口 | [**SliderQuant**: Accurate Post-Training Quantization for LLMs](https://arxiv.org/abs/2603.25284) | ICLR 2026 | Yes | 很有启发 | 针对首尾层更敏感和逐层量化误差累积问题，提出层间自适应滑动窗口与层内增量式滑动量化，在跨层协同中结合通道缩放和低秩补偿降低低比特 PTQ 误差。 |
 | 大语言模型量化, PTQ, 低比特, 新范式 | [**OSAQ**: Outlier Self-Absorption for Accurate Low-bit LLM Quantization](https://arxiv.org/pdf/2605.04738) | ICML 2026 | Yes | 新的Baseline |发现Task loss关于权重的Hessian具有低秩一致性，利用这个特性可以与现有的量化方法结合，进一步缓解激活值中的异常值效应，从而提升量化效果 |
-
+| 大语言模型量化, PTQ, 低比特, 低秩近似误差重建 | [**SERQ**: Saliency-Aware Low-Rank Error Reconstruction For LLM Quantization](https://arxiv.org/pdf/2603.08185) | ICLR 2026 | Yes | 低秩近似PTQ|只对误差中某些关键行做低秩近似，从而减少开销同时，提升性能 |
+| 大语言模型量化, PTQ, 低比特,Rotation Base | [**ReSpinQuant**: Efficient Layer-Wise LLM Quantization via Subspace Residual Rotation Approximation](https://arxiv.org/abs/2604.11080) | ICLR 2026 | Yes | Rotation Base|通过子空间旋转解决了Layer-Wise 旋转矩阵方法残差流不同基的问题|
 
 Awesome系类：[pprp/Awesome-LLM-Quantization: Awesome list for LLM quantization](https://github.com/pprp/Awesome-LLM-Quantization)
 
