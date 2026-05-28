@@ -15,6 +15,7 @@ from prune_quant_baseline.quant.masquant import (
     format_command,
     masquant_env,
     patch_lmclass_attention_implementation,
+    patch_lmclass_qwen2_vl_support,
     patch_qwen25_vl_inputs_embeds_masks,
     run_command,
 )
@@ -440,6 +441,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         if args.patch_masquant_inputs_embeds_mask and not args.dry_run:
             patched = patch_qwen25_vl_inputs_embeds_masks(config.root)
             LOGGER.info("Patched MASQuant inputs_embeds modality masks at %s", patched)
+        if args.model_type == "qwen2vl" and not args.dry_run:
+            patched = patch_lmclass_qwen2_vl_support(config.root)
+            LOGGER.info("Patched MASQuant Qwen2-VL support at %s", patched)
         if args.attn_implementation != "flash_attention_2" and not args.dry_run:
             patched = patch_lmclass_attention_implementation(config.root)
             LOGGER.info("Patched MASQuant attention implementation at %s", patched)

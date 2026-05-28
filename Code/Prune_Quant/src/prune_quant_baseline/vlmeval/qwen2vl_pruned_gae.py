@@ -9,6 +9,7 @@ from vlmeval.vlm.qwen2_vl.prompt import Qwen2VLPromptMixin
 
 from prune_quant_baseline.models.qwen2vl_hf import Qwen2VLHFAdapter
 from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner
+from prune_quant_baseline.quant.loaders import load_model_and_processor
 from prune_quant_baseline.scripts.run_infer_pruned import (
     _build_pruned_generation_inputs,
     _generate_from_pruned_inputs,
@@ -57,6 +58,12 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
     def __init__(
         self,
         model_path: str,
+        model_type: str = "qwen2vl",
+        quant_method: str = "none",
+        dtype: str = "auto",
+        device_map: str = "auto",
+        local_files_only: bool = True,
+        trust_remote_code: bool = True,
         min_pixels: int | None = None,
         max_pixels: int | None = None,
         min_visual_tokens: int | None = None,
@@ -67,19 +74,30 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         gae_answer_source: str = "generated",
         gae_per_token: bool = False,
         attn_implementation: str = "eager",
+        processor_use_fast: bool | None = None,
+        masquant_root: str | None = None,
+        masquant_resume: str | None = None,
+        masquant_act_scales: str | None = None,
+        masquant_wbits: int = 4,
+        masquant_abits: int = 8,
+        masquant_group_size: int = 0,
+        masquant_inference_mode: str = "split_scales",
+        masquant_symmetric: bool = True,
+        masquant_batch_size: int = 1,
         use_custom_prompt: bool = True,
         system_prompt: str | None = None,
         verbose: bool = False,
         **_: Any,
     ) -> None:
         if _is_omni_model(model_path):
-            raise NotImplementedError("Qwen2VLPrunedGAE supports Qwen2-VL image models only.")
-        from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+            raise NotImplementedError("Qwen2VLPrunedGAE supports Qwen2-VL/Qwen2.5-VL image models only.")
         from vlmeval.vlm.qwen2_vl.model import ensure_image_url
 
         super().__init__()
         self.ensure_image_url = ensure_image_url
         self.model_path = model_path
+        self.model_type = model_type
+        self.quant_method = quant_method
         self.min_pixels = _resolve_pixels(pixels=min_pixels, visual_tokens=min_visual_tokens, name="min")
         self.max_pixels = _resolve_pixels(pixels=max_pixels, visual_tokens=max_visual_tokens, name="max")
         self.max_new_tokens = int(max_new_tokens)
@@ -91,12 +109,35 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         self.system_prompt = system_prompt
         self.verbose = _bool_value(verbose)
 
-        self.processor = Qwen2VLProcessor.from_pretrained(model_path)
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
-            model_path,
-            torch_dtype="auto",
-            device_map="auto",
-            attn_implementation=attn_implementation,
+        load_kwargs: dict[str, Any] = {
+            "model_id_or_path": model_path,
+            "model_type": model_type,
+            "quant_method": quant_method,
+            "dtype": dtype,
+            "device_map": device_map,
+            "local_files_only": _bool_value(local_files_only),
+            "trust_remote_code": _bool_value(trust_remote_code),
+            "attn_implementation": None if attn_implementation == "none" else attn_implementation,
+            "processor_use_fast": None if processor_use_fast is None else _bool_value(processor_use_fast),
+            "processor_min_pixels": self.min_pixels,
+            "processor_max_pixels": self.max_pixels,
+        }
+        if quant_method == "masquant":
+            load_kwargs.update(
+                {
+                    "masquant_root": masquant_root,
+                    "masquant_resume": masquant_resume,
+                    "masquant_act_scales": masquant_act_scales,
+                    "masquant_wbits": int(masquant_wbits),
+                    "masquant_abits": int(masquant_abits),
+                    "masquant_group_size": int(masquant_group_size),
+                    "masquant_inference_mode": masquant_inference_mode,
+                    "masquant_symmetric": _bool_value(masquant_symmetric),
+                    "masquant_batch_size": int(masquant_batch_size),
+                }
+            )
+        self.model, self.processor = load_model_and_processor(
+            **load_kwargs,
         )
         self.model.eval()
         self._pq_adapter = Qwen2VLHFAdapter()
@@ -143,7 +184,6 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         if videos:
             raise NotImplementedError("Qwen2VLPrunedGAE currently supports image-only inputs.")
         inputs = self.processor(text=text, images=images, videos=videos, padding=True, return_tensors="pt")
-        inputs = inputs.to("cuda")
         plain_prompt = "\n".join(item["value"] for item in message if item["type"] == "text")
         sample = {
             "image": images[0] if images else None,

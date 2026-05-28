@@ -242,6 +242,47 @@ def patch_lmclass_attention_implementation(masquant_root: str | Path) -> Path:
     return target
 
 
+def patch_lmclass_qwen2_vl_support(masquant_root: str | Path) -> Path:
+    """Patch MASQuant LMClass to load Qwen2-VL image models.
+
+    The upstream MASQuant checkout used by this baseline has a dedicated Qwen2.5-VL
+    loader but may not include a Qwen2-VL branch. This patch inserts a Qwen2-VL
+    Hugging Face loader before the Qwen2.5-VL branch, so calibration and inference
+    can use the same MASQuant path for Qwen2-VL and Qwen2.5-VL.
+    """
+
+    root = validate_masquant_root(masquant_root)
+    target = root / "models" / "LMClass.py"
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: add qwen2-vl loader"
+    if marker in text:
+        return target
+    old = "        elif 'Qwen2.5-VL' in args.model:\n"
+    new = (
+        "        elif 'Qwen2-VL' in args.model:\n"
+        "            # prune_quant_baseline: add qwen2-vl loader.\n"
+        "            from transformers import Qwen2VLForConditionalGeneration\n"
+        "            model_kwargs = {\n"
+        "                'torch_dtype': torch.bfloat16,\n"
+        "                'low_cpu_mem_usage': True,\n"
+        "                'device_map': 'auto',\n"
+        "                'trust_remote_code': True,\n"
+        "                'attn_implementation': args.attn_implementation,\n"
+        "            }\n"
+        "            self.model = Qwen2VLForConditionalGeneration.from_pretrained(args.model, **model_kwargs)\n"
+        "        elif 'Qwen2.5-VL' in args.model:\n"
+    )
+    if old not in text:
+        raise RuntimeError(
+            f"Could not patch {target}; MASQuant source changed and the expected Qwen2.5-VL loader was not found."
+        )
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return target
+
+
 @contextlib.contextmanager
 def _prepend_sys_path(path: Path) -> Iterator[None]:
     old_path = list(sys.path)
@@ -382,6 +423,7 @@ def load_masquant_model_and_processor(
     if resume is None and act_scales is None:
         raise ValueError("MASQuant inference requires --masquant-resume or --masquant-act-scales.")
     root = validate_masquant_root(masquant_root)
+    patch_lmclass_qwen2_vl_support(root)
     if attn_implementation != "flash_attention_2":
         patch_lmclass_attention_implementation(root)
     previous_mode = os.environ.get("inference_mode")

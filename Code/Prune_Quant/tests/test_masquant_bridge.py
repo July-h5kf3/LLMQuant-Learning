@@ -7,6 +7,7 @@ from prune_quant_baseline.quant.masquant import (
     build_generate_act_scales_command,
     build_train_command,
     patch_lmclass_attention_implementation,
+    patch_lmclass_qwen2_vl_support,
     patch_qwen25_vl_inputs_embeds_masks,
     validate_masquant_root,
 )
@@ -107,3 +108,25 @@ def test_patch_lmclass_attention_implementation_is_idempotent(tmp_path: Path) ->
 
     assert "args.attn_implementation" in first
     assert first == second
+
+
+def test_patch_lmclass_qwen2_vl_support_is_idempotent(tmp_path: Path) -> None:
+    root = _make_masquant_root(tmp_path)
+    target = root / "models" / "LMClass.py"
+    target.write_text(
+        "before\n"
+        "        elif 'Qwen2.5-VL' in args.model:\n"
+        "            pass\n"
+        "after\n",
+        encoding="utf-8",
+    )
+
+    patch_lmclass_qwen2_vl_support(root)
+    first = target.read_text(encoding="utf-8")
+    patch_lmclass_qwen2_vl_support(root)
+    second = target.read_text(encoding="utf-8")
+
+    assert "'Qwen2-VL' in args.model" in first
+    assert "Qwen2VLForConditionalGeneration" in first
+    assert first == second
+    assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
