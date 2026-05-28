@@ -57,6 +57,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jpeg-reencode", action="store_true")
     parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
+    parser.add_argument("--log-oracle-replay", action="store_true")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--allow-vanilla-fallback", action="store_true")
@@ -296,7 +297,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                     elif isinstance(pruner, GAEOraclePruner):
                         answer = sample["answer"]
                         if args.gae_answer_source == "generated" or not answer:
-                            LOGGER.info("Generating oracle replay answer for sample %s.", index)
+                            if args.log_oracle_replay:
+                                LOGGER.info("Generating oracle replay answer for sample %s.", index)
                             answer = _generate_vanilla(model, processor, inputs, args.max_new_tokens)
                         if not answer:
                             raise ValueError("GAE oracle requires a non-empty sample answer or generated answer.")

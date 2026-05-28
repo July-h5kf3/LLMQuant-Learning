@@ -54,6 +54,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--gae-per-token", choices=["true", "false"], default="true")
+    parser.add_argument("--log-oracle-replay", action="store_true")
     parser.add_argument("--compressor-checkpoint")
     parser.add_argument("--allow-vanilla-fallback", action="store_true")
     parser.add_argument("--log-level", default="INFO")
@@ -101,6 +102,7 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "processor_use_fast": None if args.processor_use_fast is None else args.processor_use_fast == "true",
         "gae_answer_source": args.gae_answer_source,
         "gae_per_token": args.gae_per_token == "true",
+        "log_oracle_replay": args.log_oracle_replay,
         "compressor_checkpoint": args.compressor_checkpoint or pruning.get("compressor_checkpoint"),
         "allow_vanilla_fallback": args.allow_vanilla_fallback,
         "trust_remote_code": model.get("trust_remote_code", True),
@@ -174,8 +176,6 @@ def _generate_vanilla(model: Any, processor: Any, inputs: dict[str, Any], max_ne
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,
-            temperature=None,
-            top_p=None,
             num_beams=1,
             use_cache=True,
         )
@@ -469,7 +469,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 elif isinstance(pruner, GAEOraclePruner):
                     answer = str(sample.get("answer") or "").strip()
                     if cfg["gae_answer_source"] == "generated" or not answer:
-                        LOGGER.info("Generating oracle replay answer for sample %s.", sample.get("id", row_idx))
+                        if cfg["log_oracle_replay"]:
+                            LOGGER.info("Generating oracle replay answer for sample %s.", sample.get("id", row_idx))
                         answer = _generate_vanilla(model, processor, inputs, cfg["max_new_tokens"])
                     if not answer:
                         raise ValueError("GAE oracle requires a non-empty sample answer or generated answer.")
