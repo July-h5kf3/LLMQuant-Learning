@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 from pathlib import Path
 from typing import Any, Sequence
@@ -169,16 +170,41 @@ def _decode_token_ids(processor: Any, token_ids: Any) -> str:
     raise ValueError("Processor does not provide decode or batch_decode.")
 
 
+def _build_greedy_generation_config(model: Any, max_new_tokens: int) -> Any:
+    generation_config = copy.deepcopy(getattr(model, "generation_config", None))
+    if generation_config is None:
+        try:
+            from transformers import GenerationConfig
+
+            generation_config = GenerationConfig()
+        except ImportError:
+            return None
+
+    generation_config.max_new_tokens = max_new_tokens
+    generation_config.do_sample = False
+    generation_config.num_beams = 1
+    generation_config.use_cache = True
+    for sampling_attr in ("temperature", "top_p", "top_k"):
+        if hasattr(generation_config, sampling_attr):
+            setattr(generation_config, sampling_attr, None)
+    return generation_config
+
+
 def _generate_vanilla(model: Any, processor: Any, inputs: dict[str, Any], max_new_tokens: int) -> str:
     input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else None
+    generation_config = _build_greedy_generation_config(model, max_new_tokens)
+    generation_kwargs = {
+        **inputs,
+        "do_sample": False,
+        "num_beams": 1,
+        "use_cache": True,
+    }
+    if generation_config is not None:
+        generation_kwargs["generation_config"] = generation_config
+    else:
+        generation_kwargs["max_new_tokens"] = max_new_tokens
     with __import__("torch").no_grad():
-        generated_ids = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            num_beams=1,
-            use_cache=True,
-        )
+        generated_ids = model.generate(**generation_kwargs)
     return _decode_prediction(processor, generated_ids, input_len)
 
 
