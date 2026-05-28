@@ -380,6 +380,8 @@ pip install lmms-eval
 
 `flash-attn` is optional for this baseline. GAE needs eager attention, and the prune-then-MASQuant script can patch MASQuant's Qwen2.5 loader to honor `--attn-implementation eager`.
 
+To evaluate a MASQuant-quantized TensorRT model through VLMEvalKit, also install TensorRT / TensorRT-LLM on the remote GPU machine and provide a builder script that imports MASQuant parameters into a TensorRT engine. Upstream MASQuant currently saves `mas_parameters.pth`; this repository does not assume a fixed TensorRT export entrypoint, and instead wires your builder through `--tensorrt-builder-command`.
+
 ## GAE + MASQuant
 
 The prune-then-quant baseline has two phases.
@@ -446,6 +448,54 @@ The important invariant is:
 
 - calibration uses GAE-pruned prompts before MASQuant learns quantization parameters;
 - inference loads MASQuant first, then applies GAE pruning to the prompt before generation.
+
+### Save A MASQuant TensorRT Artifact And Evaluate With VLMEvalKit
+
+For the “quantize once, load directly at evaluation time” path, build the TensorRT engine after Phase 1 has produced `MASQUANT_RESUME`, then package the engine, MASQuant parameters, and processor into an artifact:
+
+```bash
+export MASQUANT_TRT_ARTIFACT="$WORK_ROOT/qwen25vl_gae50_masquant/masquant_trt_artifact"
+export TRT_ENGINE_DIR="$MASQUANT_TRT_ARTIFACT/engine"
+
+python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
+  --stage export-tensorrt \
+  --model-type qwen2_5_vl \
+  --model-path "$QWEN25VL_MODEL" \
+  --work-dir "$WORK_ROOT/qwen25vl_gae50_masquant" \
+  --masquant-resume "$MASQUANT_RESUME" \
+  --masquant-act-scales "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales/Qwen2.5-VL-7B-Instruct-text-vision-128.pt" \
+  --wbits 4 \
+  --abits 8 \
+  --tensorrt-engine-dir "$TRT_ENGINE_DIR" \
+  --tensorrt-artifact-dir "$MASQUANT_TRT_ARTIFACT" \
+  --tensorrt-builder-command "python /path/to/masquant_trt_builder.py --model {model_path} --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --output {engine_dir} --wbits {wbits} --abits {abits}"
+```
+
+If `TRT_ENGINE_DIR` was already built by another workflow, omit `--tensorrt-builder-command` and only write the artifact manifest. Non-dry-run mode checks that the engine directory is non-empty before registering it.
+
+Then run VLMEvalKit against the saved TensorRT artifact:
+
+```bash
+cd "$PROJECT_ROOT"
+python remote/install_vlmeval_pruned_gae.py --vlmeval-root "$VLMEVALKIT_ROOT"
+
+cd "$VLMEVALKIT_ROOT"
+export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
+export PQ_MASQUANT_TRT_ARTIFACT="$MASQUANT_TRT_ARTIFACT"
+export PQ_MAX_NEW_TOKENS=16
+
+python run.py --data MME MMStar MMVet --model Qwen2VL_MASQuant_TensorRT \
+  --work-dir "$WORK_ROOT/vlmeval_qwen25vl_masquant_trt" \
+  --verbose
+```
+
+`Qwen2VL_MASQuant_TensorRT` only reads the saved artifact. It does not rerun MASQuant calibration or rebuild the engine during VLMEvalKit inference. The default runtime uses TensorRT-LLM `ModelRunner`; if your engine needs a custom multimodal calling convention, set a custom runtime class in the manifest or override it with:
+
+```bash
+export PQ_TRT_RUNTIME_CLASS="your_package.your_module.YourTensorRTRuntime"
+```
+
+The custom runtime only needs to implement `generate(inputs, processor, max_new_tokens) -> str`.
 
 ## Useful Smoke Checks
 

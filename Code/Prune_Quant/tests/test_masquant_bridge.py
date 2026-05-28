@@ -11,6 +11,7 @@ from prune_quant_baseline.quant.masquant import (
     patch_qwen25_vl_inputs_embeds_masks,
     validate_masquant_root,
 )
+from prune_quant_baseline.scripts.run_prune_then_quant_masquant import build_arg_parser
 
 
 def _make_masquant_root(tmp_path: Path) -> Path:
@@ -130,3 +131,26 @@ def test_patch_lmclass_qwen2_vl_support_is_idempotent(tmp_path: Path) -> None:
     assert "Qwen2VLForConditionalGeneration" in first
     assert first == second
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
+
+
+def test_prune_then_masquant_accepts_export_tensorrt_stage() -> None:
+    args = build_arg_parser().parse_args(
+        [
+            "--stage",
+            "export-tensorrt",
+            "--model-path",
+            "/models/Qwen2.5-VL-7B-Instruct",
+            "--work-dir",
+            "/tmp/work",
+            "--masquant-resume",
+            "/tmp/mas_parameters.pth",
+            "--tensorrt-artifact-dir",
+            "/tmp/artifact",
+            "--tensorrt-engine-dir",
+            "/tmp/engine",
+        ]
+    )
+
+    assert args.stage == "export-tensorrt"
+    assert args.tensorrt_artifact_dir == "/tmp/artifact"
+    assert args.tensorrt_engine_dir == "/tmp/engine"

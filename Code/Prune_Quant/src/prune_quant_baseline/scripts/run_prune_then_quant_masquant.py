@@ -19,6 +19,12 @@ from prune_quant_baseline.quant.masquant import (
     patch_qwen25_vl_inputs_embeds_masks,
     run_command,
 )
+from prune_quant_baseline.quant.tensorrt import (
+    DEFAULT_RUNTIME_CLASS,
+    format_tensorrt_builder_command,
+    run_tensorrt_builder_command,
+    write_masquant_tensorrt_artifact,
+)
 from prune_quant_baseline.scripts.run_infer_pruned import (
     _build_pruned_generation_inputs,
     _generate_vanilla,
@@ -38,7 +44,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build a Prune-then-MASQuant baseline with GAE pruning in calibration and inference."
     )
-    parser.add_argument("--stage", choices=["prepare-cache", "calibrate", "infer"], default="calibrate")
+    parser.add_argument("--stage", choices=["prepare-cache", "calibrate", "infer", "export-tensorrt"], default="calibrate")
     parser.add_argument("--model-type", default="qwen2_5_vl", choices=["qwen2vl", "qwen2_5_vl"])
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--masquant-root", help="Path to alibaba/EfficientAI/masquant checkout.")
@@ -72,6 +78,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--masquant-act-scales")
     parser.add_argument("--masquant-resume")
     parser.add_argument("--masquant-output-dir")
+    parser.add_argument("--tensorrt-artifact-dir", help="Directory that stores the reusable MASQuant TensorRT artifact.")
+    parser.add_argument("--tensorrt-engine-dir", help="Directory containing the built TensorRT engine files.")
+    parser.add_argument(
+        "--tensorrt-builder-command",
+        help=(
+            "Optional TensorRT build command template. Available placeholders: "
+            "{model_path}, {masquant_resume}, {masquant_act_scales}, {engine_dir}, "
+            "{artifact_dir}, {wbits}, {abits}, {group_size}, {inference_mode}."
+        ),
+    )
+    parser.add_argument("--tensorrt-builder-cwd", help="Working directory for --tensorrt-builder-command.")
+    parser.add_argument("--tensorrt-runtime-class", default=DEFAULT_RUNTIME_CLASS)
     parser.add_argument("--skip-act-scale-collection", action="store_true")
     parser.add_argument(
         "--patch-masquant-inputs-embeds-mask",
@@ -420,6 +438,62 @@ def run_pruned_masquant_inference(args: argparse.Namespace, config: MASQuantRunC
     run_infer_main(argv)
 
 
+def export_masquant_tensorrt_artifact(args: argparse.Namespace, config: MASQuantRunConfig) -> None:
+    if not args.tensorrt_artifact_dir or not args.tensorrt_engine_dir:
+        raise ValueError("--stage export-tensorrt requires --tensorrt-artifact-dir and --tensorrt-engine-dir.")
+    if not args.masquant_resume:
+        raise ValueError("--stage export-tensorrt requires --masquant-resume.")
+
+    artifact_dir = Path(args.tensorrt_artifact_dir).expanduser().resolve()
+    engine_dir = Path(args.tensorrt_engine_dir).expanduser().resolve()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    engine_dir.parent.mkdir(parents=True, exist_ok=True)
+    builder_command = None
+    if args.tensorrt_builder_command:
+        builder_command = format_tensorrt_builder_command(
+            args.tensorrt_builder_command,
+            {
+                "model_path": args.model_path,
+                "masquant_resume": args.masquant_resume,
+                "masquant_act_scales": args.masquant_act_scales or "",
+                "engine_dir": engine_dir,
+                "artifact_dir": artifact_dir,
+                "wbits": args.wbits,
+                "abits": args.abits,
+                "group_size": args.group_size,
+                "inference_mode": args.inference_mode,
+            },
+        )
+        LOGGER.info("TensorRT builder command: %s", format_command(builder_command))
+        run_tensorrt_builder_command(
+            builder_command,
+            cwd=args.tensorrt_builder_cwd,
+            dry_run=args.dry_run,
+        )
+
+    if args.dry_run:
+        LOGGER.info("MASQuant TensorRT artifact dir: %s", artifact_dir)
+        LOGGER.info("TensorRT engine dir: %s", engine_dir)
+        return
+
+    artifact = write_masquant_tensorrt_artifact(
+        artifact_dir=artifact_dir,
+        model_path=args.model_path,
+        model_type=args.model_type,
+        engine_dir=engine_dir,
+        masquant_resume=args.masquant_resume,
+        masquant_act_scales=args.masquant_act_scales,
+        wbits=args.wbits,
+        abits=args.abits,
+        group_size=args.group_size,
+        inference_mode=args.inference_mode,
+        symmetric=True,
+        runtime_class=args.tensorrt_runtime_class,
+        builder_command=builder_command,
+    )
+    LOGGER.info("Wrote MASQuant TensorRT artifact manifest: %s", artifact.root / "manifest.json")
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     configure_logging(args.log_level)
@@ -452,6 +526,9 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if args.stage == "infer":
         run_pruned_masquant_inference(args, config)
+
+    if args.stage == "export-tensorrt":
+        export_masquant_tensorrt_artifact(args, config)
 
 
 if __name__ == "__main__":

@@ -380,6 +380,8 @@ pip install lmms-eval
 
 `flash-attn` 对这个 baseline 是可选的。GAE 需要 eager attention，prune-then-MASQuant 脚本可以 patch MASQuant 的 Qwen2.5 loader，让它遵循 `--attn-implementation eager`。
 
+如果要用 VLMEvalKit 跑 MASQuant 量化后的 TensorRT 模型，还需要在远端 GPU 环境中安装 TensorRT / TensorRT-LLM，并准备一个能够把 MASQuant 参数导入 TensorRT engine 的构建脚本。MASQuant 上游当前保存的是 `mas_parameters.pth`，本仓库不会假设某个固定的 TensorRT 导出入口，而是通过 `--tensorrt-builder-command` 接入你的构建命令。
+
 ## GAE + MASQuant
 
 prune-then-quant baseline 分为两个阶段。
@@ -446,6 +448,54 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
 
 - 校准阶段先使用 GAE-pruned prompts，再让 MASQuant 学习量化参数；
 - 推理阶段先加载 MASQuant，再在 generation 前对 prompt 应用 GAE 剪枝。
+
+### 保存 MASQuant TensorRT 产物并用 VLMEvalKit 评测
+
+如果目标是“量化一次，评测时直接加载”，在阶段 1 得到 `MASQUANT_RESUME` 后，先构建 TensorRT engine，并把 engine、MASQuant 参数和 processor 打包成 artifact：
+
+```bash
+export MASQUANT_TRT_ARTIFACT="$WORK_ROOT/qwen25vl_gae50_masquant/masquant_trt_artifact"
+export TRT_ENGINE_DIR="$MASQUANT_TRT_ARTIFACT/engine"
+
+python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
+  --stage export-tensorrt \
+  --model-type qwen2_5_vl \
+  --model-path "$QWEN25VL_MODEL" \
+  --work-dir "$WORK_ROOT/qwen25vl_gae50_masquant" \
+  --masquant-resume "$MASQUANT_RESUME" \
+  --masquant-act-scales "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales/Qwen2.5-VL-7B-Instruct-text-vision-128.pt" \
+  --wbits 4 \
+  --abits 8 \
+  --tensorrt-engine-dir "$TRT_ENGINE_DIR" \
+  --tensorrt-artifact-dir "$MASQUANT_TRT_ARTIFACT" \
+  --tensorrt-builder-command "python /path/to/masquant_trt_builder.py --model {model_path} --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --output {engine_dir} --wbits {wbits} --abits {abits}"
+```
+
+如果 `TRT_ENGINE_DIR` 已经由别的流程构建好，可以省略 `--tensorrt-builder-command`，只写 artifact manifest。非 dry-run 模式会检查 engine 目录非空，避免注册空产物。
+
+然后用 VLMEvalKit 直接加载这个保存好的 TensorRT artifact：
+
+```bash
+cd "$PROJECT_ROOT"
+python remote/install_vlmeval_pruned_gae.py --vlmeval-root "$VLMEVALKIT_ROOT"
+
+cd "$VLMEVALKIT_ROOT"
+export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
+export PQ_MASQUANT_TRT_ARTIFACT="$MASQUANT_TRT_ARTIFACT"
+export PQ_MAX_NEW_TOKENS=16
+
+python run.py --data MME MMStar MMVet --model Qwen2VL_MASQuant_TensorRT \
+  --work-dir "$WORK_ROOT/vlmeval_qwen25vl_masquant_trt" \
+  --verbose
+```
+
+`Qwen2VL_MASQuant_TensorRT` 只读取保存好的 artifact，不会在 VLMEvalKit 推理阶段重新跑 MASQuant 校准或重新构建 engine。默认 runtime 使用 TensorRT-LLM 的 `ModelRunner`；如果你的 engine 需要自定义多模态输入约定，可以把自定义 runtime 类路径写进 manifest，或通过环境变量覆盖：
+
+```bash
+export PQ_TRT_RUNTIME_CLASS="your_package.your_module.YourTensorRTRuntime"
+```
+
+自定义 runtime 只需要实现 `generate(inputs, processor, max_new_tokens) -> str`。
 
 ## 常用 Smoke Check
 
