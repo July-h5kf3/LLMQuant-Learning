@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 import pandas as pd
 from PIL import Image
+from tqdm.auto import tqdm
 
 from prune_quant_baseline.core.logging_utils import configure_logging, get_logger
 from prune_quant_baseline.scripts.run_infer_pruned import (
@@ -81,7 +82,15 @@ def _decode_image(value: Any, cache_key: str, image_cache: dict[str, Image.Image
 def _format_question(dataset: str, row: dict[str, Any], *, mme_prompt_style: str = "default") -> str:
     question = str(row["question"])
     if dataset == "MMStar":
-        options = "\n".join(f"{opt}. {row[opt]}" for opt in ["A", "B", "C", "D"])
+        option_values = []
+        for opt in ["A", "B", "C", "D"]:
+            if opt not in row or pd.isna(row[opt]):
+                option_values = []
+                break
+            option_values.append(f"{opt}. {row[opt]}")
+        options = "\n".join(option_values)
+        if not options:
+            return f"{question}\nAnswer with the option letter only, one of A, B, C, or D."
         return (
             f"{question}\n{options}\n"
             "Answer with the option letter only, one of A, B, C, or D."
@@ -220,7 +229,7 @@ def _iter_rows(args: argparse.Namespace):
         dataset = load_dataset(args.hf_dataset, split=args.hf_split, cache_dir=args.hf_cache_dir)
         if args.limit is not None:
             dataset = dataset.select(range(min(args.limit, len(dataset))))
-        for row_idx, row in enumerate(dataset):
+        for row_idx, row in tqdm(enumerate(dataset), total=len(dataset), desc=f"{args.dataset} rows"):
             yield row_idx, dict(row)
         return
     if not args.tsv:
@@ -228,7 +237,7 @@ def _iter_rows(args: argparse.Namespace):
     df = pd.read_csv(args.tsv, sep="\t")
     if args.limit is not None:
         df = df.head(args.limit)
-    for row_idx, row in df.iterrows():
+    for row_idx, row in tqdm(df.iterrows(), total=len(df), desc=f"{args.dataset} rows"):
         yield row_idx, row.to_dict()
 
 
