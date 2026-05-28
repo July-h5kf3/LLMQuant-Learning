@@ -172,8 +172,8 @@ def test_prune_then_masquant_accepts_cmc_and_export_tensorrt_stages() -> None:
             "/models/Qwen2.5-VL-7B-Instruct",
             "--work-dir",
             "/tmp/work",
-            "--masquant-act-scales",
-            "/tmp/act_scales.pt",
+            "--masquant-resume",
+            "/tmp/mas_parameters.pth",
         ]
     )
     args = build_arg_parser().parse_args(

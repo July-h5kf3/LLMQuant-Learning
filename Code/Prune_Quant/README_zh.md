@@ -451,19 +451,16 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
 
 ### CMC 补偿
 
-MASQuant 完整流程还包含 CMC（Cross-Modal Compensation）。在阶段 1 得到 activation scales 后，可以额外运行 CMC，生成 white matrix 和 low-rank adapters：
+MASQuant 完整流程还包含 CMC（Cross-Modal Compensation）。在阶段 1 得到 `mas_parameters.pth` 后，可以额外运行 CMC，生成 white matrix 和 low-rank adapters：
 
 ```bash
-export MASQUANT_ACT_SCALES=$(find "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales" \
-  -name '*.pt' | sort | tail -n 1)
-
 python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --stage cmc \
   --model-type qwen2_5_vl \
   --model-path "$QWEN25VL_MODEL" \
   --masquant-root "$MASQUANT_ROOT" \
   --work-dir "$WORK_ROOT/qwen25vl_gae50_masquant" \
-  --masquant-act-scales "$MASQUANT_ACT_SCALES" \
+  --masquant-resume "$MASQUANT_RESUME" \
   --wbits 4 \
   --abits 8 \
   --cmc-net qwen2.5-vl-7b \
@@ -477,6 +474,8 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
 
 - `$WORK_ROOT/qwen25vl_gae50_masquant/cmc/white_matrix_vision-audio-only.pt`
 - `$WORK_ROOT/qwen25vl_gae50_masquant/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt`
+
+注意：CMC 的 `--scales_path` 对应的是 MAS 训练后的 `mas_parameters.pth`，不是 raw activation scales。脚本默认使用 `--masquant-resume` 作为 CMC 的 scales path；只有需要覆盖时才传 `--cmc-scales-path`。
 
 如果你的 MASQuant checkout 里有自定义的 VL 专用入口，可以用 `--cmc-script-name infer_mas_vl.py` 覆盖。`vision-audio-only` 校准数据读取逻辑来自 MASQuant 上游脚本，需要按 MASQuant 的数据路径要求准备 COCO 等校准数据；如果只想先验证流程，可以用 `--cmc-cali-data-type no-white`。
 

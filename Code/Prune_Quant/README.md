@@ -451,19 +451,16 @@ The important invariant is:
 
 ### CMC Compensation
 
-The full MASQuant workflow also includes CMC (Cross-Modal Compensation). After Phase 1 has produced activation scales, run the CMC stage to generate a white matrix and low-rank adapters:
+The full MASQuant workflow also includes CMC (Cross-Modal Compensation). After Phase 1 has produced `mas_parameters.pth`, run the CMC stage to generate a white matrix and low-rank adapters:
 
 ```bash
-export MASQUANT_ACT_SCALES=$(find "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales" \
-  -name '*.pt' | sort | tail -n 1)
-
 python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --stage cmc \
   --model-type qwen2_5_vl \
   --model-path "$QWEN25VL_MODEL" \
   --masquant-root "$MASQUANT_ROOT" \
   --work-dir "$WORK_ROOT/qwen25vl_gae50_masquant" \
-  --masquant-act-scales "$MASQUANT_ACT_SCALES" \
+  --masquant-resume "$MASQUANT_RESUME" \
   --wbits 4 \
   --abits 8 \
   --cmc-net qwen2.5-vl-7b \
@@ -477,6 +474,8 @@ By default this calls upstream MASQuant `infer_mas.py` and saves CMC artifacts t
 
 - `$WORK_ROOT/qwen25vl_gae50_masquant/cmc/white_matrix_vision-audio-only.pt`
 - `$WORK_ROOT/qwen25vl_gae50_masquant/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt`
+
+Note: CMC `--scales_path` means MAS-trained `mas_parameters.pth`, not raw activation scales. This script uses `--masquant-resume` as the CMC scales path by default; only pass `--cmc-scales-path` when you need to override it.
 
 If your MASQuant checkout has a custom VL entrypoint, override it with `--cmc-script-name infer_mas_vl.py`. The `vision-audio-only` calibration data loading comes from upstream MASQuant and requires its expected COCO-style data paths; for a quick plumbing check, use `--cmc-cali-data-type no-white`.
 

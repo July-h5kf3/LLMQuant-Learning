@@ -84,6 +84,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--masquant-resume")
     parser.add_argument("--masquant-output-dir")
     parser.add_argument("--cmc-script-name", default="infer_mas.py")
+    parser.add_argument(
+        "--cmc-scales-path",
+        help="MAS-trained scales for CMC. Defaults to --masquant-resume, usually a mas_parameters.pth file.",
+    )
     parser.add_argument("--cmc-net", default="qwen2.5-vl-7b")
     parser.add_argument("--cmc-output-dir")
     parser.add_argument("--cmc-n-cali-samples", type=int, default=128)
@@ -494,8 +498,23 @@ def _cmc_low_rank_adapters_path(args: argparse.Namespace) -> Path:
     return _default_cmc_low_rank_adapters_path(args)
 
 
+def _resolve_cmc_scales_path(args: argparse.Namespace) -> Path:
+    value = args.cmc_scales_path or args.masquant_resume
+    if not value:
+        raise ValueError("--stage cmc requires --masquant-resume or --cmc-scales-path pointing to mas_parameters.pth.")
+    path = Path(value).expanduser().resolve()
+    if path.name != "mas_parameters.pth" and not args.cmc_scales_path:
+        LOGGER.warning("CMC usually expects MAS-trained mas_parameters.pth, got %s", path)
+    if "act_scales" in path.parts and not args.cmc_scales_path:
+        raise ValueError(
+            "CMC --scales_path expects MAS-trained scales, usually mas_parameters.pth. "
+            "Pass --masquant-resume \"$MASQUANT_RESUME\" instead of --masquant-act-scales."
+        )
+    return path
+
+
 def run_masquant_cmc(args: argparse.Namespace, config: MASQuantRunConfig) -> None:
-    act_scales = args.masquant_act_scales or str(config.resolved_act_scales_path)
+    cmc_scales = _resolve_cmc_scales_path(args)
     white_matrix_path = _cmc_white_matrix_path(args)
     low_rank_adapters_path = _cmc_low_rank_adapters_path(args)
     white_matrix_path.parent.mkdir(parents=True, exist_ok=True)
@@ -505,7 +524,7 @@ def run_masquant_cmc(args: argparse.Namespace, config: MASQuantRunConfig) -> Non
         config,
         script_name=args.cmc_script_name,
         net=args.cmc_net,
-        scales_path=act_scales,
+        scales_path=cmc_scales,
         output_dir=output_dir,
         n_cali_samples=args.cmc_n_cali_samples,
         cali_data_type=args.cmc_cali_data_type,
