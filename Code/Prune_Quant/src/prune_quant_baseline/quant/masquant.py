@@ -161,6 +161,80 @@ def build_train_command(config: MASQuantRunConfig) -> list[str]:
     return command
 
 
+def build_cmc_command(
+    config: MASQuantRunConfig,
+    *,
+    script_name: str = "infer_mas.py",
+    net: str = "qwen2.5-vl-7b",
+    scales_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    n_cali_samples: int = 128,
+    cali_data_type: str = "vision-audio-only",
+    rank: float = 0.2,
+    quant_cmc: int = 0,
+    save_white_matrix_path: str | Path | None = None,
+    save_low_rank_adapters: str | Path | None = None,
+    quantize: bool = True,
+    lr: bool = True,
+    tasks_multimodal: str = "",
+    limit_multimodal: float | None = None,
+    eval_ppl: bool = False,
+    eval_sqnr: bool = False,
+    eval_omni_task: bool = False,
+    extra_args: Sequence[str] = (),
+) -> list[str]:
+    root = config.root
+    scales = Path(scales_path).expanduser().resolve() if scales_path is not None else config.resolved_act_scales_path
+    out_dir = Path(output_dir).expanduser().resolve() if output_dir is not None else Path(config.output_dir).expanduser().resolve()
+    command = [
+        config.python,
+        str(root / script_name),
+        "--model",
+        config.model_path,
+        "--mode",
+        "infer",
+        "--net",
+        net,
+        "--scales_path",
+        str(scales),
+        "--wbits",
+        str(config.wbits),
+        "--abits",
+        str(config.abits),
+        "--output_dir",
+        str(out_dir),
+        "--batch_size",
+        str(config.batch_size),
+        "--n_cali_samples",
+        str(n_cali_samples),
+        "--cali_data_type",
+        cali_data_type,
+        "--rank",
+        str(rank),
+        "--quant_cmc",
+        str(quant_cmc),
+        "--attn_implementation",
+        config.attn_implementation,
+    ]
+    if lr:
+        command.append("--LR")
+    if quantize:
+        command.append("--quantize")
+    _append_flag(command, "--save_white_matrix_path", save_white_matrix_path)
+    _append_flag(command, "--save_low_rank_adapters", save_low_rank_adapters)
+    if tasks_multimodal:
+        command.extend(["--tasks_multimodal", tasks_multimodal])
+    _append_flag(command, "--limit_multimodal", limit_multimodal)
+    if eval_ppl:
+        command.append("--eval_ppl")
+    if eval_sqnr:
+        command.append("--eval_sqnr")
+    if eval_omni_task:
+        command.append("--eval_omni_task")
+    command.extend(extra_args)
+    return command
+
+
 def masquant_env(config: MASQuantRunConfig) -> dict[str, str]:
     env = os.environ.copy()
     env["inference_mode"] = config.inference_mode

@@ -449,13 +449,46 @@ The important invariant is:
 - calibration uses GAE-pruned prompts before MASQuant learns quantization parameters;
 - inference loads MASQuant first, then applies GAE pruning to the prompt before generation.
 
+### CMC Compensation
+
+The full MASQuant workflow also includes CMC (Cross-Modal Compensation). After Phase 1 has produced activation scales, run the CMC stage to generate a white matrix and low-rank adapters:
+
+```bash
+export MASQUANT_ACT_SCALES=$(find "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales" \
+  -name '*.pt' | sort | tail -n 1)
+
+python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
+  --stage cmc \
+  --model-type qwen2_5_vl \
+  --model-path "$QWEN25VL_MODEL" \
+  --masquant-root "$MASQUANT_ROOT" \
+  --work-dir "$WORK_ROOT/qwen25vl_gae50_masquant" \
+  --masquant-act-scales "$MASQUANT_ACT_SCALES" \
+  --wbits 4 \
+  --abits 8 \
+  --cmc-net qwen2.5-vl-7b \
+  --cmc-cali-data-type vision-audio-only \
+  --cmc-rank 0.2 \
+  --cmc-quant-cmc 0 \
+  --cmc-n-cali-samples 128
+```
+
+By default this calls upstream MASQuant `infer_mas.py` and saves CMC artifacts to:
+
+- `$WORK_ROOT/qwen25vl_gae50_masquant/cmc/white_matrix_vision-audio-only.pt`
+- `$WORK_ROOT/qwen25vl_gae50_masquant/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt`
+
+If your MASQuant checkout has a custom VL entrypoint, override it with `--cmc-script-name infer_mas_vl.py`. The `vision-audio-only` calibration data loading comes from upstream MASQuant and requires its expected COCO-style data paths; for a quick plumbing check, use `--cmc-cali-data-type no-white`.
+
 ### Save A MASQuant TensorRT Artifact And Evaluate With VLMEvalKit
 
-For the “quantize once, load directly at evaluation time” path, build the TensorRT engine after Phase 1 has produced `MASQUANT_RESUME`, then package the engine, MASQuant parameters, and processor into an artifact:
+For the “quantize once, load directly at evaluation time” path, build the TensorRT engine after Phase 1 and CMC, then package the engine, MASQuant parameters, CMC artifacts, and processor into an artifact:
 
 ```bash
 export MASQUANT_TRT_ARTIFACT="$WORK_ROOT/qwen25vl_gae50_masquant/masquant_trt_artifact"
 export TRT_ENGINE_DIR="$MASQUANT_TRT_ARTIFACT/engine"
+export CMC_LOW_RANK="$WORK_ROOT/qwen25vl_gae50_masquant/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt"
+export CMC_WHITE="$WORK_ROOT/qwen25vl_gae50_masquant/cmc/white_matrix_vision-audio-only.pt"
 
 python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --stage export-tensorrt \
@@ -466,9 +499,11 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --masquant-act-scales "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales/Qwen2.5-VL-7B-Instruct-text-vision-128.pt" \
   --wbits 4 \
   --abits 8 \
+  --cmc-low-rank-adapters "$CMC_LOW_RANK" \
+  --cmc-white-matrix-path "$CMC_WHITE" \
   --tensorrt-engine-dir "$TRT_ENGINE_DIR" \
   --tensorrt-artifact-dir "$MASQUANT_TRT_ARTIFACT" \
-  --tensorrt-builder-command "python /path/to/masquant_trt_builder.py --model {model_path} --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --output {engine_dir} --wbits {wbits} --abits {abits}"
+  --tensorrt-builder-command "python /path/to/masquant_trt_builder.py --model {model_path} --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --cmc-low-rank {cmc_low_rank_adapters} --cmc-white-matrix {cmc_white_matrix} --output {engine_dir} --wbits {wbits} --abits {abits}"
 ```
 
 If `TRT_ENGINE_DIR` was already built by another workflow, omit `--tensorrt-builder-command` and only write the artifact manifest. Non-dry-run mode checks that the engine directory is non-empty before registering it.

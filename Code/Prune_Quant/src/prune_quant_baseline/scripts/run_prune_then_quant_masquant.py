@@ -11,6 +11,7 @@ from prune_quant_baseline.core.logging_utils import configure_logging, get_logge
 from prune_quant_baseline.quant.loaders import load_model_and_processor
 from prune_quant_baseline.quant.masquant import (
     MASQuantRunConfig,
+    build_cmc_command,
     build_train_command,
     format_command,
     masquant_env,
@@ -44,7 +45,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build a Prune-then-MASQuant baseline with GAE pruning in calibration and inference."
     )
-    parser.add_argument("--stage", choices=["prepare-cache", "calibrate", "infer", "export-tensorrt"], default="calibrate")
+    parser.add_argument(
+        "--stage",
+        choices=["prepare-cache", "calibrate", "cmc", "infer", "export-tensorrt"],
+        default="calibrate",
+    )
     parser.add_argument("--model-type", default="qwen2_5_vl", choices=["qwen2vl", "qwen2_5_vl"])
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--masquant-root", help="Path to alibaba/EfficientAI/masquant checkout.")
@@ -78,6 +83,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--masquant-act-scales")
     parser.add_argument("--masquant-resume")
     parser.add_argument("--masquant-output-dir")
+    parser.add_argument("--cmc-script-name", default="infer_mas.py")
+    parser.add_argument("--cmc-net", default="qwen2.5-vl-7b")
+    parser.add_argument("--cmc-output-dir")
+    parser.add_argument("--cmc-n-cali-samples", type=int, default=128)
+    parser.add_argument(
+        "--cmc-cali-data-type",
+        choices=["vision-audio-only", "text-audio-vision", "no-white"],
+        default="vision-audio-only",
+    )
+    parser.add_argument("--cmc-rank", type=float, default=0.2)
+    parser.add_argument("--cmc-quant-cmc", type=int, default=0)
+    parser.add_argument("--cmc-white-matrix-path")
+    parser.add_argument("--cmc-low-rank-adapters")
+    parser.add_argument("--cmc-no-lr", action="store_true")
+    parser.add_argument("--cmc-no-quantize", action="store_true")
+    parser.add_argument("--cmc-tasks-multimodal", default="")
+    parser.add_argument("--cmc-limit-multimodal", type=float)
+    parser.add_argument("--cmc-eval-ppl", action="store_true")
+    parser.add_argument("--cmc-eval-sqnr", action="store_true")
+    parser.add_argument("--cmc-eval-omni-task", action="store_true")
+    parser.add_argument("--cmc-extra-arg", action="append", default=[])
     parser.add_argument("--tensorrt-artifact-dir", help="Directory that stores the reusable MASQuant TensorRT artifact.")
     parser.add_argument("--tensorrt-engine-dir", help="Directory containing the built TensorRT engine files.")
     parser.add_argument(
@@ -85,7 +111,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Optional TensorRT build command template. Available placeholders: "
             "{model_path}, {masquant_resume}, {masquant_act_scales}, {engine_dir}, "
-            "{artifact_dir}, {wbits}, {abits}, {group_size}, {inference_mode}."
+            "{artifact_dir}, {wbits}, {abits}, {group_size}, {inference_mode}, "
+            "{cmc_low_rank_adapters}, {cmc_white_matrix}."
         ),
     )
     parser.add_argument("--tensorrt-builder-cwd", help="Working directory for --tensorrt-builder-command.")
@@ -443,6 +470,65 @@ def run_pruned_masquant_inference(args: argparse.Namespace, config: MASQuantRunC
     run_infer_main(argv)
 
 
+def _default_cmc_white_matrix_path(args: argparse.Namespace) -> Path:
+    return Path(args.work_dir).expanduser().resolve() / "cmc" / (
+        f"white_matrix_{args.cmc_cali_data_type}.pt"
+    )
+
+
+def _default_cmc_low_rank_adapters_path(args: argparse.Namespace) -> Path:
+    return Path(args.work_dir).expanduser().resolve() / "cmc" / (
+        f"low_rank_adapters_quantcmc{args.cmc_quant_cmc}_rank{args.cmc_rank}_{args.cmc_cali_data_type}.pt"
+    )
+
+
+def _cmc_white_matrix_path(args: argparse.Namespace) -> Path:
+    if args.cmc_white_matrix_path:
+        return Path(args.cmc_white_matrix_path).expanduser().resolve()
+    return _default_cmc_white_matrix_path(args)
+
+
+def _cmc_low_rank_adapters_path(args: argparse.Namespace) -> Path:
+    if args.cmc_low_rank_adapters:
+        return Path(args.cmc_low_rank_adapters).expanduser().resolve()
+    return _default_cmc_low_rank_adapters_path(args)
+
+
+def run_masquant_cmc(args: argparse.Namespace, config: MASQuantRunConfig) -> None:
+    act_scales = args.masquant_act_scales or str(config.resolved_act_scales_path)
+    white_matrix_path = _cmc_white_matrix_path(args)
+    low_rank_adapters_path = _cmc_low_rank_adapters_path(args)
+    white_matrix_path.parent.mkdir(parents=True, exist_ok=True)
+    low_rank_adapters_path.parent.mkdir(parents=True, exist_ok=True)
+    output_dir = args.cmc_output_dir or Path(args.work_dir).expanduser().resolve() / "cmc_outputs"
+    command = build_cmc_command(
+        config,
+        script_name=args.cmc_script_name,
+        net=args.cmc_net,
+        scales_path=act_scales,
+        output_dir=output_dir,
+        n_cali_samples=args.cmc_n_cali_samples,
+        cali_data_type=args.cmc_cali_data_type,
+        rank=args.cmc_rank,
+        quant_cmc=args.cmc_quant_cmc,
+        save_white_matrix_path=white_matrix_path,
+        save_low_rank_adapters=low_rank_adapters_path,
+        quantize=not args.cmc_no_quantize,
+        lr=not args.cmc_no_lr,
+        tasks_multimodal=args.cmc_tasks_multimodal,
+        limit_multimodal=args.cmc_limit_multimodal,
+        eval_ppl=args.cmc_eval_ppl,
+        eval_sqnr=args.cmc_eval_sqnr,
+        eval_omni_task=args.cmc_eval_omni_task,
+        extra_args=tuple(args.cmc_extra_arg),
+    )
+    LOGGER.info("Running MASQuant CMC.")
+    run_command(command, cwd=config.root, env=masquant_env(config), dry_run=args.dry_run)
+    if args.dry_run:
+        LOGGER.info("CMC white matrix path: %s", white_matrix_path)
+        LOGGER.info("CMC low-rank adapters path: %s", low_rank_adapters_path)
+
+
 def export_masquant_tensorrt_artifact(args: argparse.Namespace, config: MASQuantRunConfig) -> None:
     if not args.tensorrt_artifact_dir or not args.tensorrt_engine_dir:
         raise ValueError("--stage export-tensorrt requires --tensorrt-artifact-dir and --tensorrt-engine-dir.")
@@ -453,6 +539,12 @@ def export_masquant_tensorrt_artifact(args: argparse.Namespace, config: MASQuant
     engine_dir = Path(args.tensorrt_engine_dir).expanduser().resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
     engine_dir.parent.mkdir(parents=True, exist_ok=True)
+    cmc_low_rank_adapters = args.cmc_low_rank_adapters
+    if cmc_low_rank_adapters is None and _default_cmc_low_rank_adapters_path(args).exists():
+        cmc_low_rank_adapters = str(_default_cmc_low_rank_adapters_path(args))
+    cmc_white_matrix = args.cmc_white_matrix_path
+    if cmc_white_matrix is None and _default_cmc_white_matrix_path(args).exists():
+        cmc_white_matrix = str(_default_cmc_white_matrix_path(args))
     builder_command = None
     if args.tensorrt_builder_command:
         builder_command = format_tensorrt_builder_command(
@@ -467,6 +559,8 @@ def export_masquant_tensorrt_artifact(args: argparse.Namespace, config: MASQuant
                 "abits": args.abits,
                 "group_size": args.group_size,
                 "inference_mode": args.inference_mode,
+                "cmc_low_rank_adapters": cmc_low_rank_adapters or "",
+                "cmc_white_matrix": cmc_white_matrix or "",
             },
         )
         LOGGER.info("TensorRT builder command: %s", format_command(builder_command))
@@ -488,6 +582,8 @@ def export_masquant_tensorrt_artifact(args: argparse.Namespace, config: MASQuant
         engine_dir=engine_dir,
         masquant_resume=args.masquant_resume,
         masquant_act_scales=args.masquant_act_scales,
+        cmc_low_rank_adapters=cmc_low_rank_adapters,
+        cmc_white_matrix=cmc_white_matrix,
         wbits=args.wbits,
         abits=args.abits,
         group_size=args.group_size,
@@ -528,6 +624,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             LOGGER.info("Patched MASQuant attention implementation at %s", patched)
         command = build_train_command(config)
         run_command(command, cwd=config.root, env=masquant_env(config), dry_run=args.dry_run)
+
+    if args.stage == "cmc":
+        run_masquant_cmc(args, config)
 
     if args.stage == "infer":
         run_pruned_masquant_inference(args, config)

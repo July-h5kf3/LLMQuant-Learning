@@ -449,13 +449,46 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
 - 校准阶段先使用 GAE-pruned prompts，再让 MASQuant 学习量化参数；
 - 推理阶段先加载 MASQuant，再在 generation 前对 prompt 应用 GAE 剪枝。
 
+### CMC 补偿
+
+MASQuant 完整流程还包含 CMC（Cross-Modal Compensation）。在阶段 1 得到 activation scales 后，可以额外运行 CMC，生成 white matrix 和 low-rank adapters：
+
+```bash
+export MASQUANT_ACT_SCALES=$(find "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales" \
+  -name '*.pt' | sort | tail -n 1)
+
+python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
+  --stage cmc \
+  --model-type qwen2_5_vl \
+  --model-path "$QWEN25VL_MODEL" \
+  --masquant-root "$MASQUANT_ROOT" \
+  --work-dir "$WORK_ROOT/qwen25vl_gae50_masquant" \
+  --masquant-act-scales "$MASQUANT_ACT_SCALES" \
+  --wbits 4 \
+  --abits 8 \
+  --cmc-net qwen2.5-vl-7b \
+  --cmc-cali-data-type vision-audio-only \
+  --cmc-rank 0.2 \
+  --cmc-quant-cmc 0 \
+  --cmc-n-cali-samples 128
+```
+
+该命令默认使用 MASQuant 上游的 `infer_mas.py`，并把 CMC 产物保存到：
+
+- `$WORK_ROOT/qwen25vl_gae50_masquant/cmc/white_matrix_vision-audio-only.pt`
+- `$WORK_ROOT/qwen25vl_gae50_masquant/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt`
+
+如果你的 MASQuant checkout 里有自定义的 VL 专用入口，可以用 `--cmc-script-name infer_mas_vl.py` 覆盖。`vision-audio-only` 校准数据读取逻辑来自 MASQuant 上游脚本，需要按 MASQuant 的数据路径要求准备 COCO 等校准数据；如果只想先验证流程，可以用 `--cmc-cali-data-type no-white`。
+
 ### 保存 MASQuant TensorRT 产物并用 VLMEvalKit 评测
 
-如果目标是“量化一次，评测时直接加载”，在阶段 1 得到 `MASQUANT_RESUME` 后，先构建 TensorRT engine，并把 engine、MASQuant 参数和 processor 打包成 artifact：
+如果目标是“量化一次，评测时直接加载”，在阶段 1 和 CMC 后，先构建 TensorRT engine，并把 engine、MASQuant 参数、CMC 产物和 processor 打包成 artifact：
 
 ```bash
 export MASQUANT_TRT_ARTIFACT="$WORK_ROOT/qwen25vl_gae50_masquant/masquant_trt_artifact"
 export TRT_ENGINE_DIR="$MASQUANT_TRT_ARTIFACT/engine"
+export CMC_LOW_RANK="$WORK_ROOT/qwen25vl_gae50_masquant/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt"
+export CMC_WHITE="$WORK_ROOT/qwen25vl_gae50_masquant/cmc/white_matrix_vision-audio-only.pt"
 
 python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --stage export-tensorrt \
@@ -466,9 +499,11 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --masquant-act-scales "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales/Qwen2.5-VL-7B-Instruct-text-vision-128.pt" \
   --wbits 4 \
   --abits 8 \
+  --cmc-low-rank-adapters "$CMC_LOW_RANK" \
+  --cmc-white-matrix-path "$CMC_WHITE" \
   --tensorrt-engine-dir "$TRT_ENGINE_DIR" \
   --tensorrt-artifact-dir "$MASQUANT_TRT_ARTIFACT" \
-  --tensorrt-builder-command "python /path/to/masquant_trt_builder.py --model {model_path} --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --output {engine_dir} --wbits {wbits} --abits {abits}"
+  --tensorrt-builder-command "python /path/to/masquant_trt_builder.py --model {model_path} --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --cmc-low-rank {cmc_low_rank_adapters} --cmc-white-matrix {cmc_white_matrix} --output {engine_dir} --wbits {wbits} --abits {abits}"
 ```
 
 如果 `TRT_ENGINE_DIR` 已经由别的流程构建好，可以省略 `--tensorrt-builder-command`，只写 artifact manifest。非 dry-run 模式会检查 engine 目录非空，避免注册空产物。

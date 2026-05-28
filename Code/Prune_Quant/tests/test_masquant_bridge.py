@@ -4,6 +4,7 @@ import pytest
 
 from prune_quant_baseline.quant.masquant import (
     MASQuantRunConfig,
+    build_cmc_command,
     build_generate_act_scales_command,
     build_train_command,
     patch_lmclass_attention_implementation,
@@ -72,6 +73,35 @@ def test_build_generate_act_scales_command_targets_same_cache_namespace(tmp_path
     assert command[command.index("--scales-output-path") + 1] == str(root / "act_scales")
 
 
+def test_build_cmc_command_uses_infer_mas_and_saves_cmc_artifacts(tmp_path: Path) -> None:
+    root = _make_masquant_root(tmp_path)
+    (root / "infer_mas.py").write_text("", encoding="utf-8")
+    config = MASQuantRunConfig(
+        masquant_root=root,
+        model_path="/models/Qwen2.5-VL-7B-Instruct",
+        output_dir=tmp_path / "outputs",
+        cache_dir=tmp_path / "cache",
+        act_scales_path=tmp_path / "act_scales" / "pruned.pt",
+        python="python3",
+    )
+
+    command = build_cmc_command(
+        config,
+        net="qwen2.5-vl-7b",
+        save_white_matrix_path=tmp_path / "cmc" / "white.pt",
+        save_low_rank_adapters=tmp_path / "cmc" / "low_rank.pt",
+    )
+
+    assert command[:2] == ["python3", str(root / "infer_mas.py")]
+    assert command[command.index("--mode") + 1] == "infer"
+    assert command[command.index("--net") + 1] == "qwen2.5-vl-7b"
+    assert command[command.index("--scales_path") + 1] == str((tmp_path / "act_scales" / "pruned.pt").resolve())
+    assert command[command.index("--save_white_matrix_path") + 1] == str(tmp_path / "cmc" / "white.pt")
+    assert command[command.index("--save_low_rank_adapters") + 1] == str(tmp_path / "cmc" / "low_rank.pt")
+    assert "--LR" in command
+    assert "--quantize" in command
+
+
 def test_patch_qwen25_vl_inputs_embeds_masks_is_idempotent(tmp_path: Path) -> None:
     root = _make_masquant_root(tmp_path)
     target = root / "models" / "modeling_qwen2_5_vl.py"
@@ -133,7 +163,19 @@ def test_patch_lmclass_qwen2_vl_support_is_idempotent(tmp_path: Path) -> None:
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
 
 
-def test_prune_then_masquant_accepts_export_tensorrt_stage() -> None:
+def test_prune_then_masquant_accepts_cmc_and_export_tensorrt_stages() -> None:
+    cmc_args = build_arg_parser().parse_args(
+        [
+            "--stage",
+            "cmc",
+            "--model-path",
+            "/models/Qwen2.5-VL-7B-Instruct",
+            "--work-dir",
+            "/tmp/work",
+            "--masquant-act-scales",
+            "/tmp/act_scales.pt",
+        ]
+    )
     args = build_arg_parser().parse_args(
         [
             "--stage",
@@ -151,6 +193,9 @@ def test_prune_then_masquant_accepts_export_tensorrt_stage() -> None:
         ]
     )
 
+    assert cmc_args.stage == "cmc"
+    assert cmc_args.cmc_rank == 0.2
+    assert cmc_args.cmc_cali_data_type == "vision-audio-only"
     assert args.stage == "export-tensorrt"
     assert args.tensorrt_artifact_dir == "/tmp/artifact"
     assert args.tensorrt_engine_dir == "/tmp/engine"

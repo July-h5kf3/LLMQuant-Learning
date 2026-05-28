@@ -81,6 +81,8 @@ def write_masquant_tensorrt_artifact(
     engine_dir: str | Path,
     masquant_resume: str | Path,
     masquant_act_scales: str | Path | None,
+    cmc_low_rank_adapters: str | Path | None = None,
+    cmc_white_matrix: str | Path | None = None,
     wbits: int,
     abits: int,
     group_size: int | None,
@@ -100,6 +102,9 @@ def write_masquant_tensorrt_artifact(
     masquant_dir = root / "masquant"
     resume_rel = _copy_optional_file(masquant_resume, masquant_dir)
     act_scales_rel = _copy_optional_file(masquant_act_scales, masquant_dir)
+    cmc_dir = root / "cmc"
+    low_rank_adapters_rel = _copy_optional_file(cmc_low_rank_adapters, cmc_dir)
+    white_matrix_rel = _copy_optional_file(cmc_white_matrix, cmc_dir)
 
     processor_rel = None
     if save_processor:
@@ -130,6 +135,8 @@ def write_masquant_tensorrt_artifact(
             "group_size": group_size,
             "inference_mode": inference_mode,
             "symmetric": bool(symmetric),
+            "cmc_low_rank_adapters": low_rank_adapters_rel,
+            "cmc_white_matrix": white_matrix_rel,
         },
     }
     if builder_command is not None:

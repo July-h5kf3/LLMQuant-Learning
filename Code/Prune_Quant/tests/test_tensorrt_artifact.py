@@ -41,6 +41,10 @@ def test_write_and_load_masquant_tensorrt_artifact_manifest(tmp_path: Path) -> N
     resume.write_bytes(b"resume")
     act_scales = tmp_path / "act_scales.pt"
     act_scales.write_bytes(b"scales")
+    low_rank = tmp_path / "low_rank_adapters.pt"
+    low_rank.write_bytes(b"low-rank")
+    white = tmp_path / "white_matrix.pt"
+    white.write_bytes(b"white")
 
     artifact = write_masquant_tensorrt_artifact(
         artifact_dir=tmp_path / "artifact",
@@ -49,6 +53,8 @@ def test_write_and_load_masquant_tensorrt_artifact_manifest(tmp_path: Path) -> N
         engine_dir=engine_dir,
         masquant_resume=resume,
         masquant_act_scales=act_scales,
+        cmc_low_rank_adapters=low_rank,
+        cmc_white_matrix=white,
         wbits=4,
         abits=8,
         group_size=0,
@@ -66,6 +72,8 @@ def test_write_and_load_masquant_tensorrt_artifact_manifest(tmp_path: Path) -> N
     assert loaded.engine_dir == engine_dir.resolve()
     assert (artifact.root / manifest["masquant"]["resume"]).exists()
     assert (artifact.root / manifest["masquant"]["act_scales"]).exists()
+    assert (artifact.root / manifest["masquant"]["cmc_low_rank_adapters"]).exists()
+    assert (artifact.root / manifest["masquant"]["cmc_white_matrix"]).exists()
     assert manifest["builder_command"] == ["python", "build.py"]
 
 
