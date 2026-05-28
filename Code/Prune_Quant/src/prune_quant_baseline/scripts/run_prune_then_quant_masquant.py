@@ -17,6 +17,7 @@ from prune_quant_baseline.quant.masquant import (
     masquant_env,
     patch_lmclass_attention_implementation,
     patch_lmclass_qwen2_vl_support,
+    patch_custom_dataset_paths,
     patch_qwen25_vl_inputs_embeds_masks,
     run_command,
 )
@@ -108,6 +109,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cmc-eval-sqnr", action="store_true")
     parser.add_argument("--cmc-eval-omni-task", action="store_true")
     parser.add_argument("--cmc-extra-arg", action="append", default=[])
+    parser.add_argument("--cmc-vision-json", help="Patch MASQuant CMC vision calibration JSON path.")
+    parser.add_argument("--cmc-vision-prefix", help="Patch MASQuant CMC vision image prefix/directory.")
+    parser.add_argument("--cmc-audio-json", help="Patch MASQuant CMC audio calibration JSONL path.")
+    parser.add_argument("--cmc-audio-prefix", help="Patch MASQuant CMC audio prefix/directory.")
     parser.add_argument("--tensorrt-artifact-dir", help="Directory that stores the reusable MASQuant TensorRT artifact.")
     parser.add_argument("--tensorrt-engine-dir", help="Directory containing the built TensorRT engine files.")
     parser.add_argument(
@@ -542,6 +547,15 @@ def run_masquant_cmc(args: argparse.Namespace, config: MASQuantRunConfig) -> Non
         extra_args=tuple(args.cmc_extra_arg),
     )
     LOGGER.info("Running MASQuant CMC.")
+    if any([args.cmc_vision_json, args.cmc_vision_prefix, args.cmc_audio_json, args.cmc_audio_prefix]):
+        patched = patch_custom_dataset_paths(
+            config.root,
+            vision_json=args.cmc_vision_json,
+            vision_prefix=args.cmc_vision_prefix,
+            audio_json=args.cmc_audio_json,
+            audio_prefix=args.cmc_audio_prefix,
+        )
+        LOGGER.info("Patched MASQuant CMC dataset paths at %s", patched)
     run_command(command, cwd=config.root, env=masquant_env(config), dry_run=args.dry_run)
     if args.dry_run:
         LOGGER.info("CMC white matrix path: %s", white_matrix_path)

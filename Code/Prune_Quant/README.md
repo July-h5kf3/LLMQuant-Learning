@@ -467,7 +467,9 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --cmc-cali-data-type vision-audio-only \
   --cmc-rank 0.2 \
   --cmc-quant-cmc 0 \
-  --cmc-n-cali-samples 128
+  --cmc-n-cali-samples 128 \
+  --cmc-vision-json "$DATA_ROOT/masquant/sharegpt4v_filtered_coco.json" \
+  --cmc-vision-prefix "$DATA_ROOT/coco/train2017"
 ```
 
 By default this calls upstream MASQuant `infer_mas.py` and saves CMC artifacts to:
@@ -477,7 +479,7 @@ By default this calls upstream MASQuant `infer_mas.py` and saves CMC artifacts t
 
 Note: CMC `--scales_path` means MAS-trained `mas_parameters.pth`, not raw activation scales. This script uses `--masquant-resume` as the CMC scales path by default; only pass `--cmc-scales-path` when you need to override it.
 
-If your MASQuant checkout has a custom VL entrypoint, override it with `--cmc-script-name infer_mas_vl.py`. The `vision-audio-only` calibration data loading comes from upstream MASQuant and requires its expected COCO-style data paths; for a quick plumbing check, use `--cmc-cali-data-type no-white`.
+If your MASQuant checkout has a custom VL entrypoint, override it with `--cmc-script-name infer_mas_vl.py`. The `vision-audio-only` calibration data loading comes from upstream MASQuant, whose source hard-codes `/nas/yuehu/...` paths; `--cmc-vision-json` and `--cmc-vision-prefix` patch those to your local ShareGPT4V/COCO paths before running. For a quick plumbing check, use `--cmc-cali-data-type no-white`, which does not read COCO whitening data.
 
 ### Save A MASQuant TensorRT Artifact And Evaluate With VLMEvalKit
 

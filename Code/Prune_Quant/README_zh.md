@@ -467,7 +467,9 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --cmc-cali-data-type vision-audio-only \
   --cmc-rank 0.2 \
   --cmc-quant-cmc 0 \
-  --cmc-n-cali-samples 128
+  --cmc-n-cali-samples 128 \
+  --cmc-vision-json "$DATA_ROOT/masquant/sharegpt4v_filtered_coco.json" \
+  --cmc-vision-prefix "$DATA_ROOT/coco/train2017"
 ```
 
 该命令默认使用 MASQuant 上游的 `infer_mas.py`，并把 CMC 产物保存到：
@@ -477,7 +479,7 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
 
 注意：CMC 的 `--scales_path` 对应的是 MAS 训练后的 `mas_parameters.pth`，不是 raw activation scales。脚本默认使用 `--masquant-resume` 作为 CMC 的 scales path；只有需要覆盖时才传 `--cmc-scales-path`。
 
-如果你的 MASQuant checkout 里有自定义的 VL 专用入口，可以用 `--cmc-script-name infer_mas_vl.py` 覆盖。`vision-audio-only` 校准数据读取逻辑来自 MASQuant 上游脚本，需要按 MASQuant 的数据路径要求准备 COCO 等校准数据；如果只想先验证流程，可以用 `--cmc-cali-data-type no-white`。
+如果你的 MASQuant checkout 里有自定义的 VL 专用入口，可以用 `--cmc-script-name infer_mas_vl.py` 覆盖。`vision-audio-only` 校准数据读取逻辑来自 MASQuant 上游脚本，原始代码硬编码了 `/nas/yuehu/...` 路径；这里的 `--cmc-vision-json` 和 `--cmc-vision-prefix` 会在运行前 patch 到你的本地 ShareGPT4V/COCO 路径。如果只想先验证流程，可以用 `--cmc-cali-data-type no-white`，它不读取 COCO 白化数据。
 
 ### 保存 MASQuant TensorRT 产物并用 VLMEvalKit 评测
 

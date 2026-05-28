@@ -7,6 +7,7 @@ from prune_quant_baseline.quant.masquant import (
     build_cmc_command,
     build_generate_act_scales_command,
     build_train_command,
+    patch_custom_dataset_paths,
     patch_lmclass_attention_implementation,
     patch_lmclass_qwen2_vl_support,
     patch_qwen25_vl_inputs_embeds_masks,
@@ -23,6 +24,7 @@ def _make_masquant_root(tmp_path: Path) -> Path:
     (root / "generate_act_scale_shift.py").write_text("", encoding="utf-8")
     (root / "quantize" / "masquant.py").write_text("", encoding="utf-8")
     (root / "models" / "LMClass.py").write_text("", encoding="utf-8")
+    (root / "custom_dataset.py").write_text("", encoding="utf-8")
     return root
 
 
@@ -160,6 +162,27 @@ def test_patch_lmclass_qwen2_vl_support_is_idempotent(tmp_path: Path) -> None:
     assert "'Qwen2-VL' in args.model" in first
     assert "Qwen2VLForConditionalGeneration" in first
     assert first == second
+    assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
+
+
+def test_patch_custom_dataset_paths_replaces_upstream_hardcoded_paths(tmp_path: Path) -> None:
+    root = _make_masquant_root(tmp_path)
+    target = root / "custom_dataset.py"
+    target.write_text(
+        "dataset_json = '/nas/yuehu/NEW/qwen_compressor/dataset/sharegpt4v_instruct_gpt4-vision_cap100k_filtered_coco_image.json'\n"
+        'prefix_path = "file:///nas/yuehu/assets/dataset/"\n',
+        encoding="utf-8",
+    )
+
+    patch_custom_dataset_paths(
+        root,
+        vision_json=tmp_path / "sharegpt4v.json",
+        vision_prefix=tmp_path / "coco" / "train2017",
+    )
+    text = target.read_text(encoding="utf-8")
+
+    assert str((tmp_path / "sharegpt4v.json").resolve()) in text
+    assert f"file://{(tmp_path / 'coco' / 'train2017').resolve()}/" in text
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
 
 

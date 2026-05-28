@@ -357,6 +357,62 @@ def patch_lmclass_qwen2_vl_support(masquant_root: str | Path) -> Path:
     return target
 
 
+def patch_custom_dataset_paths(
+    masquant_root: str | Path,
+    *,
+    vision_json: str | Path | None = None,
+    vision_prefix: str | Path | None = None,
+    audio_json: str | Path | None = None,
+    audio_prefix: str | Path | None = None,
+) -> Path:
+    """Patch MASQuant custom_dataset.py away from upstream hard-coded /nas paths."""
+
+    root = validate_masquant_root(masquant_root)
+    target = root / "custom_dataset.py"
+    text = target.read_text(encoding="utf-8")
+    replacements: dict[str, str] = {}
+    if vision_json is not None:
+        replacements[
+            "/nas/yuehu/NEW/qwen_compressor/dataset/sharegpt4v_instruct_gpt4-vision_cap100k_filtered_coco_image.json"
+        ] = str(Path(vision_json).expanduser().resolve())
+    if vision_prefix is not None:
+        prefix = str(vision_prefix)
+        if not prefix.startswith("file://"):
+            prefix = "file://" + str(Path(prefix).expanduser().resolve())
+        if not prefix.endswith("/"):
+            prefix += "/"
+        replacements["file:///nas/yuehu/assets/dataset/"] = prefix
+    if audio_json is not None:
+        replacements["/nas/yuehu/NEW/qwen_compressor/dataset/libri_test_other.jsonl"] = str(
+            Path(audio_json).expanduser().resolve()
+        )
+    if audio_prefix is not None:
+        prefix = str(audio_prefix)
+        if not prefix.startswith("file://"):
+            prefix = "file://" + str(Path(prefix).expanduser().resolve())
+        if not prefix.endswith("/"):
+            prefix += "/"
+        replacements["file:///nas/yuehu/assets/omni_data"] = prefix
+
+    if not replacements:
+        return target
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    patched = text
+    missing = []
+    for old, new in replacements.items():
+        if old not in patched:
+            missing.append(old)
+        patched = patched.replace(old, new)
+    if missing:
+        raise RuntimeError(
+            f"Could not patch {target}; expected MASQuant dataset path(s) not found: {', '.join(missing)}"
+        )
+    target.write_text(patched, encoding="utf-8")
+    return target
+
+
 @contextlib.contextmanager
 def _prepend_sys_path(path: Path) -> Iterator[None]:
     old_path = list(sys.path)
