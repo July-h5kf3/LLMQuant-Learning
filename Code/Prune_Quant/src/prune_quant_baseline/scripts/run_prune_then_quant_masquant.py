@@ -18,6 +18,7 @@ from prune_quant_baseline.quant.masquant import (
     patch_lmclass_attention_implementation,
     patch_lmclass_qwen2_vl_support,
     patch_custom_dataset_paths,
+    patch_qwen25_vl_linear_mask_compat,
     patch_qwen25_vl_inputs_embeds_masks,
     run_command,
 )
@@ -548,6 +549,9 @@ def run_masquant_cmc(args: argparse.Namespace, config: MASQuantRunConfig) -> Non
         extra_args=tuple(args.cmc_extra_arg),
     )
     LOGGER.info("Running MASQuant CMC.")
+    if not args.dry_run:
+        patched = patch_qwen25_vl_linear_mask_compat(config.root)
+        LOGGER.info("Patched MASQuant Qwen2.5-VL CMC Linear compatibility at %s", patched)
     if any([args.cmc_vision_json, args.cmc_vision_prefix, args.cmc_audio_json, args.cmc_audio_prefix]):
         patched = patch_custom_dataset_paths(
             config.root,

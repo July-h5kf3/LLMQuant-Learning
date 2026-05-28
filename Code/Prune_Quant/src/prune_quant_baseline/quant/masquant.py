@@ -202,12 +202,12 @@ def build_cmc_command(
         str(config.wbits),
         "--abits",
         str(config.abits),
-    "--output_dir",
-    str(out_dir),
-    "--cache_dir",
-    str(config.resolved_cache_dir),
-    "--batch_size",
-    str(config.batch_size),
+        "--output_dir",
+        str(out_dir),
+        "--cache_dir",
+        str(config.resolved_cache_dir),
+        "--batch_size",
+        str(config.batch_size),
         "--n_cali_samples",
         str(n_cali_samples),
         "--cali_data_type",
@@ -289,6 +289,57 @@ def patch_qwen25_vl_inputs_embeds_masks(masquant_root: str | Path) -> Path:
     if not backup.exists():
         backup.write_text(text, encoding="utf-8")
     target.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return target
+
+
+def patch_qwen25_vl_linear_mask_compat(masquant_root: str | Path) -> Path:
+    """Patch MASQuant Qwen2.5-VL CMC whitening to tolerate native Linear layers."""
+
+    root = validate_masquant_root(masquant_root)
+    target = root / "models" / "modeling_qwen2_5_vl.py"
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: allow native Linear during CMC whitening"
+    if marker in text:
+        return target
+
+    anchor = "\n\ndef apply_multimodal_rotary_pos_emb"
+    helper = (
+        "\n\n"
+        f"# {marker}.\n"
+        "def _prune_quant_baseline_masked_linear(module, x, multi_modal_mask=None):\n"
+        "    if isinstance(module, nn.Linear):\n"
+        "        return module(x)\n"
+        "    return module(x, multi_modal_mask)\n"
+    )
+    replacements = {
+        "self.q_proj(hidden_states, multi_modal_mask)": (
+            "_prune_quant_baseline_masked_linear(self.q_proj, hidden_states, multi_modal_mask)"
+        ),
+        "self.k_proj(hidden_states, multi_modal_mask)": (
+            "_prune_quant_baseline_masked_linear(self.k_proj, hidden_states, multi_modal_mask)"
+        ),
+        "self.v_proj(hidden_states, multi_modal_mask)": (
+            "_prune_quant_baseline_masked_linear(self.v_proj, hidden_states, multi_modal_mask)"
+        ),
+        "self.o_proj(attn_output, multi_modal_mask)": (
+            "_prune_quant_baseline_masked_linear(self.o_proj, attn_output, multi_modal_mask)"
+        ),
+    }
+    missing = [old for old in replacements if old not in text]
+    if anchor not in text or missing:
+        raise RuntimeError(
+            f"Could not patch {target}; MASQuant source changed and the expected "
+            "Qwen2.5-VL masked Linear calls were not found."
+        )
+
+    patched = text.replace(anchor, helper + anchor, 1)
+    for old, new in replacements.items():
+        patched = patched.replace(old, new)
+
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    target.write_text(patched, encoding="utf-8")
     return target
 
 

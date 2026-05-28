@@ -10,6 +10,7 @@ from prune_quant_baseline.quant.masquant import (
     patch_custom_dataset_paths,
     patch_lmclass_attention_implementation,
     patch_lmclass_qwen2_vl_support,
+    patch_qwen25_vl_linear_mask_compat,
     patch_qwen25_vl_inputs_embeds_masks,
     validate_masquant_root,
 )
@@ -123,6 +124,35 @@ def test_patch_qwen25_vl_inputs_embeds_masks_is_idempotent(tmp_path: Path) -> No
     second = target.read_text(encoding="utf-8")
 
     assert "prune_quant_baseline: build masks for pruned inputs_embeds" in first
+    assert first == second
+    assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
+
+
+def test_patch_qwen25_vl_linear_mask_compat_is_idempotent(tmp_path: Path) -> None:
+    root = _make_masquant_root(tmp_path)
+    target = root / "models" / "modeling_qwen2_5_vl.py"
+    target.write_text(
+        "class Qwen2_5_VLAttention:\n"
+        "    def forward(self, hidden_states, attn_output, multi_modal_mask):\n"
+        "        query_states = self.q_proj(hidden_states, multi_modal_mask)\n"
+        "        key_states = self.k_proj(hidden_states, multi_modal_mask)\n"
+        "        value_states = self.v_proj(hidden_states, multi_modal_mask)\n"
+        "        attn_output = self.o_proj(attn_output, multi_modal_mask)\n"
+        "\n"
+        "\n"
+        "def apply_multimodal_rotary_pos_emb(q, k, cos, sin):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    patch_qwen25_vl_linear_mask_compat(root)
+    first = target.read_text(encoding="utf-8")
+    patch_qwen25_vl_linear_mask_compat(root)
+    second = target.read_text(encoding="utf-8")
+
+    assert "_prune_quant_baseline_masked_linear" in first
+    assert "isinstance(module, nn.Linear)" in first
+    assert "self.q_proj(hidden_states, multi_modal_mask)" not in first
     assert first == second
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
 
