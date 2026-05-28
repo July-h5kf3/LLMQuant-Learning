@@ -306,31 +306,36 @@ def prepare_pruned_calibration_artifacts(args: argparse.Namespace, config: MASQu
                 break
             inputs = adapter.prepare_inputs(processor, sample)
             inputs = _move_inputs_to_model_device(model, inputs)
-            answer = str(sample.get("answer") or "").strip()
-            if args.gae_answer_source == "generated" or not answer:
-                LOGGER.info("Generating calibration replay answer for sample %s.", sample.get("id", row_idx))
-                answer = _generate_vanilla(model, processor, inputs, args.max_new_tokens)
-            if not answer:
-                raise ValueError("GAE calibration requires sample answers or --gae-answer-source generated.")
+            if args.retention_ratio >= 1.0:
+                meta = adapter.get_visual_token_meta(model, inputs)
+                pruned_inputs = inputs
+                before = after = int(meta.visual_indices.numel())
+            else:
+                answer = str(sample.get("answer") or "").strip()
+                if args.gae_answer_source == "generated" or not answer:
+                    LOGGER.info("Generating calibration replay answer for sample %s.", sample.get("id", row_idx))
+                    answer = _generate_vanilla(model, processor, inputs, args.max_new_tokens)
+                if not answer:
+                    raise ValueError("GAE calibration requires sample answers or --gae-answer-source generated.")
 
-            with torch.enable_grad():
-                scores = _score_gae_oracle(
+                with torch.enable_grad():
+                    scores = _score_gae_oracle(
+                        model=model,
+                        processor=processor,
+                        adapter=adapter,
+                        pruner=pruner,
+                        sample=sample,
+                        answer=answer,
+                        per_token=args.gae_per_token == "true",
+                    )
+                pruned_inputs, before, after = _build_pruned_generation_inputs(
                     model=model,
-                    processor=processor,
                     adapter=adapter,
-                    pruner=pruner,
-                    sample=sample,
-                    answer=answer,
-                    per_token=args.gae_per_token == "true",
+                    inputs=inputs,
+                    scores=scores,
+                    retention_ratio=args.retention_ratio,
+                    min_keep=args.min_keep,
                 )
-            pruned_inputs, before, after = _build_pruned_generation_inputs(
-                model=model,
-                adapter=adapter,
-                inputs=inputs,
-                scores=scores,
-                retention_ratio=args.retention_ratio,
-                min_keep=args.min_keep,
-            )
             if collector is not None:
                 forward_inputs = _forward_inputs_for_scale_collection(pruned_inputs)
                 collector.collect(pruned_inputs["input_ids"], forward_inputs)
