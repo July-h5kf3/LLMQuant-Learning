@@ -29,6 +29,24 @@ from prune_quant_baseline.quant.loaders import load_model_and_processor
 LOGGER = get_logger(__name__)
 
 
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return isinstance(value, str) and not value.strip()
+
+
+def _first_nonempty(row: dict[str, Any], *keys: str, default: str = "") -> str:
+    for key in keys:
+        if key in row and not _is_missing(row[key]):
+            return str(row[key])
+    return default
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Qwen2-VL image benchmark TSV files.")
     parser.add_argument("--dataset", required=True, choices=["MME", "MMStar", "MMVet"])
@@ -70,14 +88,21 @@ def _decode_image(value: Any, cache_key: str, image_cache: dict[str, Image.Image
         image = value.convert("RGB")
         image_cache[cache_key] = image
         return image.copy()
-    raw = "" if pd.isna(value) else str(value)
+    if _is_missing(value):
+        if cache_key in image_cache:
+            return image_cache[cache_key].copy()
+        raise ValueError(f"Missing image data for {cache_key!r}; this benchmark requires an image per sample.")
+    raw = str(value).strip()
     if len(raw) > 16:
-        image = Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGB")
+        try:
+            image = Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGB")
+        except Exception as exc:
+            raise ValueError(f"Failed to decode image data for {cache_key!r}.") from exc
         image_cache[cache_key] = image
         return image.copy()
     if cache_key in image_cache:
         return image_cache[cache_key].copy()
-    raise ValueError(f"Missing base64 image and no cached image for {cache_key!r}.")
+    raise ValueError(f"Image data for {cache_key!r} is too short to be a valid base64 image.")
 
 
 def _format_question(dataset: str, row: dict[str, Any], *, mme_prompt_style: str = "default") -> str:
@@ -269,11 +294,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     mode = "a" if args.resume else "w"
     with output_jsonl.open(mode, encoding="utf-8") as out_f:
         for row_idx, row_dict in _iter_rows(args):
-            question_id = str(row_dict.get("question_id", ""))
-            index = str(row_dict.get("index", f"{question_id or 'row'}::{row_idx}"))
+            question_id = _first_nonempty(row_dict, "question_id")
+            index = _first_nonempty(row_dict, "index", "id", default=f"{question_id or 'row'}::{row_idx}")
             if index in done:
                 continue
-            image_key = str(row_dict.get("question_id", row_dict.get("image_path", index)))
+            image_path = _first_nonempty(row_dict, "image_path", "image_file", "path", default=index)
+            image_key = _first_nonempty(row_dict, "question_id", "image_path", "image_file", "path", default=index)
             sample = {
                 "id": index,
                 "image": _decode_image(row_dict.get("image"), image_key, image_cache),
@@ -341,7 +367,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "prediction": prediction,
                 "category": str(row_dict.get("category", "")),
                 "question_id": question_id,
-                "image_path": str(row_dict.get("image_path", question_id)),
+                "image_path": image_path,
+                "image_key": image_key,
                 "pruner": args.pruner,
                 "retention_ratio": args.retention_ratio,
                 "mme_prompt_style": args.mme_prompt_style if args.dataset == "MME" else None,
