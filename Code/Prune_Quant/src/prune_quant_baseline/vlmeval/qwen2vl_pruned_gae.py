@@ -15,11 +15,36 @@ from prune_quant_baseline.scripts.run_infer_pruned import (
     _generate_vanilla,
     _move_inputs_to_model_device,
     _score_gae_oracle,
+    _visual_tokens_to_pixels,
 )
 
 
 def _is_omni_model(model_path: str) -> bool:
     return "omni" in model_path.lower()
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _resolve_pixels(*, pixels: Any, visual_tokens: Any, name: str) -> int | None:
+    pixels = _optional_int(pixels)
+    visual_tokens = _optional_int(visual_tokens)
+    if pixels is not None and visual_tokens is not None:
+        raise ValueError(f"Use either {name}_pixels or {name}_visual_tokens, not both.")
+    if pixels is not None:
+        return pixels
+    return _visual_tokens_to_pixels(visual_tokens)
 
 
 class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
@@ -34,11 +59,13 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         model_path: str,
         min_pixels: int | None = None,
         max_pixels: int | None = None,
+        min_visual_tokens: int | None = None,
+        max_visual_tokens: int | None = None,
         max_new_tokens: int = 16,
         retention_ratio: float = 0.5,
         min_keep: int = 1,
         gae_answer_source: str = "generated",
-        gae_per_token: bool = True,
+        gae_per_token: bool = False,
         attn_implementation: str = "eager",
         use_custom_prompt: bool = True,
         system_prompt: str | None = None,
@@ -53,16 +80,16 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         super().__init__()
         self.ensure_image_url = ensure_image_url
         self.model_path = model_path
-        self.min_pixels = min_pixels
-        self.max_pixels = max_pixels
-        self.max_new_tokens = max_new_tokens
+        self.min_pixels = _resolve_pixels(pixels=min_pixels, visual_tokens=min_visual_tokens, name="min")
+        self.max_pixels = _resolve_pixels(pixels=max_pixels, visual_tokens=max_visual_tokens, name="max")
+        self.max_new_tokens = int(max_new_tokens)
         self.retention_ratio = float(retention_ratio)
         self.min_keep = int(min_keep)
         self.gae_answer_source = gae_answer_source
-        self.gae_per_token = gae_per_token
-        self.use_custom_prompt_flag = use_custom_prompt
+        self.gae_per_token = _bool_value(gae_per_token)
+        self.use_custom_prompt_flag = _bool_value(use_custom_prompt)
         self.system_prompt = system_prompt
-        self.verbose = verbose
+        self.verbose = _bool_value(verbose)
 
         self.processor = Qwen2VLProcessor.from_pretrained(model_path)
         self.model = Qwen2VLForConditionalGeneration.from_pretrained(

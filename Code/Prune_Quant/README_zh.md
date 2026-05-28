@@ -2,24 +2,24 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Baseline scaffolding for multimodal LLM visual-token pruning and quantized inference.
+用于多模态大语言模型视觉 token 剪枝与量化推理的 baseline 脚手架。
 
-This repository is intentionally local-safe:
+本仓库默认保持本地安全：
 
-- no model weights are committed;
-- no datasets are committed;
-- real model inference is intended for a GPU machine with existing model/data paths;
-- model, data, and output paths are provided through CLI arguments, YAML config, or environment variables.
+- 不提交模型权重；
+- 不提交数据集；
+- 真实模型推理应在已有模型/数据路径的 GPU 机器上运行；
+- 模型、数据和输出路径通过 CLI 参数、YAML 配置或环境变量传入。
 
-The current implementation supports:
+当前实现支持：
 
-- pure GAE-guided visual token pruning;
-- prune-then-quant experiments with GAE pruning followed by MASQuant calibration/inference;
-- Qwen2-VL style Hugging Face inputs for image tasks.
+- 纯 GAE 指导的视觉 token 剪枝；
+- 先剪枝再量化的实验，即 GAE 剪枝后接 MASQuant 校准/推理；
+- 面向图像任务的 Qwen2-VL 风格 Hugging Face 输入。
 
-## Recommended Layout
+## 推荐目录结构
 
-Use separate directories for code, model weights, datasets, and experiment outputs.
+建议把代码、模型权重、数据集和实验输出放在不同目录下。
 
 ```bash
 export PROJECT_ROOT=/path/to/Prune_Quant
@@ -30,12 +30,12 @@ export WORK_ROOT=/path/to/prune_quant_runs
 mkdir -p "$MODEL_ROOT" "$DATA_ROOT" "$WORK_ROOT"
 ```
 
-For pure GAE pruning, `Qwen/Qwen2-VL-7B-Instruct` matches the current reproduction path.
-For MASQuant, use a model supported by MASQuant, such as `Qwen/Qwen2.5-VL-7B-Instruct`.
+对于纯 GAE 剪枝，`Qwen/Qwen2-VL-7B-Instruct` 与当前复现路径一致。
+对于 MASQuant，请使用 MASQuant 支持的模型，例如 `Qwen/Qwen2.5-VL-7B-Instruct`。
 
-## Environment Installation
+## 环境安装
 
-Create a Python environment on the GPU machine.
+在 GPU 机器上创建 Python 环境。
 
 ```bash
 conda create -n prune-quant python=3.10 -y
@@ -45,33 +45,33 @@ cd "$PROJECT_ROOT"
 pip install -U pip setuptools wheel
 ```
 
-Check the visible GPU and driver first:
+先检查可见 GPU 和驱动：
 
 ```bash
 nvidia-smi
 ```
 
-This project should run on both A800 and RTX PRO 6000 Blackwell machines. Because RTX PRO 6000 Blackwell is the newer architecture, use a CUDA 12.8 PyTorch wheel for any environment that may run on it.
+本项目应能同时运行在 A800 和 RTX PRO 6000 Blackwell 机器上。由于 RTX PRO 6000 Blackwell 架构更新，任何可能运行在 Blackwell 上的环境都建议使用 CUDA 12.8 PyTorch wheel。
 
-Recommended install for RTX PRO 6000 Blackwell, and for a shared A800/Blackwell environment:
+RTX PRO 6000 Blackwell，以及 A800/Blackwell 共用环境的推荐安装方式：
 
 ```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
-Use this when the machine driver is new enough for CUDA 12.8. A800 is Ampere and is compatible with this newer CUDA runtime, while RTX PRO 6000 Blackwell should use a recent CUDA/PyTorch stack.
+当机器驱动足够新、能够支持 CUDA 12.8 时使用上面的安装方式。A800 属于 Ampere，兼容较新的 CUDA runtime；RTX PRO 6000 Blackwell 则应使用较新的 CUDA/PyTorch 软件栈。
 
-Do not unify on CUDA 12.6 for the shared environment: it is fine for A800, but PyTorch `cu126` wheels are not a safe target for RTX PRO 6000 Blackwell / SM120. Use `cu128` for Blackwell.
+不要把共享环境统一到 CUDA 12.6：它对 A800 没问题，但 PyTorch `cu126` wheel 并不是 RTX PRO 6000 Blackwell / SM120 的稳妥目标。Blackwell 使用 `cu128`。
 
-Fallback for A800-only machines with older drivers:
+仅 A800 且驱动较旧的机器可以使用下面的 fallback：
 
 ```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Do not use the A800-only fallback on RTX PRO 6000 Blackwell. Prefer one shared `cu128` environment when the driver supports it, or separate environments if the A800 machine has an older driver.
+不要在 RTX PRO 6000 Blackwell 上使用这个 A800-only fallback。如果驱动支持，优先使用一个共享的 `cu128` 环境；如果 A800 机器驱动较旧，则使用独立环境。
 
-Verify the installed wheel can see the GPU:
+验证安装的 wheel 能否看到 GPU：
 
 ```bash
 python - <<'PY'
@@ -85,14 +85,14 @@ if torch.cuda.is_available():
 PY
 ```
 
-Install this project and common runtime dependencies.
+安装本项目和常用运行依赖：
 
 ```bash
 pip install -e ".[quant,test]"
 pip install accelerate datasets huggingface_hub qwen-vl-utils sentencepiece protobuf
 ```
 
-Install VLMEvalKit and register this repository's pruned Qwen2-VL model wrapper. VLMEvalKit uses `run.py` for standard inference and evaluation, and model names are resolved through `supported_VLM` in `vlmeval/config.py`.
+安装 VLMEvalKit，并注册本仓库的 pruned Qwen2-VL 模型 wrapper。VLMEvalKit 使用 `run.py` 做标准推理和评测，模型名通过 `vlmeval/config.py` 中的 `supported_VLM` 解析。
 
 ```bash
 export EXT_ROOT=/path/to/external
@@ -107,23 +107,23 @@ python remote/install_vlmeval_pruned_gae.py --vlmeval-root "$VLMEVALKIT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
 ```
 
-Re-run `remote/install_vlmeval_pruned_gae.py` after editing files under `src/prune_quant_baseline/vlmeval/`, because the installer copies the wrapper into the VLMEvalKit checkout.
+如果修改了 `src/prune_quant_baseline/vlmeval/` 下的 wrapper 文件，需要重新运行 `remote/install_vlmeval_pruned_gae.py`，因为安装脚本会把 wrapper 复制到 VLMEvalKit checkout 中。
 
-GAE pruning requires attention tensors and attention gradients. Use eager attention in the commands below:
+GAE 剪枝需要 attention tensor 和 attention gradient。下面的命令都使用 eager attention：
 
 ```bash
 export TOKENIZERS_PARALLELISM=false
 ```
 
-## Model Download
+## 模型下载
 
-Login to Hugging Face if the target model requires authentication.
+如果目标模型需要认证，先登录 Hugging Face。
 
 ```bash
 huggingface-cli login
 ```
 
-Download the Qwen2-VL model for pure GAE pruning.
+下载用于纯 GAE 剪枝的 Qwen2-VL 模型。
 
 ```bash
 huggingface-cli download Qwen/Qwen2-VL-7B-Instruct \
@@ -132,7 +132,7 @@ huggingface-cli download Qwen/Qwen2-VL-7B-Instruct \
 export QWEN2VL_MODEL="$MODEL_ROOT/Qwen2-VL-7B-Instruct"
 ```
 
-Download the Qwen2.5-VL model for MASQuant experiments.
+下载用于 MASQuant 实验的 Qwen2.5-VL 模型。
 
 ```bash
 huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct \
@@ -141,23 +141,23 @@ huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct \
 export QWEN25VL_MODEL="$MODEL_ROOT/Qwen2.5-VL-7B-Instruct"
 ```
 
-The scripts default to local model loading. Keep `--model-path` pointed at the downloaded local directory.
+脚本默认从本地加载模型。请让 `--model-path` 指向下载好的本地目录。
 
-## Dataset Download
+## 数据集下载
 
-The JSONL inference/calibration scripts expect one sample per line with an image path, prompt, and optional answer:
+JSONL 推理/校准脚本要求每行一个样本，包含图片路径、prompt，以及可选 answer：
 
 ```json
 {"id": "0", "image": "/abs/path/to/image.jpg", "prompt": "Describe the image.", "answer": "A short reference answer."}
 ```
 
-For GAE oracle pruning, an answer is needed to define the target. If the JSONL has no `answer`, pass `--gae-answer-source generated` so the model first generates a replay answer.
+对于 GAE oracle 剪枝，需要 answer 来定义目标。如果 JSONL 中没有 `answer`，传入 `--gae-answer-source generated`，让模型先生成 replay answer。
 
-### MASQuant Calibration Data
+### MASQuant 校准数据
 
-For this repository's prune-then-MASQuant path, calibration is controlled by `--calib-jsonl`. You do not need to use MASQuant's hard-coded `/nas/...` paths. A practical text-vision calibration set is MASQuant's filtered ShareGPT4V metadata plus COCO `train2017` images.
+本仓库的 prune-then-MASQuant 路径通过 `--calib-jsonl` 控制校准数据。你不需要使用 MASQuant 代码中硬编码的 `/nas/...` 路径。一个实用的 text-vision 校准集是 MASQuant 过滤后的 ShareGPT4V metadata 加 COCO `train2017` 图片。
 
-Download the MASQuant-filtered ShareGPT4V metadata:
+下载 MASQuant 过滤后的 ShareGPT4V metadata：
 
 ```bash
 mkdir -p "$DATA_ROOT/masquant" "$DATA_ROOT/coco"
@@ -166,14 +166,14 @@ wget -O "$DATA_ROOT/masquant/sharegpt4v_filtered_coco.json" \
   https://raw.githubusercontent.com/alibaba/EfficientAI/main/masquant/dataset/sharegpt4v_instruct_gpt4-vision_cap100k_filtered_coco_image.json
 ```
 
-Download COCO `train2017` images. This is large, roughly 18 GB compressed:
+下载 COCO `train2017` 图片。这个文件较大，压缩包约 18 GB：
 
 ```bash
 wget -c -P "$DATA_ROOT/coco" http://images.cocodataset.org/zips/train2017.zip
 unzip -q -n "$DATA_ROOT/coco/train2017.zip" -d "$DATA_ROOT/coco"
 ```
 
-Convert the metadata to this project's JSONL format:
+把 metadata 转换成本项目的 JSONL 格式：
 
 ```bash
 python - <<'PY'
@@ -214,22 +214,22 @@ PY
 export CALIB_JSONL="$DATA_ROOT/calib_sharegpt4v_coco.jsonl"
 ```
 
-For small smoke runs, create a short calibration subset:
+小规模 smoke run 可以创建一个短校准子集：
 
 ```bash
 head -n 16 "$CALIB_JSONL" > "$DATA_ROOT/calib_smoke_16.jsonl"
 ```
 
-### Test Datasets
+### 测试数据集
 
-VLMEvalKit is the default benchmark path. It handles dataset loading, prediction files, and metric computation. Put its dataset cache under `DATA_ROOT`:
+VLMEvalKit 是默认 benchmark 路径。它负责数据集加载、预测文件生成和指标计算。把 VLMEvalKit 的数据缓存放到 `DATA_ROOT` 下：
 
 ```bash
 export LMUData="$DATA_ROOT/vlmeval"
 mkdir -p "$LMUData"
 ```
 
-Quick VLMEvalKit smoke run without pruning:
+不剪枝的 VLMEvalKit smoke run：
 
 ```bash
 cd "$VLMEVALKIT_ROOT"
@@ -239,7 +239,7 @@ python run.py --data MME --model Qwen2VL_PrunedGAE \
   --verbose
 ```
 
-Common benchmark run:
+常用 benchmark 运行方式：
 
 ```bash
 cd "$VLMEVALKIT_ROOT"
@@ -248,15 +248,15 @@ python run.py --data MME MMStar MMVet --model Qwen2VL_PrunedGAE \
   --verbose
 ```
 
-You can still create or download a custom evaluation JSONL for low-level script debugging:
+如果只是调试低层脚本，也可以创建或下载自定义评测 JSONL：
 
 ```bash
 export EVAL_JSONL="$DATA_ROOT/eval.jsonl"
 ```
 
-## Pure GAE Prune
+## 纯 GAE 剪枝
 
-Default evaluation uses VLMEvalKit. The installer registers `Qwen2VL_PrunedGAE`, and its runtime settings are controlled by environment variables:
+默认评测路径使用 VLMEvalKit。安装脚本会注册 `Qwen2VL_PrunedGAE`，运行参数通过环境变量控制：
 
 ```bash
 export QWEN2VL_MODEL="$MODEL_ROOT/Qwen2-VL-7B-Instruct"
@@ -267,7 +267,7 @@ export PQ_GAE_ANSWER_SOURCE=generated
 export PQ_GAE_PER_TOKEN=false
 export PQ_ATTN_IMPLEMENTATION=eager
 
-# Paper-faithful Qwen2-VL image setting, roughly 1500 visual language tokens.
+# 对齐论文中的 Qwen2-VL 图像设置，约 1500 个 visual language token。
 export PQ_MIN_VISUAL_TOKENS=1500
 export PQ_MAX_VISUAL_TOKENS=1500
 
@@ -277,16 +277,16 @@ python run.py --data MME MMStar MMVet --model Qwen2VL_PrunedGAE \
   --verbose
 ```
 
-If A800 memory is tight, first lower the image budget:
+如果 A800 显存紧张，先降低图像 token budget：
 
 ```bash
 export PQ_MIN_VISUAL_TOKENS=
 export PQ_MAX_VISUAL_TOKENS=1024
 ```
 
-Then re-run the same `python run.py ...` command.
+然后重新运行同一个 `python run.py ...` 命令。
 
-The lower-level JSONL script remains useful for debugging a small custom file without VLMEvalKit:
+底层 JSONL 脚本仍然适合不用 VLMEvalKit 时调试小规模自定义文件：
 
 ```bash
 python -m prune_quant_baseline.scripts.run_infer_pruned \
@@ -305,7 +305,7 @@ python -m prune_quant_baseline.scripts.run_infer_pruned \
   --max-new-tokens 128
 ```
 
-Optional local benchmark helper for TSV/debug runs:
+可选的本地 benchmark helper，主要用于 TSV/debug：
 
 ```bash
 python -m prune_quant_baseline.scripts.run_image_benchmark \
@@ -327,7 +327,7 @@ python -m prune_quant_baseline.scripts.run_image_benchmark \
   --max-new-tokens 16
 ```
 
-If the MME data is already available locally as a VLMEvalKit-style TSV, the helper can also read it directly. This path is for debugging and is not the default reported result:
+如果 MME 数据已经是本地 VLMEvalKit 风格 TSV，helper 也可以直接读取。这个路径用于调试，不作为默认报告结果：
 
 ```bash
 python -m prune_quant_baseline.scripts.run_image_benchmark \
@@ -347,24 +347,24 @@ python -m prune_quant_baseline.scripts.run_image_benchmark \
   --max-new-tokens 16
 ```
 
-The TSV should contain the usual VLMEvalKit columns, including `image` as base64 image data plus `question` and `answer`. Optional columns such as `category`, `question_id`, and `image_path` are preserved in the output.
+TSV 应包含常见的 VLMEvalKit 列，包括作为 base64 图片数据的 `image`，以及 `question` 和 `answer`。`category`、`question_id`、`image_path` 等可选列会保留到输出中。
 
-For MME/MMStar style evaluation, prefer `--gae-answer-source sample` because the TSV already has short labels (`A/B/C/D` or `Yes/No`). `--gae-answer-source generated` first generates a replay answer and then runs GAE on that answer, which costs extra memory and may turn a one-token label into many answer tokens. `--gae-per-token false` uses one backward pass over the answer instead of one backward pass per answer token; it is the safer default for A800/RTX PRO 6000 runs. Qwen2-VL reports visual tokens after its spatial merge; `216` language-side visual tokens normally means about `864` ViT patches before merge. The output JSONL now records both `num_visual_language_tokens` and `num_image_patches_before_merge`.
+对于 MME/MMStar 风格评测，优先使用 `--gae-answer-source sample`，因为 TSV 已经包含短标签答案（`A/B/C/D` 或 `Yes/No`）。`--gae-answer-source generated` 会先生成 replay answer，再对这段 answer 运行 GAE，这会增加显存开销，也可能把一个 token 的标签变成多个 answer token。`--gae-per-token false` 对整段 answer 只做一次 backward，而不是每个 answer token 做一次 backward；这是 A800/RTX PRO 6000 上更稳的默认选择。Qwen2-VL 报告的是 spatial merge 之后的视觉 token；`216` 个 language-side visual token 通常对应约 `864` 个 merge 前 ViT patch。输出 JSONL 现在会同时记录 `num_visual_language_tokens` 和 `num_image_patches_before_merge`。
 
-`--processor-max-pixels` controls Qwen2-VL dynamic image resolution. A useful A800 starting point is `401408` (`512 * 28 * 28`), and a higher-quality setting is `802816` (`1024 * 28 * 28`) if memory is stable. To match the paper's Qwen2-VL image setting of roughly 1500 visual tokens, use token-budget arguments instead of hand-computing pixels:
+`--processor-max-pixels` 控制 Qwen2-VL 动态图像分辨率。A800 上可以先从 `401408` (`512 * 28 * 28`) 开始；如果显存稳定，可以尝试更高质量的 `802816` (`1024 * 28 * 28`)。如果要对齐论文中 Qwen2-VL 图像约 1500 个 visual token 的设置，可以使用 token budget 参数，而不是手算 pixels：
 
 ```bash
 --processor-min-visual-tokens 1500 \
 --processor-max-visual-tokens 1500
 ```
 
-This is equivalent to about `1176000` max pixels (`1500 * 28 * 28`). It is more paper-faithful but much heavier than the low-memory setting.
+这大约等价于 `1176000` max pixels (`1500 * 28 * 28`)。这个设置更贴近论文，但比低显存设置重很多。
 
-Use `--retention-ratio 1.0` for the no-pruning baseline while keeping the same data/model settings.
+使用 `--retention-ratio 1.0` 可以在相同数据/模型设置下运行 no-pruning baseline。
 
-## MASQuant Installation
+## MASQuant 安装
 
-MASQuant is kept as an external checkout.
+MASQuant 作为外部代码仓库使用。
 
 ```bash
 export EXT_ROOT=/path/to/external
@@ -378,13 +378,13 @@ pip install -e .
 pip install lmms-eval
 ```
 
-`flash-attn` is optional for this baseline. GAE needs eager attention, and the prune-then-MASQuant script can patch MASQuant's Qwen2.5 loader to honor `--attn-implementation eager`.
+`flash-attn` 对这个 baseline 是可选的。GAE 需要 eager attention，prune-then-MASQuant 脚本可以 patch MASQuant 的 Qwen2.5 loader，让它遵循 `--attn-implementation eager`。
 
 ## GAE + MASQuant
 
-The prune-then-quant baseline has two phases.
+prune-then-quant baseline 分为两个阶段。
 
-Phase 1 calibrates MASQuant on already-pruned prompts:
+阶段 1：在已经剪枝的 prompt 上校准 MASQuant：
 
 ```bash
 python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
@@ -406,13 +406,13 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --patch-masquant-inputs-embeds-mask
 ```
 
-This writes:
+该命令会写出：
 
-- a pruned MASQuant cache under `$WORK_ROOT/qwen25vl_gae50_masquant/cache`;
-- pruned activation scales under `$WORK_ROOT/qwen25vl_gae50_masquant/act_scales`;
-- MASQuant outputs under `$WORK_ROOT/qwen25vl_gae50_masquant/masquant_outputs`.
+- 位于 `$WORK_ROOT/qwen25vl_gae50_masquant/cache` 下的 pruned MASQuant cache；
+- 位于 `$WORK_ROOT/qwen25vl_gae50_masquant/act_scales` 下的 pruned activation scales；
+- 位于 `$WORK_ROOT/qwen25vl_gae50_masquant/masquant_outputs` 下的 MASQuant 输出。
 
-Find the trained MASQuant parameters:
+查找训练得到的 MASQuant 参数：
 
 ```bash
 export MASQUANT_RESUME=$(find "$WORK_ROOT/qwen25vl_gae50_masquant/masquant_outputs" \
@@ -421,7 +421,7 @@ export MASQUANT_RESUME=$(find "$WORK_ROOT/qwen25vl_gae50_masquant/masquant_outpu
 echo "$MASQUANT_RESUME"
 ```
 
-Phase 2 runs inference with the MASQuant model and applies GAE pruning again:
+阶段 2：加载 MASQuant 模型进行推理，并再次应用 GAE 剪枝：
 
 ```bash
 python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
@@ -442,21 +442,21 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --max-new-tokens 128
 ```
 
-The important invariant is:
+这里最重要的不变量是：
 
-- calibration uses GAE-pruned prompts before MASQuant learns quantization parameters;
-- inference loads MASQuant first, then applies GAE pruning to the prompt before generation.
+- 校准阶段先使用 GAE-pruned prompts，再让 MASQuant 学习量化参数；
+- 推理阶段先加载 MASQuant，再在 generation 前对 prompt 应用 GAE 剪枝。
 
-## Useful Smoke Checks
+## 常用 Smoke Check
 
-Syntax and lightweight checks:
+语法和轻量检查：
 
 ```bash
 python -m compileall src tests
 pytest
 ```
 
-Dry-run the MASQuant command construction without loading the model:
+不加载模型，只 dry-run MASQuant 命令构造：
 
 ```bash
 python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
@@ -469,8 +469,8 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --dry-run
 ```
 
-## Notes
+## 注意事项
 
-- Do not commit model weights, datasets, Hugging Face tokens, or large benchmark outputs.
-- If CUDA memory is tight, lower image resolution, use fewer calibration samples, or reduce `--max-new-tokens`.
-- GAE is slower than attention-proxy pruning because it performs gradient-based scoring.
+- 不要提交模型权重、数据集、Hugging Face token 或大型 benchmark 输出。
+- 如果 CUDA 显存紧张，降低图像分辨率、减少校准样本数，或减小 `--max-new-tokens`。
+- GAE 比 attention-proxy 剪枝慢，因为它需要基于梯度进行打分。

@@ -5,6 +5,71 @@ import shutil
 from pathlib import Path
 
 
+CONFIG_BLOCK_BEGIN = "# Prune_Quant custom models BEGIN"
+CONFIG_BLOCK_END = "# Prune_Quant custom models END"
+
+
+def _patch_config(config_path: Path) -> None:
+    text = config_path.read_text(encoding="utf-8")
+    block = f"""
+{CONFIG_BLOCK_BEGIN}
+import os as _pq_os
+from functools import partial as _pq_partial
+from vlmeval.vlm import Qwen2VLPrunedCompressor as _PQ_Qwen2VLPrunedCompressor
+from vlmeval.vlm import Qwen2VLPrunedGAE as _PQ_Qwen2VLPrunedGAE
+
+
+def _pq_bool_env(name, default):
+    value = _pq_os.environ.get(name, default)
+    return str(value).strip().lower() in {{'1', 'true', 'yes', 'y'}}
+
+
+def _pq_int_env(name, default=None):
+    value = _pq_os.environ.get(name)
+    if value is None or value == '':
+        return default
+    return int(value)
+
+
+supported_VLM['Qwen2VL_PrunedGAE'] = _pq_partial(
+    _PQ_Qwen2VLPrunedGAE,
+    model_path=_pq_os.environ.get('QWEN2VL_MODEL', ''),
+    retention_ratio=float(_pq_os.environ.get('PQ_RETENTION_RATIO', '0.5')),
+    min_keep=int(_pq_os.environ.get('PQ_MIN_KEEP', '1')),
+    max_new_tokens=int(_pq_os.environ.get('PQ_MAX_NEW_TOKENS', '16')),
+    gae_answer_source=_pq_os.environ.get('PQ_GAE_ANSWER_SOURCE', 'generated'),
+    gae_per_token=_pq_bool_env('PQ_GAE_PER_TOKEN', 'false'),
+    attn_implementation=_pq_os.environ.get('PQ_ATTN_IMPLEMENTATION', 'eager'),
+    min_pixels=_pq_int_env('PQ_MIN_PIXELS'),
+    max_pixels=_pq_int_env('PQ_MAX_PIXELS'),
+    min_visual_tokens=_pq_int_env('PQ_MIN_VISUAL_TOKENS'),
+    max_visual_tokens=_pq_int_env('PQ_MAX_VISUAL_TOKENS'),
+)
+
+supported_VLM['Qwen2VL_PrunedCompressor'] = _pq_partial(
+    _PQ_Qwen2VLPrunedCompressor,
+    model_path=_pq_os.environ.get('QWEN2VL_MODEL', ''),
+    retention_ratio=float(_pq_os.environ.get('PQ_RETENTION_RATIO', '0.5')),
+    min_keep=int(_pq_os.environ.get('PQ_MIN_KEEP', '1')),
+    max_new_tokens=int(_pq_os.environ.get('PQ_MAX_NEW_TOKENS', '16')),
+    attn_implementation=_pq_os.environ.get('PQ_ATTN_IMPLEMENTATION', 'eager'),
+    min_pixels=_pq_int_env('PQ_MIN_PIXELS'),
+    max_pixels=_pq_int_env('PQ_MAX_PIXELS'),
+    min_visual_tokens=_pq_int_env('PQ_MIN_VISUAL_TOKENS'),
+    max_visual_tokens=_pq_int_env('PQ_MAX_VISUAL_TOKENS'),
+    compressor_checkpoint=_pq_os.environ.get('PQ_COMPRESSOR_CHECKPOINT', ''),
+)
+{CONFIG_BLOCK_END}
+""".strip()
+    if CONFIG_BLOCK_BEGIN in text and CONFIG_BLOCK_END in text:
+        before = text.split(CONFIG_BLOCK_BEGIN, 1)[0].rstrip()
+        after = text.split(CONFIG_BLOCK_END, 1)[1].lstrip()
+        text = f"{before}\n\n{block}\n\n{after}"
+    else:
+        text = text.rstrip() + "\n\n" + block + "\n"
+    config_path.write_text(text, encoding="utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Install Prune_Quant VLMEvalKit model wrappers.")
     parser.add_argument("--vlmeval-root", required=True)
@@ -30,6 +95,10 @@ def main() -> None:
         init_path.write_text(text + line, encoding="utf-8")
     elif text != init_path.read_text(encoding="utf-8"):
         init_path.write_text(text, encoding="utf-8")
+
+    _patch_config(vlmeval_root / "vlmeval" / "config.py")
+    print("Installed Qwen2VL_PrunedGAE and Qwen2VL_PrunedCompressor into VLMEvalKit.")
+    print("Set QWEN2VL_MODEL before running VLMEvalKit.")
 
 
 if __name__ == "__main__":
