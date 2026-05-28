@@ -29,14 +29,23 @@ LOGGER = get_logger(__name__)
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run remote pruned inference for JSONL samples.")
     parser.add_argument("--config", help="Optional YAML config path.")
-    parser.add_argument("--model-type", choices=["llava_onevision", "qwen2vl"])
+    parser.add_argument("--model-type", choices=["llava_onevision", "qwen2vl", "qwen2_5_vl"])
     parser.add_argument("--model-path")
     parser.add_argument("--input-jsonl")
     parser.add_argument("--output-jsonl")
     parser.add_argument("--pruner", choices=["attention_proxy", "gae_oracle", "learned_compressor"])
     parser.add_argument("--retention-ratio", type=float)
     parser.add_argument("--min-keep", type=int)
-    parser.add_argument("--quant-method", choices=["none", "bnb4", "bnb8", "gptq", "awq"])
+    parser.add_argument("--quant-method", choices=["none", "bnb4", "bnb8", "gptq", "awq", "masquant"])
+    parser.add_argument("--masquant-root")
+    parser.add_argument("--masquant-resume")
+    parser.add_argument("--masquant-act-scales")
+    parser.add_argument("--masquant-wbits", type=int)
+    parser.add_argument("--masquant-abits", type=int)
+    parser.add_argument("--masquant-group-size", type=int)
+    parser.add_argument("--masquant-inference-mode", choices=["split_scales", "merged_scales"])
+    parser.add_argument("--masquant-symmetric", choices=["true", "false"])
+    parser.add_argument("--masquant-batch-size", type=int)
     parser.add_argument("--dtype")
     parser.add_argument("--device-map")
     parser.add_argument("--max-new-tokens", type=int)
@@ -69,6 +78,21 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "retention_ratio": args.retention_ratio if args.retention_ratio is not None else pruning.get("retention_ratio", 0.5),
         "min_keep": args.min_keep if args.min_keep is not None else pruning.get("min_keep", 1),
         "quant_method": args.quant_method or quant.get("method", "none"),
+        "masquant_root": args.masquant_root or quant.get("masquant_root"),
+        "masquant_resume": args.masquant_resume or quant.get("masquant_resume"),
+        "masquant_act_scales": args.masquant_act_scales or quant.get("masquant_act_scales"),
+        "masquant_wbits": args.masquant_wbits if args.masquant_wbits is not None else quant.get("wbits", 4),
+        "masquant_abits": args.masquant_abits if args.masquant_abits is not None else quant.get("abits", 8),
+        "masquant_group_size": (
+            args.masquant_group_size if args.masquant_group_size is not None else quant.get("group_size", 0)
+        ),
+        "masquant_inference_mode": args.masquant_inference_mode or quant.get("inference_mode", "split_scales"),
+        "masquant_symmetric": (
+            args.masquant_symmetric == "true"
+            if args.masquant_symmetric is not None
+            else bool(quant.get("symmetric", True))
+        ),
+        "masquant_batch_size": args.masquant_batch_size if args.masquant_batch_size is not None else quant.get("batch_size", 1),
         "dtype": args.dtype or model.get("dtype", "bfloat16"),
         "device_map": args.device_map or model.get("device_map", "auto"),
         "max_new_tokens": args.max_new_tokens or inference.get("max_new_tokens", 128),
@@ -87,9 +111,9 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
 def _make_adapter(model_type: str):
     if model_type == "llava_onevision":
         return LlavaOneVisionHFAdapter()
-    if model_type == "qwen2vl":
+    if model_type in {"qwen2vl", "qwen2_5_vl"}:
         return Qwen2VLHFAdapter()
-    raise ValueError("model_type must be one of: llava_onevision, qwen2vl.")
+    raise ValueError("model_type must be one of: llava_onevision, qwen2vl, qwen2_5_vl.")
 
 
 def _make_pruner(name: str, *, checkpoint_path: str | None = None):
@@ -410,6 +434,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         local_files_only=cfg["local_files_only"],
         attn_implementation=cfg["attn_implementation"],
         processor_use_fast=cfg["processor_use_fast"],
+        masquant_root=cfg["masquant_root"],
+        masquant_resume=cfg["masquant_resume"],
+        masquant_act_scales=cfg["masquant_act_scales"],
+        masquant_wbits=cfg["masquant_wbits"],
+        masquant_abits=cfg["masquant_abits"],
+        masquant_group_size=cfg["masquant_group_size"],
+        masquant_inference_mode=cfg["masquant_inference_mode"],
+        masquant_symmetric=cfg["masquant_symmetric"],
+        masquant_batch_size=cfg["masquant_batch_size"],
     )
     model.eval()
     adapter = _make_adapter(cfg["model_type"])

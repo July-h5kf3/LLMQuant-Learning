@@ -7,6 +7,12 @@ from prune_quant_baseline.core.datatypes import VisualTokenMeta
 from prune_quant_baseline.models.base_adapter import MLLMAdapter
 
 
+def _as_feature_tensor(features: Any) -> torch.Tensor:
+    if isinstance(features, (list, tuple)):
+        return torch.cat(features, dim=0)
+    return features
+
+
 def _sample_prompt(sample: dict) -> str:
     prompt = sample.get("prompt") or sample.get("question") or sample.get("text")
     if not prompt:
@@ -126,17 +132,29 @@ class Qwen2VLHFAdapter(MLLMAdapter):
         inputs_embeds = model_core.get_input_embeddings()(inputs["input_ids"])
         if inputs.get("pixel_values") is not None:
             image_features = model_core.get_image_features(inputs["pixel_values"], inputs.get("image_grid_thw"))
-            image_features = torch.cat(image_features, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
-            image_mask, _ = model_core.get_placeholder_mask(
-                inputs["input_ids"], inputs_embeds=inputs_embeds, image_features=image_features
-            )
+            image_features = _as_feature_tensor(image_features).to(inputs_embeds.device, inputs_embeds.dtype)
+            if hasattr(model_core, "get_placeholder_mask"):
+                image_mask, _ = model_core.get_placeholder_mask(
+                    inputs["input_ids"], inputs_embeds=inputs_embeds, image_features=image_features
+                )
+            else:
+                image_token_id = getattr(model.config, "image_token_id", None)
+                if image_token_id is None:
+                    raise ValueError("model.config.image_token_id is missing; cannot scatter image features.")
+                image_mask = (inputs["input_ids"] == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_features)
         if inputs.get("pixel_values_videos") is not None:
             video_features = model_core.get_video_features(inputs["pixel_values_videos"], inputs.get("video_grid_thw"))
-            video_features = torch.cat(video_features, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
-            _, video_mask = model_core.get_placeholder_mask(
-                inputs["input_ids"], inputs_embeds=inputs_embeds, video_features=video_features
-            )
+            video_features = _as_feature_tensor(video_features).to(inputs_embeds.device, inputs_embeds.dtype)
+            if hasattr(model_core, "get_placeholder_mask"):
+                _, video_mask = model_core.get_placeholder_mask(
+                    inputs["input_ids"], inputs_embeds=inputs_embeds, video_features=video_features
+                )
+            else:
+                video_token_id = getattr(model.config, "video_token_id", None)
+                if video_token_id is None:
+                    raise ValueError("model.config.video_token_id is missing; cannot scatter video features.")
+                video_mask = (inputs["input_ids"] == video_token_id).unsqueeze(-1).expand_as(inputs_embeds)
             inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_features)
         return inputs_embeds
 
@@ -144,11 +162,19 @@ class Qwen2VLHFAdapter(MLLMAdapter):
         if inputs.get("position_ids") is not None:
             return inputs["position_ids"]
         model_core = getattr(model, "model", model)
-        position_ids, rope_deltas = model_core.get_rope_index(
-            inputs.get("input_ids"),
-            inputs.get("image_grid_thw"),
-            inputs.get("video_grid_thw"),
-            inputs.get("attention_mask"),
-        )
+        try:
+            position_ids, rope_deltas = model_core.get_rope_index(
+                input_ids=inputs.get("input_ids"),
+                image_grid_thw=inputs.get("image_grid_thw"),
+                video_grid_thw=inputs.get("video_grid_thw"),
+                attention_mask=inputs.get("attention_mask"),
+            )
+        except TypeError:
+            position_ids, rope_deltas = model_core.get_rope_index(
+                inputs.get("input_ids"),
+                inputs.get("image_grid_thw"),
+                inputs.get("video_grid_thw"),
+                inputs.get("attention_mask"),
+            )
         inputs["rope_deltas"] = rope_deltas
         return position_ids

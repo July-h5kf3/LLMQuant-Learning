@@ -23,6 +23,13 @@ def _resolve_torch_dtype(dtype: str) -> Any:
 def _model_class_for_type(model_type: str) -> Any:
     from transformers import AutoModelForCausalLM
 
+    if model_type == "qwen2_5_vl":
+        try:
+            from transformers import Qwen2_5_VLForConditionalGeneration
+
+            return Qwen2_5_VLForConditionalGeneration
+        except ImportError:
+            return AutoModelForCausalLM
     if model_type == "qwen2vl":
         try:
             from transformers import Qwen2VLForConditionalGeneration
@@ -37,7 +44,7 @@ def _model_class_for_type(model_type: str) -> Any:
             return LlavaOnevisionForConditionalGeneration
         except ImportError:
             return AutoModelForCausalLM
-    raise ValueError("model_type must be one of: llava_onevision, qwen2vl.")
+    raise ValueError("model_type must be one of: llava_onevision, qwen2vl, qwen2_5_vl.")
 
 
 def load_model_and_processor(
@@ -66,6 +73,24 @@ def load_model_and_processor(
     model_cls = _model_class_for_type(model_type)
     quantization_config = None
 
+    if quant_method == "masquant":
+        from prune_quant_baseline.quant.masquant import load_masquant_model_and_processor
+
+        return load_masquant_model_and_processor(
+            masquant_root=kwargs.pop("masquant_root"),
+            model_id_or_path=model_id_or_path,
+            resume=kwargs.pop("masquant_resume", None),
+            act_scales=kwargs.pop("masquant_act_scales", None),
+            wbits=int(kwargs.pop("masquant_wbits", 4)),
+            abits=int(kwargs.pop("masquant_abits", 8)),
+            group_size=kwargs.pop("masquant_group_size", 0),
+            symmetric=bool(kwargs.pop("masquant_symmetric", True)),
+            inference_mode=kwargs.pop("masquant_inference_mode", "split_scales"),
+            attn_implementation=attn_implementation or "eager",
+            processor_use_fast=processor_use_fast,
+            local_files_only=local_files_only,
+            batch_size=int(kwargs.pop("masquant_batch_size", 1)),
+        )
     if quant_method in ("bnb4", "bnb8"):
         from prune_quant_baseline.quant.bnb import build_bnb_config
 
@@ -73,7 +98,7 @@ def load_model_and_processor(
     elif quant_method in ("gptq", "awq"):
         raise NotImplementedError(f"{quant_method} loading is a skeleton in the first-stage baseline.")
     elif quant_method != "none":
-        raise ValueError("quant_method must be one of: none, bnb4, bnb8, gptq, awq.")
+        raise ValueError("quant_method must be one of: none, bnb4, bnb8, gptq, awq, masquant.")
 
     common_kwargs = {
         "trust_remote_code": trust_remote_code,
