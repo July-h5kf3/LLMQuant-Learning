@@ -24,6 +24,7 @@ from prune_quant_baseline.scripts.run_infer_pruned import (
     _make_adapter,
     _move_inputs_to_model_device,
     _read_jsonl,
+    _resolve_processor_pixels,
     _score_gae_oracle,
 )
 from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner
@@ -50,6 +51,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trust-remote-code", choices=["true", "false"], default="true")
     parser.add_argument("--attn-implementation", default="eager")
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
+    parser.add_argument("--processor-min-pixels", type=int)
+    parser.add_argument("--processor-max-pixels", type=int)
+    parser.add_argument("--processor-min-visual-tokens", type=int)
+    parser.add_argument("--processor-max-visual-tokens", type=int)
     parser.add_argument("--retention-ratio", type=float, default=0.5)
     parser.add_argument("--min-keep", type=int, default=1)
     parser.add_argument("--max-new-tokens", type=int, default=128)
@@ -243,6 +248,16 @@ def prepare_pruned_calibration_artifacts(args: argparse.Namespace, config: MASQu
     config.resolved_cache_dir.mkdir(parents=True, exist_ok=True)
     config.resolved_act_scales_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path = work_dir / "pruned_calibration_metadata.jsonl"
+    processor_min_pixels = _resolve_processor_pixels(
+        pixel_value=args.processor_min_pixels,
+        token_value=args.processor_min_visual_tokens,
+        name="min",
+    )
+    processor_max_pixels = _resolve_processor_pixels(
+        pixel_value=args.processor_max_pixels,
+        token_value=args.processor_max_visual_tokens,
+        name="max",
+    )
 
     model, processor = load_model_and_processor(
         model_id_or_path=args.model_path,
@@ -254,6 +269,8 @@ def prepare_pruned_calibration_artifacts(args: argparse.Namespace, config: MASQu
         local_files_only=_bool_arg(args.local_files_only),
         attn_implementation=None if args.attn_implementation == "none" else args.attn_implementation,
         processor_use_fast=None if args.processor_use_fast is None else _bool_arg(args.processor_use_fast),
+        processor_min_pixels=processor_min_pixels,
+        processor_max_pixels=processor_max_pixels,
     )
     model.eval()
     adapter = _make_adapter(args.model_type)
@@ -387,6 +404,14 @@ def run_pruned_masquant_inference(args: argparse.Namespace, config: MASQuantRunC
         argv.extend(["--masquant-act-scales", act_scales])
     if args.processor_use_fast is not None:
         argv.extend(["--processor-use-fast", args.processor_use_fast])
+    if args.processor_min_pixels is not None:
+        argv.extend(["--processor-min-pixels", str(args.processor_min_pixels)])
+    if args.processor_max_pixels is not None:
+        argv.extend(["--processor-max-pixels", str(args.processor_max_pixels)])
+    if args.processor_min_visual_tokens is not None:
+        argv.extend(["--processor-min-visual-tokens", str(args.processor_min_visual_tokens)])
+    if args.processor_max_visual_tokens is not None:
+        argv.extend(["--processor-max-visual-tokens", str(args.processor_max_visual_tokens)])
     LOGGER.info("Running pruned MASQuant inference via run_infer_pruned.")
     if args.dry_run:
         LOGGER.info("python -m prune_quant_baseline.scripts.run_infer_pruned %s", format_command(argv))

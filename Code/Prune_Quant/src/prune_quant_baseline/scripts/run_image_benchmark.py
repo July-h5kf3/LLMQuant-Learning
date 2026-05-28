@@ -18,8 +18,10 @@ from prune_quant_baseline.scripts.run_infer_pruned import (
     _make_adapter,
     _make_pruner,
     _move_inputs_to_model_device,
+    _resolve_processor_pixels,
     _score_attention_proxy,
     _score_gae_oracle,
+    _visual_meta_record,
 )
 from prune_quant_baseline.pruners.attention_proxy import AttentionProxyPruner
 from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner
@@ -67,6 +69,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--attn-implementation", default="eager", help="Use 'none' to leave the HF default unchanged.")
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
+    parser.add_argument("--processor-min-pixels", type=int)
+    parser.add_argument("--processor-max-pixels", type=int)
+    parser.add_argument("--processor-min-visual-tokens", type=int)
+    parser.add_argument("--processor-max-visual-tokens", type=int)
     parser.add_argument(
         "--mme-prompt-style",
         default="default",
@@ -75,6 +81,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jpeg-reencode", action="store_true")
     parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
+    parser.add_argument("--gae-per-token", choices=["true", "false"], default="false")
     parser.add_argument("--log-oracle-replay", action="store_true")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--resume", action="store_true")
@@ -274,6 +281,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     output_jsonl = Path(args.output_jsonl)
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     done, records = _load_done(output_jsonl) if args.resume else (set(), [])
+    processor_min_pixels = _resolve_processor_pixels(
+        pixel_value=args.processor_min_pixels,
+        token_value=args.processor_min_visual_tokens,
+        name="min",
+    )
+    processor_max_pixels = _resolve_processor_pixels(
+        pixel_value=args.processor_max_pixels,
+        token_value=args.processor_max_visual_tokens,
+        name="max",
+    )
 
     model, processor = load_model_and_processor(
         model_id_or_path=args.model_path,
@@ -285,6 +302,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         trust_remote_code=True,
         attn_implementation=None if args.attn_implementation == "none" else args.attn_implementation,
         processor_use_fast=None if args.processor_use_fast is None else args.processor_use_fast == "true",
+        processor_min_pixels=processor_min_pixels,
+        processor_max_pixels=processor_max_pixels,
     )
     model.eval()
     adapter = _make_adapter(args.model_type)
@@ -312,11 +331,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             pruning_applied = False
             num_visual_tokens_before = None
             num_visual_tokens_after = None
+            visual_meta = {}
             try:
                 if pruner is None or args.retention_ratio >= 1.0:
                     prediction = _generate_vanilla(model, processor, inputs, args.max_new_tokens)
                 else:
                     meta = adapter.get_visual_token_meta(model, inputs)
+                    visual_meta = _visual_meta_record(meta)
                     num_visual_tokens_before = int(meta.visual_indices.numel())
                     if isinstance(pruner, AttentionProxyPruner):
                         scores = _score_attention_proxy(model, pruner, inputs, meta)
@@ -335,6 +356,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                             pruner=pruner,
                             sample=sample,
                             answer=answer,
+                            per_token=args.gae_per_token == "true",
                         )
                     else:
                         raise NotImplementedError(f"Unsupported pruner: {type(pruner)!r}")
@@ -375,7 +397,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "jpeg_reencode": args.jpeg_reencode,
                 "num_visual_tokens_before": num_visual_tokens_before,
                 "num_visual_tokens_after": num_visual_tokens_after,
+                "gae_per_token": args.gae_per_token == "true",
                 "pruning_applied": pruning_applied,
+                **visual_meta,
             }
             for key in ["l2_category", "bench", "A", "B", "C", "D"]:
                 if key in row_dict:

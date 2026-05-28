@@ -277,7 +277,9 @@ python -m prune_quant_baseline.scripts.run_image_benchmark \
   --pruner gae_oracle \
   --retention-ratio 0.5 \
   --attn-implementation eager \
-  --gae-answer-source generated \
+  --gae-answer-source sample \
+  --gae-per-token false \
+  --processor-max-pixels 401408 \
   --max-new-tokens 16
 ```
 
@@ -295,11 +297,24 @@ python -m prune_quant_baseline.scripts.run_image_benchmark \
   --pruner gae_oracle \
   --retention-ratio 0.5 \
   --attn-implementation eager \
-  --gae-answer-source generated \
+  --gae-answer-source sample \
+  --gae-per-token false \
+  --processor-max-pixels 401408 \
   --max-new-tokens 16
 ```
 
 The TSV should contain the usual VLMEvalKit columns, including `image` as base64 image data plus `question` and `answer`. Optional columns such as `category`, `question_id`, and `image_path` are preserved in the output.
+
+For MME/MMStar style evaluation, prefer `--gae-answer-source sample` because the TSV already has short labels (`A/B/C/D` or `Yes/No`). `--gae-answer-source generated` first generates a replay answer and then runs GAE on that answer, which costs extra memory and may turn a one-token label into many answer tokens. `--gae-per-token false` uses one backward pass over the answer instead of one backward pass per answer token; it is the safer default for A800/RTX PRO 6000 runs. Qwen2-VL reports visual tokens after its spatial merge; `216` language-side visual tokens normally means about `864` ViT patches before merge. The output JSONL now records both `num_visual_language_tokens` and `num_image_patches_before_merge`.
+
+`--processor-max-pixels` controls Qwen2-VL dynamic image resolution. A useful A800 starting point is `401408` (`512 * 28 * 28`), and a higher-quality setting is `802816` (`1024 * 28 * 28`) if memory is stable. To match the paper's Qwen2-VL image setting of roughly 1500 visual tokens, use token-budget arguments instead of hand-computing pixels:
+
+```bash
+--processor-min-visual-tokens 1500 \
+--processor-max-visual-tokens 1500
+```
+
+This is equivalent to about `1176000` max pixels (`1500 * 28 * 28`). It is more paper-faithful but much heavier than the low-memory setting.
 
 Use `--retention-ratio 1.0` for the no-pruning baseline while keeping the same data/model settings.
 

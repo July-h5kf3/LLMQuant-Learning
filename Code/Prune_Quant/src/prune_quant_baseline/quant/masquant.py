@@ -366,6 +366,8 @@ def load_masquant_model_and_processor(
     inference_mode: str = "split_scales",
     attn_implementation: str = "eager",
     processor_use_fast: bool | None = None,
+    processor_min_pixels: int | None = None,
+    processor_max_pixels: int | None = None,
     local_files_only: bool = True,
     batch_size: int = 1,
 ) -> tuple[Any, Any]:
@@ -423,6 +425,10 @@ def load_masquant_model_and_processor(
             }
             if processor_use_fast is not None:
                 processor_kwargs["use_fast"] = processor_use_fast
+            if processor_min_pixels is not None:
+                processor_kwargs["min_pixels"] = int(processor_min_pixels)
+            if processor_max_pixels is not None:
+                processor_kwargs["max_pixels"] = int(processor_max_pixels)
             processor = AutoProcessor.from_pretrained(model_id_or_path, **processor_kwargs)
             return llm.model, processor
     finally:

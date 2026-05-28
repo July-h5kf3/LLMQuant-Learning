@@ -58,6 +58,8 @@ def load_model_and_processor(
     local_files_only: bool = True,
     attn_implementation: str | None = None,
     processor_use_fast: bool | None = None,
+    processor_min_pixels: int | None = None,
+    processor_max_pixels: int | None = None,
     **kwargs: Any,
 ) -> tuple[Any, Any]:
     """
@@ -88,6 +90,8 @@ def load_model_and_processor(
             inference_mode=kwargs.pop("masquant_inference_mode", "split_scales"),
             attn_implementation=attn_implementation or "eager",
             processor_use_fast=processor_use_fast,
+            processor_min_pixels=processor_min_pixels,
+            processor_max_pixels=processor_max_pixels,
             local_files_only=local_files_only,
             batch_size=int(kwargs.pop("masquant_batch_size", 1)),
         )
@@ -107,6 +111,10 @@ def load_model_and_processor(
     processor_kwargs = dict(common_kwargs)
     if processor_use_fast is not None:
         processor_kwargs["use_fast"] = processor_use_fast
+    if processor_min_pixels is not None:
+        processor_kwargs["min_pixels"] = int(processor_min_pixels)
+    if processor_max_pixels is not None:
+        processor_kwargs["max_pixels"] = int(processor_max_pixels)
     try:
         processor = AutoProcessor.from_pretrained(model_id_or_path, **processor_kwargs)
         model_kwargs: dict[str, Any] = {

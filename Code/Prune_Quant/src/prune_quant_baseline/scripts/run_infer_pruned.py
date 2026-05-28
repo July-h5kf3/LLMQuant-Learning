@@ -53,6 +53,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, help="Optional max number of samples to process.")
     parser.add_argument("--attn-implementation", default="eager", help="Use 'none' to leave the HF default unchanged.")
     parser.add_argument("--processor-use-fast", choices=["true", "false"])
+    parser.add_argument("--processor-min-pixels", type=int)
+    parser.add_argument("--processor-max-pixels", type=int)
+    parser.add_argument("--processor-min-visual-tokens", type=int)
+    parser.add_argument("--processor-max-visual-tokens", type=int)
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--gae-per-token", choices=["true", "false"], default="true")
     parser.add_argument("--log-oracle-replay", action="store_true")
@@ -71,6 +75,20 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
     quant = config.get("quant", {})
     inference = config.get("inference", {})
     data = config.get("data", {})
+    processor_min_pixels = _resolve_processor_pixels(
+        pixel_value=args.processor_min_pixels,
+        token_value=args.processor_min_visual_tokens,
+        config_pixel_value=model.get("processor_min_pixels"),
+        config_token_value=model.get("processor_min_visual_tokens"),
+        name="min",
+    )
+    processor_max_pixels = _resolve_processor_pixels(
+        pixel_value=args.processor_max_pixels,
+        token_value=args.processor_max_visual_tokens,
+        config_pixel_value=model.get("processor_max_pixels"),
+        config_token_value=model.get("processor_max_visual_tokens"),
+        name="max",
+    )
     return {
         "model_type": args.model_type or model.get("model_type"),
         "model_path": args.model_path or model.get("model_path"),
@@ -101,6 +119,8 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "limit": args.limit,
         "attn_implementation": None if args.attn_implementation == "none" else args.attn_implementation,
         "processor_use_fast": None if args.processor_use_fast is None else args.processor_use_fast == "true",
+        "processor_min_pixels": processor_min_pixels,
+        "processor_max_pixels": processor_max_pixels,
         "gae_answer_source": args.gae_answer_source,
         "gae_per_token": args.gae_per_token == "true",
         "log_oracle_replay": args.log_oracle_replay,
@@ -129,6 +149,40 @@ def _make_pruner(name: str, *, checkpoint_path: str | None = None):
             raise ValueError("learned_compressor requires --compressor-checkpoint.")
         return LearnedCompressorPruner(checkpoint_path)
     raise NotImplementedError(f"Pruner {name!r} is not implemented.")
+
+
+def _visual_tokens_to_pixels(num_visual_tokens: int | None) -> int | None:
+    if num_visual_tokens is None:
+        return None
+    if num_visual_tokens <= 0:
+        raise ValueError("processor visual token budget must be positive.")
+    return int(num_visual_tokens) * 28 * 28
+
+
+def _resolve_processor_pixels(
+    *,
+    pixel_value: int | None,
+    token_value: int | None,
+    config_pixel_value: int | None = None,
+    config_token_value: int | None = None,
+    name: str,
+) -> int | None:
+    if pixel_value is not None and token_value is not None:
+        raise ValueError(f"Use either --processor-{name}-pixels or --processor-{name}-visual-tokens, not both.")
+    if pixel_value is not None:
+        return int(pixel_value)
+    if token_value is not None:
+        return _visual_tokens_to_pixels(token_value)
+    if config_pixel_value is not None and config_token_value is not None:
+        raise ValueError(
+            f"Config must use either model.processor_{name}_pixels or "
+            f"model.processor_{name}_visual_tokens, not both."
+        )
+    if config_pixel_value is not None:
+        return int(config_pixel_value)
+    if config_token_value is not None:
+        return _visual_tokens_to_pixels(int(config_token_value))
+    return None
 
 
 def _read_jsonl(path: str | Path):
@@ -188,6 +242,40 @@ def _build_greedy_generation_config(model: Any, max_new_tokens: int) -> Any:
         if hasattr(generation_config, sampling_attr):
             setattr(generation_config, sampling_attr, None)
     return generation_config
+
+
+def _tensor_to_python(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return value
+
+
+def _image_grid_patch_count(image_grid_thw: Any) -> int | None:
+    if image_grid_thw is None:
+        return None
+    import torch
+
+    grid = image_grid_thw.detach() if hasattr(image_grid_thw, "detach") else torch.as_tensor(image_grid_thw)
+    if grid.numel() == 0:
+        return 0
+    grid = grid.to(dtype=torch.long).view(-1, 3)
+    return int(grid.prod(dim=1).sum().item())
+
+
+def _visual_meta_record(meta: Any) -> dict[str, Any]:
+    return {
+        "image_grid_thw": _tensor_to_python(getattr(meta, "image_grid_thw", None)),
+        "video_grid_thw": _tensor_to_python(getattr(meta, "video_grid_thw", None)),
+        "num_image_patches_before_merge": _image_grid_patch_count(getattr(meta, "image_grid_thw", None)),
+        "num_video_patches_before_merge": _image_grid_patch_count(getattr(meta, "video_grid_thw", None)),
+        "num_visual_language_tokens": int(meta.visual_indices.numel()),
+    }
 
 
 def _generate_vanilla(model: Any, processor: Any, inputs: dict[str, Any], max_new_tokens: int) -> str:
@@ -460,6 +548,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         local_files_only=cfg["local_files_only"],
         attn_implementation=cfg["attn_implementation"],
         processor_use_fast=cfg["processor_use_fast"],
+        processor_min_pixels=cfg["processor_min_pixels"],
+        processor_max_pixels=cfg["processor_max_pixels"],
         masquant_root=cfg["masquant_root"],
         masquant_resume=cfg["masquant_resume"],
         masquant_act_scales=cfg["masquant_act_scales"],
@@ -487,8 +577,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             pruning_applied = False
             num_visual_tokens_before = None
             num_visual_tokens_after = None
+            visual_meta = {}
             try:
                 meta = adapter.get_visual_token_meta(model, inputs)
+                visual_meta = _visual_meta_record(meta)
                 num_visual_tokens_before = int(meta.visual_indices.numel())
                 if isinstance(pruner, (AttentionProxyPruner, LearnedCompressorPruner)):
                     scores = _score_attention_proxy(model, pruner, inputs, meta)
@@ -542,6 +634,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "pruning_applied": pruning_applied,
                 "quant_method": cfg["quant_method"],
                 "model_type": cfg["model_type"],
+                **visual_meta,
             }
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
