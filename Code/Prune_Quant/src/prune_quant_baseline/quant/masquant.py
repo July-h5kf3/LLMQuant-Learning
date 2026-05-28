@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -370,45 +371,47 @@ def patch_custom_dataset_paths(
     root = validate_masquant_root(masquant_root)
     target = root / "custom_dataset.py"
     text = target.read_text(encoding="utf-8")
-    replacements: dict[str, str] = {}
-    if vision_json is not None:
-        replacements[
-            "/nas/yuehu/NEW/qwen_compressor/dataset/sharegpt4v_instruct_gpt4-vision_cap100k_filtered_coco_image.json"
-        ] = str(Path(vision_json).expanduser().resolve())
-    if vision_prefix is not None:
-        prefix = str(vision_prefix)
-        if not prefix.startswith("file://"):
-            prefix = "file://" + str(Path(prefix).expanduser().resolve())
-        if not prefix.endswith("/"):
-            prefix += "/"
-        replacements["file:///nas/yuehu/assets/dataset/"] = prefix
-    if audio_json is not None:
-        replacements["/nas/yuehu/NEW/qwen_compressor/dataset/libri_test_other.jsonl"] = str(
-            Path(audio_json).expanduser().resolve()
-        )
-    if audio_prefix is not None:
-        prefix = str(audio_prefix)
-        if not prefix.startswith("file://"):
-            prefix = "file://" + str(Path(prefix).expanduser().resolve())
-        if not prefix.endswith("/"):
-            prefix += "/"
-        replacements["file:///nas/yuehu/assets/omni_data"] = prefix
 
-    if not replacements:
+    def file_prefix(path: str | Path) -> str:
+        prefix = str(path)
+        if not prefix.startswith("file://"):
+            prefix = "file://" + str(Path(prefix).expanduser().resolve())
+        if not prefix.endswith("/"):
+            prefix += "/"
+        return prefix
+
+    def replace_assignment_after(branch_marker: str, variable: str, value: str, source: str) -> str:
+        marker_index = source.find(branch_marker)
+        if marker_index < 0:
+            raise RuntimeError(f"Could not patch {target}; branch marker not found: {branch_marker}")
+        pattern = re.compile(rf"(^\s*{re.escape(variable)}\s*=\s*)(['\"])(.*?)(\2)", re.MULTILINE)
+        match = pattern.search(source, marker_index)
+        if match is None:
+            raise RuntimeError(f"Could not patch {target}; assignment not found after {branch_marker}: {variable}")
+        return source[: match.start()] + f"{match.group(1)}{match.group(2)}{value}{match.group(2)}" + source[match.end() :]
+
+    patched = text
+    if vision_json is not None:
+        value = str(Path(vision_json).expanduser().resolve())
+        patched = replace_assignment_after("data_type == 'vision-only'", "dataset_json", value, patched)
+        patched = replace_assignment_after("data_type == 'text-vision'", "dataset_json", value, patched)
+    if vision_prefix is not None:
+        value = file_prefix(vision_prefix)
+        patched = replace_assignment_after("data_type == 'vision-only'", "prefix_path", value, patched)
+        patched = replace_assignment_after("data_type == 'text-vision'", "prefix_path", value, patched)
+    if audio_json is not None:
+        value = str(Path(audio_json).expanduser().resolve())
+        patched = replace_assignment_after("data_type == 'audio-only'", "dataset_json", value, patched)
+        patched = replace_assignment_after("data_type == 'text-audio'", "dataset_json", value, patched)
+    if audio_prefix is not None:
+        value = file_prefix(audio_prefix)
+        patched = replace_assignment_after("data_type == 'audio-only'", "prefix_path", value, patched)
+
+    if patched == text:
         return target
     backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
     if not backup.exists():
         backup.write_text(text, encoding="utf-8")
-    patched = text
-    missing = []
-    for old, new in replacements.items():
-        if old not in patched:
-            missing.append(old)
-        patched = patched.replace(old, new)
-    if missing:
-        raise RuntimeError(
-            f"Could not patch {target}; expected MASQuant dataset path(s) not found: {', '.join(missing)}"
-        )
     target.write_text(patched, encoding="utf-8")
     return target
 

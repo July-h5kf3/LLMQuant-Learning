@@ -169,8 +169,12 @@ def test_patch_custom_dataset_paths_replaces_upstream_hardcoded_paths(tmp_path: 
     root = _make_masquant_root(tmp_path)
     target = root / "custom_dataset.py"
     target.write_text(
-        "dataset_json = '/nas/yuehu/NEW/qwen_compressor/dataset/sharegpt4v_instruct_gpt4-vision_cap100k_filtered_coco_image.json'\n"
-        'prefix_path = "file:///nas/yuehu/assets/dataset/"\n',
+        "if data_type == 'vision-only':\n"
+        "    dataset_json = '/already/patched.json'\n"
+        '    prefix_path = "file:///already/patched/"\n'
+        "elif data_type == 'text-vision':\n"
+        "    dataset_json = '/already/patched.json'\n"
+        '    prefix_path = "file:///already/patched/"\n',
         encoding="utf-8",
     )
 
