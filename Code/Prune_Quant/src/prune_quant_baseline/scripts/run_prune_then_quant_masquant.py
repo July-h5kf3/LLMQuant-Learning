@@ -522,6 +522,7 @@ def run_masquant_cmc(args: argparse.Namespace, config: MASQuantRunConfig) -> Non
     cmc_scales = _resolve_cmc_scales_path(args)
     white_matrix_path = _cmc_white_matrix_path(args)
     low_rank_adapters_path = _cmc_low_rank_adapters_path(args)
+    config.resolved_cache_dir.mkdir(parents=True, exist_ok=True)
     white_matrix_path.parent.mkdir(parents=True, exist_ok=True)
     low_rank_adapters_path.parent.mkdir(parents=True, exist_ok=True)
     output_dir = args.cmc_output_dir or Path(args.work_dir).expanduser().resolve() / "cmc_outputs"

@@ -98,6 +98,7 @@ def test_build_cmc_command_uses_infer_mas_and_saves_cmc_artifacts(tmp_path: Path
     assert command[command.index("--mode") + 1] == "infer"
     assert command[command.index("--net") + 1] == "qwen2.5-vl-7b"
     assert command[command.index("--scales_path") + 1] == str((tmp_path / "act_scales" / "pruned.pt").resolve())
+    assert command[command.index("--cache_dir") + 1] == str((tmp_path / "cache").resolve())
     assert command[command.index("--save_white_matrix_path") + 1] == str(tmp_path / "cmc" / "white.pt")
     assert command[command.index("--save_low_rank_adapters") + 1] == str(tmp_path / "cmc" / "low_rank.pt")
     assert "--LR" in command
