@@ -542,6 +542,85 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
         if target not in patched_paths:
             patched_paths.append(target)
 
+    text = target.read_text(encoding="utf-8")
+    mask_marker = "prune_quant_baseline: cache qwen2-vl multimodal masks"
+    if mask_marker not in text:
+        old = (
+            "            elif 'multi_modal_mask' in kwargs:\n"
+            "                multi_modal_mask_cache.append(kwargs['multi_modal_mask'])\n"
+        )
+        new = (
+            f"            # {mask_marker}.\n"
+            "            elif 'Qwen2-VL' in args.model and 'Qwen2.5' not in args.model:\n"
+            "                batch_size, seq_len, hidden_dim = inp.shape if inp.dim() == 3 else (1, inp.shape[0], inp.shape[1])\n"
+            "                device = inp.device\n"
+            "                input_ids = cache.get(\"qwen2_vl_input_ids\")\n"
+            "                image_mask_2d = torch.zeros((batch_size, seq_len), dtype=torch.bool, device=device)\n"
+            "                if input_ids is not None:\n"
+            "                    input_ids = input_ids.to(device)\n"
+            "                    if input_ids.dim() == 1:\n"
+            "                        input_ids = input_ids.unsqueeze(0)\n"
+            "                    if input_ids.shape[0] != batch_size:\n"
+            "                        input_ids = input_ids[:batch_size]\n"
+            "                    if input_ids.shape[-1] < seq_len:\n"
+            "                        pad = torch.full(\n"
+            "                            (input_ids.shape[0], seq_len - input_ids.shape[-1]),\n"
+            "                            -1,\n"
+            "                            dtype=input_ids.dtype,\n"
+            "                            device=device,\n"
+            "                        )\n"
+            "                        input_ids = torch.cat([input_ids, pad], dim=-1)\n"
+            "                    elif input_ids.shape[-1] > seq_len:\n"
+            "                        input_ids = input_ids[:, :seq_len]\n"
+            "                    image_token_id = getattr(model.config, \"image_token_id\", None)\n"
+            "                    video_token_id = getattr(model.config, \"video_token_id\", None)\n"
+            "                    if image_token_id is not None:\n"
+            "                        image_mask_2d |= input_ids == int(image_token_id)\n"
+            "                    if video_token_id is not None:\n"
+            "                        image_mask_2d |= input_ids == int(video_token_id)\n"
+            "                image_mask = image_mask_2d.unsqueeze(-1).expand(batch_size, seq_len, hidden_dim)\n"
+            "                all_true = torch.ones((batch_size, seq_len, hidden_dim), dtype=torch.bool, device=device)\n"
+            "                text_mask = all_true & ~image_mask\n"
+            "                audio_mask = None\n"
+            "                multi_modal_mask_cache.append((audio_mask, image_mask, text_mask))\n"
+            "                kwargs['multi_modal_mask'] = (audio_mask, image_mask, text_mask)\n"
+            "            elif 'multi_modal_mask' in kwargs:\n"
+            "                multi_modal_mask_cache.append(kwargs['multi_modal_mask'])\n"
+        )
+        if old not in text:
+            if "cache.get(\"qwen2_vl_input_ids\")" in text:
+                patched = f"# {mask_marker}\n" + text
+            else:
+                raise RuntimeError(f"Could not patch {target}; expected multimodal mask cache block was not found.")
+        else:
+            patched = text.replace(old, new, 1)
+
+        old = (
+            "                    if 'Qwen2.5-Omni' in args.model or 'Qwen2.5-VL' in args.model "
+            "or 'Qwen2-VL' in args.model:\n"
+            "                        inputs = {k: v.to(dev) for k, v in batch.items()}\n"
+            "                        model(**inputs)\n"
+        )
+        new = (
+            "                    if 'Qwen2.5-Omni' in args.model or 'Qwen2.5-VL' in args.model "
+            "or 'Qwen2-VL' in args.model:\n"
+            "                        inputs = {k: v.to(dev) for k, v in batch.items()}\n"
+            "                        if 'Qwen2-VL' in args.model and 'Qwen2.5' not in args.model:\n"
+            "                            cache[\"qwen2_vl_input_ids\"] = inputs.get(\"input_ids\")\n"
+            "                        model(**inputs)\n"
+        )
+        if old in patched:
+            patched = patched.replace(old, new, 1)
+        elif "cache[\"qwen2_vl_input_ids\"] = inputs.get(\"input_ids\")" not in patched:
+            raise RuntimeError(f"Could not patch {target}; expected Qwen2-VL calibration forward block was not found.")
+
+        backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+        if not backup.exists():
+            backup.write_text(text, encoding="utf-8")
+        target.write_text(patched, encoding="utf-8")
+        if target not in patched_paths:
+            patched_paths.append(target)
+
     target = root / "quantize" / "infer_quant.py"
     if target.exists():
         text = target.read_text(encoding="utf-8")
