@@ -64,7 +64,7 @@ export CMC_QUANT_CMC=0
 export CMC_N_CALI_SAMPLES=128
 
 # ---- VLMEvalKit ----
-export VLMEVAL_DATASETS=MME
+export VLMEVAL_DATASETS="MME MMStar"
 export VLMEVAL_MODEL_NAME=Qwen2VL_MASQuant_Pseudo
 export MAX_NEW_TOKENS=16
 export VLMEVAL_VERBOSE=1
