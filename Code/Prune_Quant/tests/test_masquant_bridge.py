@@ -251,8 +251,10 @@ def test_patch_masquant_qwen2_vl_quant_support_is_idempotent(tmp_path: Path) -> 
     second = target.read_text(encoding="utf-8")
 
     assert "'Qwen2-VL' in args.model" in first
-    assert "layers = model.model.layers" in first
-    assert "layer_name_prefix = \"model.layers\"" in first
+    assert "qwen_language_model = getattr(model, \"language_model\", None)" in first
+    assert "layers = qwen_language_model.layers" in first
+    assert "qwen_layer_name_prefix = candidate" in first
+    assert 'layer_name_prefix = f"{qwen_layer_name_prefix}.layers"' in first
     assert first == second
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
 

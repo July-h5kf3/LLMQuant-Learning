@@ -419,25 +419,40 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
 
     target = root / "quantize" / "masquant.py"
     text = target.read_text(encoding="utf-8")
-    marker = "prune_quant_baseline: add qwen2-vl quant support"
+    marker = "prune_quant_baseline: add qwen2-vl quant support v2"
     if marker not in text:
         patched = text
         patched = patched.replace(
             "    elif 'MiniCPM' in args.model or 'llama' in args.model:\n",
             "    elif 'MiniCPM' in args.model or 'llama' in args.model or 'Qwen2-VL' in args.model:\n",
         )
+        old_qwen2_branch = re.compile(
+            r"    elif 'Qwen2-VL' in args\.model:\n(?:        .*\n|\n)+?        layer_name_prefix = \"model\.layers\"\n"
+        )
+        patched = old_qwen2_branch.sub("", patched, count=1)
         qwen2_branch = (
             "        layer_name_prefix = \"model.language_model.layers\"        \n"
             "    elif 'Qwen2-VL' in args.model:\n"
             "        is_llama = True\n"
-            "        layers = model.model.layers\n"
-            "        model.model.embed_tokens = model.model.embed_tokens.to(dev)\n"
-            "        model.model.norm = model.model.norm.to(dev)\n"
+            "        qwen_language_model = getattr(model, \"language_model\", None)\n"
+            "        qwen_layer_name_prefix = \"language_model\"\n"
+            "        if qwen_language_model is None:\n"
+            "            qwen_language_model = getattr(getattr(model, \"model\", None), \"language_model\", None)\n"
+            "            qwen_layer_name_prefix = \"model.language_model\"\n"
+            "        if qwen_language_model is None:\n"
+            "            qwen_language_model = getattr(model, \"model\", None)\n"
+            "            qwen_layer_name_prefix = \"model\"\n"
+            "        if qwen_language_model is None or not hasattr(qwen_language_model, \"layers\"):\n"
+            "            raise AttributeError(\"Could not locate Qwen2-VL language model layers for MASQuant.\")\n"
+            "        layers = qwen_language_model.layers\n"
+            "        qwen_language_model.embed_tokens = qwen_language_model.embed_tokens.to(dev)\n"
+            "        qwen_language_model.norm = qwen_language_model.norm.to(dev)\n"
             "        model.visual = model.visual.to(dev)\n"
-            "        model.visual.rotary_pos_emb = model.visual.rotary_pos_emb.to(dev)\n"
-            "        if hasattr(model.model, \"rotary_emb\"):\n"
-            "            model.model.rotary_emb = model.model.rotary_emb.to(dev)\n"
-            "        for layer in model.model.layers:\n"
+            "        if hasattr(model.visual, \"rotary_pos_emb\"):\n"
+            "            model.visual.rotary_pos_emb = model.visual.rotary_pos_emb.to(dev)\n"
+            "        if hasattr(qwen_language_model, \"rotary_emb\"):\n"
+            "            qwen_language_model.rotary_emb = qwen_language_model.rotary_emb.to(dev)\n"
+            "        for layer in layers:\n"
             "            if hasattr(layer.self_attn, \"rotary_emb\"):\n"
             "                layer.self_attn.rotary_emb = layer.self_attn.rotary_emb.to(dev)\n"
             "\n"
@@ -449,7 +464,13 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
             "            \"o_proj\":\"out\",\n"
             "            \"up_proj\":\"fc1\",\n"
             "        }\n"
-            "        layer_name_prefix = \"model.layers\"\n"
+            "        if act_scales is not None:\n"
+            "            for candidate in (qwen_layer_name_prefix, \"model.language_model\", \"language_model\", \"model\"):\n"
+            "                key = f\"{candidate}.layers.0.self_attn.q_proj.all_in_one_scale\"\n"
+            "                if key in act_scales:\n"
+            "                    qwen_layer_name_prefix = candidate\n"
+            "                    break\n"
+            "        layer_name_prefix = f\"{qwen_layer_name_prefix}.layers\"\n"
         )
         patched = patched.replace(
             "        layer_name_prefix = \"model.language_model.layers\"        \n",
@@ -469,6 +490,23 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
             "            elif 'Qwen2.5-VL' in args.model or 'Qwen2-VL' in args.model:\n"
             "                qlayer = DecoderLayer(lm.model.config, layer, args, layer_idx=i)\n",
         )
+        patched = patched.replace(
+            "        if 'Qwen2.5-VL' in args.model:\n"
+            "            model.language_model.embed_tokens = model.language_model.embed_tokens.cpu()\n"
+            "            model.language_model.norm = model.language_model.norm.cpu()\n"
+            "        else:\n"
+            "            model.model.embed_tokens = model.model.embed_tokens.cpu()\n"
+            "            model.model.norm = model.model.norm.cpu()\n",
+            "        if 'Qwen2.5-VL' in args.model:\n"
+            "            model.language_model.embed_tokens = model.language_model.embed_tokens.cpu()\n"
+            "            model.language_model.norm = model.language_model.norm.cpu()\n"
+            "        elif 'Qwen2-VL' in args.model:\n"
+            "            qwen_language_model.embed_tokens = qwen_language_model.embed_tokens.cpu()\n"
+            "            qwen_language_model.norm = qwen_language_model.norm.cpu()\n"
+            "        else:\n"
+            "            model.model.embed_tokens = model.model.embed_tokens.cpu()\n"
+            "            model.model.norm = model.model.norm.cpu()\n",
+        )
         if patched == text:
             raise RuntimeError(
                 f"Could not patch {target}; MASQuant source changed and Qwen2.5-VL quant blocks were not found."
@@ -482,7 +520,7 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
     target = root / "quantize" / "infer_quant.py"
     if target.exists():
         text = target.read_text(encoding="utf-8")
-        marker = "prune_quant_baseline: add qwen2-vl infer quant support"
+        marker = "prune_quant_baseline: add qwen2-vl infer quant support v2"
         if marker not in text:
             old = (
                 "    if \"omni\" in args.model.lower():\n"
@@ -492,7 +530,7 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
                 "        layers = model.model.language_model.layers\n"
                 "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
             )
-            new = (
+            old_v1 = (
                 "    if \"omni\" in args.model.lower():\n"
                 "        layers = model.model.layers\n"
                 "        from models.int_qwen_omni_layer import QuantQwenDecoderLayerV2\n"
@@ -503,49 +541,88 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
                 "        layers = model.model.language_model.layers\n"
                 "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
             )
-            if old not in text:
-                raise RuntimeError(f"Could not patch {target}; expected layer selection block was not found.")
+            new = (
+                "    if \"omni\" in args.model.lower():\n"
+                "        layers = model.model.layers\n"
+                "        from models.int_qwen_omni_layer import QuantQwenDecoderLayerV2\n"
+                "    elif \"qwen2-vl\" in args.model.lower() and \"qwen2.5\" not in args.model.lower():\n"
+                "        qwen_language_model = getattr(model, \"language_model\", None)\n"
+                "        if qwen_language_model is None:\n"
+                "            qwen_language_model = getattr(getattr(model, \"model\", None), \"language_model\", None)\n"
+                "        if qwen_language_model is None:\n"
+                "            qwen_language_model = getattr(model, \"model\", None)\n"
+                "        if qwen_language_model is None or not hasattr(qwen_language_model, \"layers\"):\n"
+                "            raise AttributeError(\"Could not locate Qwen2-VL language model layers for MASQuant.\")\n"
+                "        layers = qwen_language_model.layers\n"
+                "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
+                "    else:\n"
+                "        layers = model.model.language_model.layers\n"
+                "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
+            )
+            source = old_v1 if old_v1 in text else old
+            if source not in text:
+                if "qwen_language_model = getattr(model, \"language_model\", None)" in text:
+                    new_text = f"# {marker}\n" + text
+                else:
+                    raise RuntimeError(f"Could not patch {target}; expected layer selection block was not found.")
+            else:
+                new_text = f"# {marker}\n" + text.replace(source, new, 1)
             backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
             if not backup.exists():
                 backup.write_text(text, encoding="utf-8")
-            target.write_text(f"# {marker}\n" + text.replace(old, new, 1), encoding="utf-8")
+            target.write_text(new_text, encoding="utf-8")
             patched_paths.append(target)
 
     target = root / "quantize" / "svd_utils.py"
     if target.exists():
         text = target.read_text(encoding="utf-8")
-        marker = "prune_quant_baseline: add qwen2-vl CMC scale prefix"
+        marker = "prune_quant_baseline: add qwen2-vl CMC scale prefix v2"
         if marker not in text:
             old = (
                 "    if model_type == 'vl':\n"
                 "        prefix = \"model.language_model.\"\n"
                 "    elif model_type == 'omni':\n"
             )
-            new = (
+            old_v1 = (
                 "    if model_type == 'qwen2_vl':\n"
                 "        prefix = \"model.\"\n"
                 "    elif model_type == 'vl':\n"
                 "        prefix = \"model.language_model.\"\n"
                 "    elif model_type == 'omni':\n"
             )
-            if old not in text:
-                raise RuntimeError(f"Could not patch {target}; expected trans_scales prefix block was not found.")
+            new = (
+                "    if model_type == 'qwen2_vl':\n"
+                "        prefix = \"model.language_model.\"\n"
+                "    elif model_type == 'vl':\n"
+                "        prefix = \"model.language_model.\"\n"
+                "    elif model_type == 'omni':\n"
+            )
+            source = old_v1 if old_v1 in text else old
+            if source not in text:
+                if "if model_type == 'qwen2_vl':" in text:
+                    new_text = f"# {marker}\n" + text
+                else:
+                    raise RuntimeError(f"Could not patch {target}; expected trans_scales prefix block was not found.")
+            else:
+                new_text = f"# {marker}\n" + text.replace(source, new, 1)
             backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
             if not backup.exists():
                 backup.write_text(text, encoding="utf-8")
-            target.write_text(f"# {marker}\n" + text.replace(old, new, 1), encoding="utf-8")
+            target.write_text(new_text, encoding="utf-8")
             patched_paths.append(target)
 
     target = root / "infer_mas.py"
     if target.exists():
         text = target.read_text(encoding="utf-8")
-        marker = "prune_quant_baseline: add qwen2-vl CMC entry support"
+        marker = "prune_quant_baseline: add qwen2-vl CMC entry support v2"
         if marker not in text:
-            patched = text.replace(
-                '    "qwen2.5-vl-7b",\n',
-                '    "qwen2.5-vl-7b",\n    "qwen2-vl-7b",\n',
-                1,
-            )
+            patched = text
+            if '"qwen2-vl-7b"' not in patched:
+                patched = patched.replace(
+                    '    "qwen2.5-vl-7b",\n',
+                    '    "qwen2.5-vl-7b",\n    "qwen2-vl-7b",\n',
+                    1,
+                )
             patched = patched.replace(
                 "elif \"vl\" in args.model.lower():\n"
                 "    model_type = \"vl\"\n",
@@ -556,6 +633,20 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
                 1,
             )
             patched = patched.replace(
+                "elif model_type == \"qwen2_vl\":\n"
+                "    down_shape = llm.model.model.layers[0].mlp.down_proj.weight.shape[1]\n",
+                "elif model_type == \"qwen2_vl\":\n"
+                "    qwen_language_model = getattr(llm.model, \"language_model\", None)\n"
+                "    if qwen_language_model is None:\n"
+                "        qwen_language_model = getattr(getattr(llm.model, \"model\", None), \"language_model\", None)\n"
+                "    if qwen_language_model is None:\n"
+                "        qwen_language_model = getattr(llm.model, \"model\", None)\n"
+                "    if qwen_language_model is None or not hasattr(qwen_language_model, \"layers\"):\n"
+                "        raise AttributeError(\"Could not locate Qwen2-VL language model layers for MASQuant.\")\n"
+                "    down_shape = qwen_language_model.layers[0].mlp.down_proj.weight.shape[1]\n",
+                1,
+            )
+            patched = patched.replace(
                 "if model_type == \"omni\":\n"
                 "    down_shape = llm.model.model.layers[0].mlp.down_proj.weight.shape[1]\n"
                 "else:\n"
@@ -563,7 +654,14 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
                 "if model_type == \"omni\":\n"
                 "    down_shape = llm.model.model.layers[0].mlp.down_proj.weight.shape[1]\n"
                 "elif model_type == \"qwen2_vl\":\n"
-                "    down_shape = llm.model.model.layers[0].mlp.down_proj.weight.shape[1]\n"
+                "    qwen_language_model = getattr(llm.model, \"language_model\", None)\n"
+                "    if qwen_language_model is None:\n"
+                "        qwen_language_model = getattr(getattr(llm.model, \"model\", None), \"language_model\", None)\n"
+                "    if qwen_language_model is None:\n"
+                "        qwen_language_model = getattr(llm.model, \"model\", None)\n"
+                "    if qwen_language_model is None or not hasattr(qwen_language_model, \"layers\"):\n"
+                "        raise AttributeError(\"Could not locate Qwen2-VL language model layers for MASQuant.\")\n"
+                "    down_shape = qwen_language_model.layers[0].mlp.down_proj.weight.shape[1]\n"
                 "else:\n"
                 "    down_shape = llm.model.model.language_model.layers[0].mlp.down_proj.weight.shape[1]\n",
                 1,
