@@ -380,7 +380,7 @@ pip install lmms-eval
 
 `flash-attn` is optional for this baseline. GAE needs eager attention, and the prune-then-MASQuant script can patch MASQuant's Qwen2.5 loader to honor `--attn-implementation eager`.
 
-To evaluate a MASQuant-quantized TensorRT model through VLMEvalKit, also install TensorRT / TensorRT-LLM on the remote GPU machine and provide a builder script that imports MASQuant parameters into a TensorRT engine. Upstream MASQuant currently saves `mas_parameters.pth`; this repository does not assume a fixed TensorRT export entrypoint, and instead wires your builder through `--tensorrt-builder-command`.
+VLMEvalKit evaluation can use MASQuant pseudo quant directly: the evaluation process loads the saved `mas_parameters.pth`, and when CMC `low_rank_adapters*.pt` is provided, applies it to the model. TensorRT / TensorRT-LLM is not required for this path.
 
 ## GAE + MASQuant
 
@@ -481,57 +481,36 @@ Note: CMC `--scales_path` means MAS-trained `mas_parameters.pth`, not raw activa
 
 If your MASQuant checkout has a custom VL entrypoint, override it with `--cmc-script-name infer_mas_vl.py`. The `vision-audio-only` calibration data loading comes from upstream MASQuant, whose source hard-codes `/nas/yuehu/...` paths; `--cmc-vision-json` and `--cmc-vision-prefix` patch those to your local ShareGPT4V/COCO paths before running. For a quick plumbing check, use `--cmc-cali-data-type no-white`, which does not read COCO whitening data.
 
-### Save A MASQuant TensorRT Artifact And Evaluate With VLMEvalKit
+### Evaluate With VLMEvalKit Pseudo Quant
 
-For the “quantize once, load directly at evaluation time” path, build the TensorRT engine after Phase 1 and CMC, then package the engine, MASQuant parameters, CMC artifacts, and processor into an artifact:
-
-```bash
-export MASQUANT_TRT_ARTIFACT="$WORK_ROOT/qwen25vl_gae50_masquant/masquant_trt_artifact"
-export TRT_ENGINE_DIR="$MASQUANT_TRT_ARTIFACT/engine"
-export CMC_LOW_RANK="$WORK_ROOT/qwen25vl_gae50_masquant/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt"
-export CMC_WHITE="$WORK_ROOT/qwen25vl_gae50_masquant/cmc/white_matrix_vision-audio-only.pt"
-
-python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
-  --stage export-tensorrt \
-  --model-type qwen2_5_vl \
-  --model-path "$QWEN25VL_MODEL" \
-  --work-dir "$WORK_ROOT/qwen25vl_gae50_masquant" \
-  --masquant-resume "$MASQUANT_RESUME" \
-  --masquant-act-scales "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales/Qwen2.5-VL-7B-Instruct-text-vision-128.pt" \
-  --wbits 4 \
-  --abits 8 \
-  --cmc-low-rank-adapters "$CMC_LOW_RANK" \
-  --cmc-white-matrix-path "$CMC_WHITE" \
-  --tensorrt-engine-dir "$TRT_ENGINE_DIR" \
-  --tensorrt-artifact-dir "$MASQUANT_TRT_ARTIFACT" \
-  --tensorrt-builder-command "python -m prune_quant_baseline.scripts.build_masquant_tensorrt --model {model_path} --model-type qwen2vl --masquant-root $MASQUANT_ROOT --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --cmc-low-rank {cmc_low_rank_adapters} --cmc-white-matrix {cmc_white_matrix} --output {engine_dir} --wbits {wbits} --abits {abits} --convert-command 'python /path/to/masquant_trt_convert.py --model {hf_export_dir} --state {torch_export_dir}/masquant_state.pt --out {checkpoint_dir}' --llm-build-command 'trtllm-build --checkpoint_dir {checkpoint_dir} --output_dir {llm_engine_dir} --gemm_plugin=float16 --gpt_attention_plugin=float16 --max_batch_size 1 --max_input_len 2048 --max_seq_len 3072 --max_multimodal_len 1296' --vision-build-command 'python /path/to/build_qwen2vl_vision_engine.py --model {hf_export_dir} --output_dir {vision_engine_dir}'"
-```
-
-`build_masquant_tensorrt` first writes the MASQuant + CMC materialized model to `$TRT_ENGINE_DIR/.build/masquant_export`, then runs the TensorRT conversion/build commands you provide. Replace `/path/to/masquant_trt_convert.py` and `/path/to/build_qwen2vl_vision_engine.py` with scripts that really understand MASQuant `QuantLinear`, split modality scales, and CMC low-rank branches in your environment. TensorRT-LLM's stock Qwen2-VL converter usually does not understand MASQuant custom modules; for a plumbing-only TensorRT-LLM check, pass `--tensorrt-llm-root "$TENSORRT_LLM_ROOT" --allow-stock-trtllm-example` to the builder. If `TRT_ENGINE_DIR` was already built by another workflow, omit `--tensorrt-builder-command` and only write the artifact manifest. Non-dry-run mode checks that the engine directory is non-empty before registering it.
-
-Then run VLMEvalKit against the saved TensorRT artifact:
+For the “quantize once, load directly at evaluation time” path, run VLMEvalKit against the saved MASQuant parameters and CMC artifacts after Phase 1 and CMC:
 
 ```bash
+export WORK_DIR="$WORK_ROOT/qwen2vl_masquant"
+export QWEN2VL_MODEL=/home/aistudio/datasets/models/Qwen2-VL-7B-Instruct
+export MASQUANT_ROOT=/home/aistudio/EXT/EfficientAI/masquant
+export MASQUANT_RESUME=$(find "$WORK_DIR/masquant_outputs" -name mas_parameters.pth | sort | tail -n 1)
+export MASQUANT_ACT_SCALES="$WORK_DIR/act_scales/Qwen2-VL-7B-Instruct-text-vision-128.pt"
+export CMC_LOW_RANK="$WORK_DIR/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt"
+export CMC_WHITE="$WORK_DIR/cmc/white_matrix_vision-audio-only.pt"
+
 cd "$PROJECT_ROOT"
 python remote/install_vlmeval_pruned_gae.py --vlmeval-root "$VLMEVALKIT_ROOT"
 
 cd "$VLMEVALKIT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
-export PQ_MASQUANT_TRT_ARTIFACT="$MASQUANT_TRT_ARTIFACT"
+export PQ_MODEL_TYPE=qwen2vl
+export PQ_MASQUANT_WBITS=4
+export PQ_MASQUANT_ABITS=8
 export PQ_MAX_NEW_TOKENS=16
+export PQ_RETENTION_RATIO=1.0
 
-python run.py --data MME MMStar MMVet --model Qwen2VL_MASQuant_TensorRT \
-  --work-dir "$WORK_ROOT/vlmeval_qwen25vl_masquant_trt" \
+python run.py --data MME --model Qwen2VL_MASQuant_Pseudo \
+  --work-dir "$WORK_DIR/vlmeval_mme_masquant_pseudo" \
   --verbose
 ```
 
-`Qwen2VL_MASQuant_TensorRT` only reads the saved artifact. It does not rerun MASQuant calibration or rebuild the engine during VLMEvalKit inference. The default runtime uses TensorRT-LLM `ModelRunner`; if your engine needs a custom multimodal calling convention, set a custom runtime class in the manifest or override it with:
-
-```bash
-export PQ_TRT_RUNTIME_CLASS="your_package.your_module.YourTensorRTRuntime"
-```
-
-The custom runtime only needs to implement `generate(inputs, processor, max_new_tokens) -> str`.
+`Qwen2VL_MASQuant_Pseudo` does not rerun MASQuant calibration and does not build a TensorRT engine. It loads `MASQUANT_RESUME` when the evaluation process starts, and loads CMC compensation when `CMC_LOW_RANK` is set. `PQ_RETENTION_RATIO=1.0` evaluates only MASQuant quantization; set it to a value such as `0.5` to evaluate MASQuant plus GAE pruning.
 
 ## Useful Smoke Checks
 

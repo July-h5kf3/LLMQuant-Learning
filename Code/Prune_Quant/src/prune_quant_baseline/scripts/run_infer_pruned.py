@@ -47,6 +47,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--masquant-inference-mode", choices=["split_scales", "merged_scales"])
     parser.add_argument("--masquant-symmetric", choices=["true", "false"])
     parser.add_argument("--masquant-batch-size", type=int)
+    parser.add_argument("--masquant-cmc-low-rank-adapters")
+    parser.add_argument("--masquant-cmc-white-matrix")
+    parser.add_argument("--masquant-cmc-rank", type=float)
+    parser.add_argument("--masquant-cmc-quant-cmc", type=int)
     parser.add_argument("--dtype")
     parser.add_argument("--device-map")
     parser.add_argument("--max-new-tokens", type=int)
@@ -113,6 +117,14 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
             else bool(quant.get("symmetric", True))
         ),
         "masquant_batch_size": args.masquant_batch_size if args.masquant_batch_size is not None else quant.get("batch_size", 1),
+        "masquant_cmc_low_rank_adapters": (
+            args.masquant_cmc_low_rank_adapters or quant.get("cmc_low_rank_adapters")
+        ),
+        "masquant_cmc_white_matrix": args.masquant_cmc_white_matrix or quant.get("cmc_white_matrix"),
+        "masquant_cmc_rank": args.masquant_cmc_rank if args.masquant_cmc_rank is not None else quant.get("cmc_rank", 0.2),
+        "masquant_cmc_quant_cmc": (
+            args.masquant_cmc_quant_cmc if args.masquant_cmc_quant_cmc is not None else quant.get("cmc_quant_cmc", 0)
+        ),
         "dtype": args.dtype or model.get("dtype", "bfloat16"),
         "device_map": args.device_map or model.get("device_map", "auto"),
         "max_new_tokens": args.max_new_tokens or inference.get("max_new_tokens", 128),
@@ -559,6 +571,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         masquant_inference_mode=cfg["masquant_inference_mode"],
         masquant_symmetric=cfg["masquant_symmetric"],
         masquant_batch_size=cfg["masquant_batch_size"],
+        masquant_cmc_low_rank_adapters=cfg["masquant_cmc_low_rank_adapters"],
+        masquant_cmc_white_matrix=cfg["masquant_cmc_white_matrix"],
+        masquant_cmc_rank=cfg["masquant_cmc_rank"],
+        masquant_cmc_quant_cmc=cfg["masquant_cmc_quant_cmc"],
     )
     model.eval()
     adapter = _make_adapter(cfg["model_type"])

@@ -84,6 +84,10 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         masquant_inference_mode: str = "split_scales",
         masquant_symmetric: bool = True,
         masquant_batch_size: int = 1,
+        masquant_cmc_low_rank_adapters: str | None = None,
+        masquant_cmc_white_matrix: str | None = None,
+        masquant_cmc_rank: float = 0.2,
+        masquant_cmc_quant_cmc: int = 0,
         use_custom_prompt: bool = True,
         system_prompt: str | None = None,
         verbose: bool = False,
@@ -134,6 +138,10 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
                     "masquant_inference_mode": masquant_inference_mode,
                     "masquant_symmetric": _bool_value(masquant_symmetric),
                     "masquant_batch_size": int(masquant_batch_size),
+                    "masquant_cmc_low_rank_adapters": masquant_cmc_low_rank_adapters,
+                    "masquant_cmc_white_matrix": masquant_cmc_white_matrix,
+                    "masquant_cmc_rank": float(masquant_cmc_rank),
+                    "masquant_cmc_quant_cmc": int(masquant_cmc_quant_cmc),
                 }
             )
         self.model, self.processor = load_model_and_processor(

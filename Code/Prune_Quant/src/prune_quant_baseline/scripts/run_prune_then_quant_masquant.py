@@ -464,6 +464,16 @@ def run_pruned_masquant_inference(args: argparse.Namespace, config: MASQuantRunC
         argv.extend(["--masquant-resume", resume])
     if act_scales is not None:
         argv.extend(["--masquant-act-scales", act_scales])
+    if args.cmc_low_rank_adapters:
+        argv.extend(["--masquant-cmc-low-rank-adapters", args.cmc_low_rank_adapters])
+    elif _default_cmc_low_rank_adapters_path(args).exists():
+        argv.extend(["--masquant-cmc-low-rank-adapters", str(_default_cmc_low_rank_adapters_path(args))])
+    if args.cmc_white_matrix_path:
+        argv.extend(["--masquant-cmc-white-matrix", args.cmc_white_matrix_path])
+    elif _default_cmc_white_matrix_path(args).exists():
+        argv.extend(["--masquant-cmc-white-matrix", str(_default_cmc_white_matrix_path(args))])
+    argv.extend(["--masquant-cmc-rank", str(args.cmc_rank)])
+    argv.extend(["--masquant-cmc-quant-cmc", str(args.cmc_quant_cmc)])
     if args.processor_use_fast is not None:
         argv.extend(["--processor-use-fast", args.processor_use_fast])
     if args.processor_min_pixels is not None:

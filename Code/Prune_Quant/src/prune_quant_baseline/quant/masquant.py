@@ -950,12 +950,68 @@ def _iter_no_calibration_samples() -> Iterable[Any]:
     return ()
 
 
+def _language_model_layers(model: Any) -> Any:
+    for candidate in (
+        getattr(model, "language_model", None),
+        getattr(getattr(model, "model", None), "language_model", None),
+        getattr(model, "model", None),
+    ):
+        if candidate is not None and hasattr(candidate, "layers"):
+            return candidate.layers
+    raise AttributeError("Could not locate Qwen2-VL language model layers for MASQuant.")
+
+
+def _masquant_cmc_model_type(model_type: str, model_id_or_path: str) -> str:
+    if model_type == "qwen2vl" or ("qwen2-vl" in model_id_or_path.lower() and "qwen2.5" not in model_id_or_path.lower()):
+        return "qwen2_vl"
+    return "vl"
+
+
+def _apply_cmc_quantization(
+    *,
+    model: Any,
+    masquant_root: Path,
+    model_type: str,
+    model_id_or_path: str,
+    low_rank_adapters_path: str | Path,
+    args: SimpleNamespace,
+) -> Any:
+    import torch
+
+    with _prepend_sys_path(masquant_root):
+        from quantize.infer_quant import mas_quantize_model
+        from quantize.svd_utils import trans_scales
+
+        scales = torch.load(args.scales_path, weights_only=False)
+        low_rank_adapters = torch.load(low_rank_adapters_path, weights_only=False)
+        layers = _language_model_layers(model)
+        down_shape = layers[0].mlp.down_proj.weight.shape[1]
+        text_scales, vision_scales, audio_scales = trans_scales(
+            scales,
+            down_shape,
+            _masquant_cmc_model_type(model_type, model_id_or_path),
+        )
+        return mas_quantize_model(
+            model,
+            low_rank_adapters=low_rank_adapters,
+            text_scales=text_scales,
+            vision_scales=vision_scales,
+            audio_scales=audio_scales,
+            args=args,
+        )
+
+
 def load_masquant_model_and_processor(
     *,
     masquant_root: str | Path,
     model_id_or_path: str,
     resume: str | Path | None,
     act_scales: str | Path | None = None,
+    model_type: str = "qwen2vl",
+    cmc_low_rank_adapters: str | Path | None = None,
+    cmc_white_matrix: str | Path | None = None,
+    cmc_rank: float = 0.2,
+    cmc_quant_cmc: int = 0,
     wbits: int = 4,
     abits: int = 8,
     group_size: int | None = 0,
@@ -981,6 +1037,16 @@ def load_masquant_model_and_processor(
     root = validate_masquant_root(masquant_root)
     patch_lmclass_qwen2_vl_support(root)
     patch_masquant_qwen2_vl_quant_support(root)
+    if cmc_low_rank_adapters is not None:
+        cmc_path = Path(cmc_low_rank_adapters).expanduser().resolve()
+        if not cmc_path.exists():
+            raise FileNotFoundError(cmc_path)
+        if resume is None:
+            raise ValueError("CMC pseudo quant loading requires --masquant-resume pointing to mas_parameters.pth.")
+        if cmc_white_matrix is not None:
+            white_path = Path(cmc_white_matrix).expanduser().resolve()
+            if not white_path.exists():
+                raise FileNotFoundError(white_path)
     if attn_implementation != "flash_attention_2":
         patch_lmclass_attention_implementation(root)
     previous_mode = os.environ.get("inference_mode")
@@ -1003,21 +1069,38 @@ def load_masquant_model_and_processor(
                 attn_implementation=attn_implementation,
                 batch_size=batch_size,
             )
+            args.mode = "infer" if cmc_low_rank_adapters is not None else "train"
+            args.rank = float(cmc_rank)
+            args.quant_cmc = int(cmc_quant_cmc)
+            args.scales_path = str(resume) if resume is not None else None
             _set_quant_params(args)
             llm = LMClass(args)
             llm.seqlen = 2048
             llm.model.eval()
             for param in llm.model.parameters():
                 param.requires_grad_(False)
-            loaded_act_scales = None if act_scales is None else torch.load(act_scales, weights_only=False)
-            masquant(
-                llm,
-                args,
-                _iter_no_calibration_samples(),
-                loaded_act_scales,
-                logging.getLogger("prune_quant_baseline.masquant"),
-                None,
-            )
+            if cmc_low_rank_adapters is None:
+                loaded_act_scales = None if act_scales is None else torch.load(act_scales, weights_only=False)
+                masquant(
+                    llm,
+                    args,
+                    _iter_no_calibration_samples(),
+                    loaded_act_scales,
+                    logging.getLogger("prune_quant_baseline.masquant"),
+                    None,
+                )
+                model = llm.model
+            else:
+                if torch.cuda.is_available():
+                    llm.model.to("cuda")
+                model = _apply_cmc_quantization(
+                    model=llm.model,
+                    masquant_root=root,
+                    model_type=model_type,
+                    model_id_or_path=model_id_or_path,
+                    low_rank_adapters_path=cmc_low_rank_adapters,
+                    args=args,
+                )
             processor_kwargs: dict[str, Any] = {
                 "trust_remote_code": True,
                 "local_files_only": local_files_only,
@@ -1029,7 +1112,7 @@ def load_masquant_model_and_processor(
             if processor_max_pixels is not None:
                 processor_kwargs["max_pixels"] = int(processor_max_pixels)
             processor = AutoProcessor.from_pretrained(model_id_or_path, **processor_kwargs)
-            return llm.model, processor
+            return model, processor
     finally:
         if previous_mode is None:
             os.environ.pop("inference_mode", None)

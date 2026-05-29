@@ -380,7 +380,7 @@ pip install lmms-eval
 
 `flash-attn` 对这个 baseline 是可选的。GAE 需要 eager attention，prune-then-MASQuant 脚本可以 patch MASQuant 的 Qwen2.5 loader，让它遵循 `--attn-implementation eager`。
 
-如果要用 VLMEvalKit 跑 MASQuant 量化后的 TensorRT 模型，还需要在远端 GPU 环境中安装 TensorRT / TensorRT-LLM，并准备一个能够把 MASQuant 参数导入 TensorRT engine 的构建脚本。MASQuant 上游当前保存的是 `mas_parameters.pth`，本仓库不会假设某个固定的 TensorRT 导出入口，而是通过 `--tensorrt-builder-command` 接入你的构建命令。
+VLMEvalKit 评测默认可以直接使用 MASQuant pseudo quant：评测进程启动时加载保存好的 `mas_parameters.pth`，如果提供 CMC 的 `low_rank_adapters*.pt`，也会一起装回模型。不使用 TensorRT 时不需要安装 TensorRT / TensorRT-LLM。
 
 ## GAE + MASQuant
 
@@ -481,57 +481,36 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
 
 如果你的 MASQuant checkout 里有自定义的 VL 专用入口，可以用 `--cmc-script-name infer_mas_vl.py` 覆盖。`vision-audio-only` 校准数据读取逻辑来自 MASQuant 上游脚本，原始代码硬编码了 `/nas/yuehu/...` 路径；这里的 `--cmc-vision-json` 和 `--cmc-vision-prefix` 会在运行前 patch 到你的本地 ShareGPT4V/COCO 路径。如果只想先验证流程，可以用 `--cmc-cali-data-type no-white`，它不读取 COCO 白化数据。
 
-### 保存 MASQuant TensorRT 产物并用 VLMEvalKit 评测
+### 使用 pseudo quant 在 VLMEvalKit 上评测
 
-如果目标是“量化一次，评测时直接加载”，在阶段 1 和 CMC 后，先构建 TensorRT engine，并把 engine、MASQuant 参数、CMC 产物和 processor 打包成 artifact：
-
-```bash
-export MASQUANT_TRT_ARTIFACT="$WORK_ROOT/qwen25vl_gae50_masquant/masquant_trt_artifact"
-export TRT_ENGINE_DIR="$MASQUANT_TRT_ARTIFACT/engine"
-export CMC_LOW_RANK="$WORK_ROOT/qwen25vl_gae50_masquant/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt"
-export CMC_WHITE="$WORK_ROOT/qwen25vl_gae50_masquant/cmc/white_matrix_vision-audio-only.pt"
-
-python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
-  --stage export-tensorrt \
-  --model-type qwen2_5_vl \
-  --model-path "$QWEN25VL_MODEL" \
-  --work-dir "$WORK_ROOT/qwen25vl_gae50_masquant" \
-  --masquant-resume "$MASQUANT_RESUME" \
-  --masquant-act-scales "$WORK_ROOT/qwen25vl_gae50_masquant/act_scales/Qwen2.5-VL-7B-Instruct-text-vision-128.pt" \
-  --wbits 4 \
-  --abits 8 \
-  --cmc-low-rank-adapters "$CMC_LOW_RANK" \
-  --cmc-white-matrix-path "$CMC_WHITE" \
-  --tensorrt-engine-dir "$TRT_ENGINE_DIR" \
-  --tensorrt-artifact-dir "$MASQUANT_TRT_ARTIFACT" \
-  --tensorrt-builder-command "python -m prune_quant_baseline.scripts.build_masquant_tensorrt --model {model_path} --model-type qwen2vl --masquant-root $MASQUANT_ROOT --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --cmc-low-rank {cmc_low_rank_adapters} --cmc-white-matrix {cmc_white_matrix} --output {engine_dir} --wbits {wbits} --abits {abits} --convert-command 'python /path/to/masquant_trt_convert.py --model {hf_export_dir} --state {torch_export_dir}/masquant_state.pt --out {checkpoint_dir}' --llm-build-command 'trtllm-build --checkpoint_dir {checkpoint_dir} --output_dir {llm_engine_dir} --gemm_plugin=float16 --gpt_attention_plugin=float16 --max_batch_size 1 --max_input_len 2048 --max_seq_len 3072 --max_multimodal_len 1296' --vision-build-command 'python /path/to/build_qwen2vl_vision_engine.py --model {hf_export_dir} --output_dir {vision_engine_dir}'"
-```
-
-`build_masquant_tensorrt` 会先把 MASQuant + CMC 权重量化结果写到 `$TRT_ENGINE_DIR/.build/masquant_export`，再执行你传入的 TensorRT 转换/构建命令。这里的 `/path/to/masquant_trt_convert.py` 和 `/path/to/build_qwen2vl_vision_engine.py` 需要替换成你环境里真正支持 MASQuant `QuantLinear`、分模态 scale 和 CMC 低秩分支的转换脚本。TensorRT-LLM 自带 Qwen2-VL 示例 converter 通常不认识 MASQuant 的自定义模块；若只想做 TensorRT-LLM 连通性检查，可以在 builder 上传 `--tensorrt-llm-root "$TENSORRT_LLM_ROOT" --allow-stock-trtllm-example`。若 `TRT_ENGINE_DIR` 已经由别的流程构建好，可以省略 `--tensorrt-builder-command`，只写 artifact manifest。非 dry-run 模式会检查 engine 目录非空，避免注册空产物。
-
-然后用 VLMEvalKit 直接加载这个保存好的 TensorRT artifact：
+如果目标是“量化一次，评测时直接加载”，在阶段 1 和 CMC 后，直接让 VLMEvalKit 加载保存好的 MASQuant 参数和 CMC 产物：
 
 ```bash
+export WORK_DIR="$WORK_ROOT/qwen2vl_masquant"
+export QWEN2VL_MODEL=/home/aistudio/datasets/models/Qwen2-VL-7B-Instruct
+export MASQUANT_ROOT=/home/aistudio/EXT/EfficientAI/masquant
+export MASQUANT_RESUME=$(find "$WORK_DIR/masquant_outputs" -name mas_parameters.pth | sort | tail -n 1)
+export MASQUANT_ACT_SCALES="$WORK_DIR/act_scales/Qwen2-VL-7B-Instruct-text-vision-128.pt"
+export CMC_LOW_RANK="$WORK_DIR/cmc/low_rank_adapters_quantcmc0_rank0.2_vision-audio-only.pt"
+export CMC_WHITE="$WORK_DIR/cmc/white_matrix_vision-audio-only.pt"
+
 cd "$PROJECT_ROOT"
 python remote/install_vlmeval_pruned_gae.py --vlmeval-root "$VLMEVALKIT_ROOT"
 
 cd "$VLMEVALKIT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
-export PQ_MASQUANT_TRT_ARTIFACT="$MASQUANT_TRT_ARTIFACT"
+export PQ_MODEL_TYPE=qwen2vl
+export PQ_MASQUANT_WBITS=4
+export PQ_MASQUANT_ABITS=8
 export PQ_MAX_NEW_TOKENS=16
+export PQ_RETENTION_RATIO=1.0
 
-python run.py --data MME MMStar MMVet --model Qwen2VL_MASQuant_TensorRT \
-  --work-dir "$WORK_ROOT/vlmeval_qwen25vl_masquant_trt" \
+python run.py --data MME --model Qwen2VL_MASQuant_Pseudo \
+  --work-dir "$WORK_DIR/vlmeval_mme_masquant_pseudo" \
   --verbose
 ```
 
-`Qwen2VL_MASQuant_TensorRT` 只读取保存好的 artifact，不会在 VLMEvalKit 推理阶段重新跑 MASQuant 校准或重新构建 engine。默认 runtime 使用 TensorRT-LLM 的 `ModelRunner`；如果你的 engine 需要自定义多模态输入约定，可以把自定义 runtime 类路径写进 manifest，或通过环境变量覆盖：
-
-```bash
-export PQ_TRT_RUNTIME_CLASS="your_package.your_module.YourTensorRTRuntime"
-```
-
-自定义 runtime 只需要实现 `generate(inputs, processor, max_new_tokens) -> str`。
+`Qwen2VL_MASQuant_Pseudo` 不会重新跑 MASQuant 校准，也不会构建 TensorRT engine；它只在评测进程启动时加载 `MASQUANT_RESUME`，并在设置了 `CMC_LOW_RANK` 时加载 CMC 低秩补偿。`PQ_RETENTION_RATIO=1.0` 表示只评测 MASQuant 量化效果，不额外做 GAE 剪枝；如果要评测“MASQuant + GAE 剪枝”，把它改成例如 `0.5`。
 
 ## 常用 Smoke Check
 
