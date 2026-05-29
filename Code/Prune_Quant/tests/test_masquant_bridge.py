@@ -7,6 +7,7 @@ from prune_quant_baseline.quant.masquant import (
     build_cmc_command,
     build_generate_act_scales_command,
     build_train_command,
+    _patch_decoder_forward_compat,
     patch_custom_dataset_paths,
     patch_masquant_qwen2_vl_quant_support,
     patch_lmclass_attention_implementation,
@@ -334,3 +335,32 @@ def test_prune_then_masquant_accepts_cmc_and_export_tensorrt_stages() -> None:
     assert args.stage == "export-tensorrt"
     assert args.tensorrt_artifact_dir == "/tmp/artifact"
     assert args.tensorrt_engine_dir == "/tmp/engine"
+
+
+def test_patch_decoder_forward_compat_maps_transformers_cache_keyword() -> None:
+    class Layer:
+        attention_type = "full_attention"
+
+        def forward(self, hidden_states, past_key_value=None, attention_mask=None):
+            return hidden_states, past_key_value, attention_mask
+
+    class LanguageModel:
+        def __init__(self):
+            self.layers = [Layer()]
+
+    class Model:
+        def __init__(self):
+            self.model = LanguageModel()
+
+    model = Model()
+
+    _patch_decoder_forward_compat(model)
+    result = model.model.layers[0].forward(
+        "hidden",
+        past_key_values="cache",
+        attention_mask="mask",
+        cache_position="ignored",
+        position_embeddings="ignored",
+    )
+
+    assert result == ("hidden", "cache", "mask")

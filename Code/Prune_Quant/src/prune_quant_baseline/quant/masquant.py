@@ -971,6 +971,38 @@ def _restore_attention_types(model: Any, attention_types: Sequence[Any]) -> None
             layer.attention_type = attention_type
 
 
+def _patch_decoder_forward_compat(model: Any) -> None:
+    import inspect
+    from types import MethodType
+
+    for layer in _language_model_layers(model):
+        if getattr(layer, "_prune_quant_baseline_forward_compat", False):
+            continue
+        original_forward = layer.forward
+        try:
+            signature = inspect.signature(original_forward)
+        except (TypeError, ValueError):
+            continue
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            continue
+        accepted = set(signature.parameters)
+
+        def compat_forward(self: Any, *args: Any, __forward: Any = original_forward, __accepted: set[str] = accepted, **kwargs: Any) -> Any:
+            del self
+            if "past_key_values" in kwargs and "past_key_values" not in __accepted:
+                value = kwargs.pop("past_key_values")
+                if "past_key_value" in __accepted:
+                    kwargs["past_key_value"] = value
+            for key in ("cache_position", "position_embeddings"):
+                if key not in __accepted:
+                    kwargs.pop(key, None)
+            kwargs = {key: value for key, value in kwargs.items() if key in __accepted}
+            return __forward(*args, **kwargs)
+
+        layer.forward = MethodType(compat_forward, layer)
+        layer._prune_quant_baseline_forward_compat = True
+
+
 def _masquant_cmc_model_type(model_type: str, model_id_or_path: str) -> str:
     if model_type == "qwen2vl" or ("qwen2-vl" in model_id_or_path.lower() and "qwen2.5" not in model_id_or_path.lower()):
         return "qwen2_vl"
@@ -1011,6 +1043,7 @@ def _apply_cmc_quantization(
             args=args,
         )
         _restore_attention_types(quantized_model, attention_types)
+        _patch_decoder_forward_compat(quantized_model)
         return quantized_model
 
 
@@ -1105,6 +1138,7 @@ def load_masquant_model_and_processor(
                 )
                 model = llm.model
                 _restore_attention_types(model, attention_types)
+                _patch_decoder_forward_compat(model)
             else:
                 if torch.cuda.is_available():
                     llm.model.to("cuda")
