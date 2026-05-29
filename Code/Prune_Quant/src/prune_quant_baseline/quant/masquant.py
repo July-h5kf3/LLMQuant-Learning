@@ -411,6 +411,174 @@ def patch_lmclass_qwen2_vl_support(masquant_root: str | Path) -> Path:
     return target
 
 
+def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Path, ...]:
+    """Patch MASQuant quantization paths to treat Qwen2-VL as a VL model."""
+
+    root = validate_masquant_root(masquant_root)
+    patched_paths: list[Path] = []
+
+    target = root / "quantize" / "masquant.py"
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: add qwen2-vl quant support"
+    if marker not in text:
+        patched = text
+        patched = patched.replace(
+            "    elif 'MiniCPM' in args.model or 'llama' in args.model:\n",
+            "    elif 'MiniCPM' in args.model or 'llama' in args.model or 'Qwen2-VL' in args.model:\n",
+        )
+        qwen2_branch = (
+            "        layer_name_prefix = \"model.language_model.layers\"        \n"
+            "    elif 'Qwen2-VL' in args.model:\n"
+            "        is_llama = True\n"
+            "        layers = model.model.layers\n"
+            "        model.model.embed_tokens = model.model.embed_tokens.to(dev)\n"
+            "        model.model.norm = model.model.norm.to(dev)\n"
+            "        model.visual = model.visual.to(dev)\n"
+            "        model.visual.rotary_pos_emb = model.visual.rotary_pos_emb.to(dev)\n"
+            "        if hasattr(model.model, \"rotary_emb\"):\n"
+            "            model.model.rotary_emb = model.model.rotary_emb.to(dev)\n"
+            "        for layer in model.model.layers:\n"
+            "            if hasattr(layer.self_attn, \"rotary_emb\"):\n"
+            "                layer.self_attn.rotary_emb = layer.self_attn.rotary_emb.to(dev)\n"
+            "\n"
+            "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
+            "\n"
+            "        DecoderLayer = QuantQwenDecoderLayerV2\n"
+            "        pairs = {\n"
+            "            \"q_proj\":\"qkv\",\n"
+            "            \"o_proj\":\"out\",\n"
+            "            \"up_proj\":\"fc1\",\n"
+            "        }\n"
+            "        layer_name_prefix = \"model.layers\"\n"
+        )
+        patched = patched.replace(
+            "        layer_name_prefix = \"model.language_model.layers\"        \n",
+            qwen2_branch,
+            1,
+        )
+        patched = patched.replace(
+            "                    if 'Qwen2.5-Omni' in args.model or 'Qwen2.5-VL' in args.model:\n",
+            (
+                "                    if 'Qwen2.5-Omni' in args.model or "
+                "'Qwen2.5-VL' in args.model or 'Qwen2-VL' in args.model:\n"
+            ),
+        )
+        patched = patched.replace(
+            "            elif 'Qwen2.5-VL' in args.model:\n"
+            "                qlayer = DecoderLayer(lm.model.config, layer, args, layer_idx=i)\n",
+            "            elif 'Qwen2.5-VL' in args.model or 'Qwen2-VL' in args.model:\n"
+            "                qlayer = DecoderLayer(lm.model.config, layer, args, layer_idx=i)\n",
+        )
+        if patched == text:
+            raise RuntimeError(
+                f"Could not patch {target}; MASQuant source changed and Qwen2.5-VL quant blocks were not found."
+            )
+        backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+        if not backup.exists():
+            backup.write_text(text, encoding="utf-8")
+        target.write_text(f"# {marker}\n" + patched, encoding="utf-8")
+        patched_paths.append(target)
+
+    target = root / "quantize" / "infer_quant.py"
+    if target.exists():
+        text = target.read_text(encoding="utf-8")
+        marker = "prune_quant_baseline: add qwen2-vl infer quant support"
+        if marker not in text:
+            old = (
+                "    if \"omni\" in args.model.lower():\n"
+                "        layers = model.model.layers\n"
+                "        from models.int_qwen_omni_layer import QuantQwenDecoderLayerV2\n"
+                "    else:\n"
+                "        layers = model.model.language_model.layers\n"
+                "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
+            )
+            new = (
+                "    if \"omni\" in args.model.lower():\n"
+                "        layers = model.model.layers\n"
+                "        from models.int_qwen_omni_layer import QuantQwenDecoderLayerV2\n"
+                "    elif \"qwen2-vl\" in args.model.lower() and \"qwen2.5\" not in args.model.lower():\n"
+                "        layers = model.model.layers\n"
+                "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
+                "    else:\n"
+                "        layers = model.model.language_model.layers\n"
+                "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
+            )
+            if old not in text:
+                raise RuntimeError(f"Could not patch {target}; expected layer selection block was not found.")
+            backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+            if not backup.exists():
+                backup.write_text(text, encoding="utf-8")
+            target.write_text(f"# {marker}\n" + text.replace(old, new, 1), encoding="utf-8")
+            patched_paths.append(target)
+
+    target = root / "quantize" / "svd_utils.py"
+    if target.exists():
+        text = target.read_text(encoding="utf-8")
+        marker = "prune_quant_baseline: add qwen2-vl CMC scale prefix"
+        if marker not in text:
+            old = (
+                "    if model_type == 'vl':\n"
+                "        prefix = \"model.language_model.\"\n"
+                "    elif model_type == 'omni':\n"
+            )
+            new = (
+                "    if model_type == 'qwen2_vl':\n"
+                "        prefix = \"model.\"\n"
+                "    elif model_type == 'vl':\n"
+                "        prefix = \"model.language_model.\"\n"
+                "    elif model_type == 'omni':\n"
+            )
+            if old not in text:
+                raise RuntimeError(f"Could not patch {target}; expected trans_scales prefix block was not found.")
+            backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+            if not backup.exists():
+                backup.write_text(text, encoding="utf-8")
+            target.write_text(f"# {marker}\n" + text.replace(old, new, 1), encoding="utf-8")
+            patched_paths.append(target)
+
+    target = root / "infer_mas.py"
+    if target.exists():
+        text = target.read_text(encoding="utf-8")
+        marker = "prune_quant_baseline: add qwen2-vl CMC entry support"
+        if marker not in text:
+            patched = text.replace(
+                '    "qwen2.5-vl-7b",\n',
+                '    "qwen2.5-vl-7b",\n    "qwen2-vl-7b",\n',
+                1,
+            )
+            patched = patched.replace(
+                "elif \"vl\" in args.model.lower():\n"
+                "    model_type = \"vl\"\n",
+                "elif \"qwen2-vl\" in args.model.lower() and \"qwen2.5\" not in args.model.lower():\n"
+                "    model_type = \"qwen2_vl\"\n"
+                "elif \"vl\" in args.model.lower():\n"
+                "    model_type = \"vl\"\n",
+                1,
+            )
+            patched = patched.replace(
+                "if model_type == \"omni\":\n"
+                "    down_shape = llm.model.model.layers[0].mlp.down_proj.weight.shape[1]\n"
+                "else:\n"
+                "    down_shape = llm.model.model.language_model.layers[0].mlp.down_proj.weight.shape[1]\n",
+                "if model_type == \"omni\":\n"
+                "    down_shape = llm.model.model.layers[0].mlp.down_proj.weight.shape[1]\n"
+                "elif model_type == \"qwen2_vl\":\n"
+                "    down_shape = llm.model.model.layers[0].mlp.down_proj.weight.shape[1]\n"
+                "else:\n"
+                "    down_shape = llm.model.model.language_model.layers[0].mlp.down_proj.weight.shape[1]\n",
+                1,
+            )
+            if patched == text:
+                raise RuntimeError(f"Could not patch {target}; expected Qwen2.5-VL CMC blocks were not found.")
+            backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+            if not backup.exists():
+                backup.write_text(text, encoding="utf-8")
+            target.write_text(f"# {marker}\n" + patched, encoding="utf-8")
+            patched_paths.append(target)
+
+    return tuple(patched_paths)
+
+
 def patch_custom_dataset_paths(
     masquant_root: str | Path,
     *,
@@ -610,6 +778,7 @@ def load_masquant_model_and_processor(
         raise ValueError("MASQuant inference requires --masquant-resume or --masquant-act-scales.")
     root = validate_masquant_root(masquant_root)
     patch_lmclass_qwen2_vl_support(root)
+    patch_masquant_qwen2_vl_quant_support(root)
     if attn_implementation != "flash_attention_2":
         patch_lmclass_attention_implementation(root)
     previous_mode = os.environ.get("inference_mode")

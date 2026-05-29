@@ -8,6 +8,7 @@ from prune_quant_baseline.quant.masquant import (
     build_generate_act_scales_command,
     build_train_command,
     patch_custom_dataset_paths,
+    patch_masquant_qwen2_vl_quant_support,
     patch_lmclass_attention_implementation,
     patch_lmclass_qwen2_vl_support,
     patch_qwen25_vl_linear_mask_compat,
@@ -192,6 +193,66 @@ def test_patch_lmclass_qwen2_vl_support_is_idempotent(tmp_path: Path) -> None:
 
     assert "'Qwen2-VL' in args.model" in first
     assert "Qwen2VLForConditionalGeneration" in first
+    assert first == second
+    assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
+
+
+def test_patch_masquant_qwen2_vl_quant_support_is_idempotent(tmp_path: Path) -> None:
+    root = _make_masquant_root(tmp_path)
+    target = root / "quantize" / "masquant.py"
+    target.write_text(
+        "def masquant(args, model, lm, layer, dataloader):\n"
+        "    if 'Qwen2.5-Omni' in args.model:\n"
+        "        use_cache = model.config.text_config.use_cache\n"
+        "        model.config.text_config.use_cache = False\n"
+        "    elif 'MiniCPM' in args.model or 'llama' in args.model:\n"
+        "        use_cache = model.config.use_cache\n"
+        "        model.config.use_cache = False\n"
+        "    elif 'Qwen2.5-VL' in args.model:\n"
+        "        is_llama = True\n"
+        "        layers = model.language_model.layers\n"
+        "        model.language_model.embed_tokens = model.language_model.embed_tokens.to(dev)\n"
+        "        model.language_model.norm = model.language_model.norm.to(dev)\n"
+        "        model.visual = model.visual.to(dev)\n"
+        "        model.visual.rotary_pos_emb = model.visual.rotary_pos_emb.to(dev)\n"
+        "        model.language_model.rotary_emb = model.language_model.rotary_emb.to(dev)\n"
+        "        \n"
+        "        for layer in model.language_model.layers:\n"
+        "            layer.self_attn.rotary_emb = layer.self_attn.rotary_emb.to(dev)\n"
+        "\n"
+        "        from models.int_qwen_vl_layer import QuantQwenDecoderLayerV2\n"
+        "\n"
+        "        DecoderLayer = QuantQwenDecoderLayerV2\n"
+        "        pairs = {\n"
+        "            \"q_proj\":\"qkv\",\n"
+        "            \"o_proj\":\"out\",\n"
+        "            \"up_proj\":\"fc1\",\n"
+        "            # \"down_proj\": \"fc2\"\n"
+        "        }\n"
+        "        layer_name_prefix = \"model.language_model.layers\"        \n"
+        "    else:\n"
+        "        raise ValueError(\"Only support for opt/llama/Llama-2/falcon/mixtral now\")\n"
+        "    if args.epochs > 0:\n"
+        "        if 'Qwen2.5-Omni' in args.model or 'Qwen2.5-VL' in args.model:\n"
+        "            model(**inputs)\n"
+        "    if 'Qwen2.5-VL' in args.model:\n"
+        "        model.language_model.embed_tokens = model.language_model.embed_tokens.cpu()\n"
+        "        model.language_model.norm = model.language_model.norm.cpu()\n"
+        "    if False:\n"
+        "        pass\n"
+        "    elif 'Qwen2.5-VL' in args.model:\n"
+        "        qlayer = DecoderLayer(lm.model.config, layer, args, layer_idx=i)\n",
+        encoding="utf-8",
+    )
+
+    patch_masquant_qwen2_vl_quant_support(root)
+    first = target.read_text(encoding="utf-8")
+    patch_masquant_qwen2_vl_quant_support(root)
+    second = target.read_text(encoding="utf-8")
+
+    assert "'Qwen2-VL' in args.model" in first
+    assert "layers = model.model.layers" in first
+    assert "layer_name_prefix = \"model.layers\"" in first
     assert first == second
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
 

@@ -15,6 +15,7 @@ from prune_quant_baseline.quant.masquant import (
     build_train_command,
     format_command,
     masquant_env,
+    patch_masquant_qwen2_vl_quant_support,
     patch_lmclass_attention_implementation,
     patch_lmclass_qwen2_vl_support,
     patch_custom_dataset_paths,
@@ -549,6 +550,9 @@ def run_masquant_cmc(args: argparse.Namespace, config: MASQuantRunConfig) -> Non
         extra_args=tuple(args.cmc_extra_arg),
     )
     LOGGER.info("Running MASQuant CMC.")
+    if args.model_type == "qwen2vl" and not args.dry_run:
+        patched_paths = patch_masquant_qwen2_vl_quant_support(config.root)
+        LOGGER.info("Patched MASQuant Qwen2-VL CMC quant support at %s", ", ".join(map(str, patched_paths)))
     if not args.dry_run:
         patched = patch_qwen25_vl_linear_mask_compat(config.root)
         LOGGER.info("Patched MASQuant Qwen2.5-VL CMC Linear compatibility at %s", patched)
@@ -657,6 +661,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         if args.model_type == "qwen2vl" and not args.dry_run:
             patched = patch_lmclass_qwen2_vl_support(config.root)
             LOGGER.info("Patched MASQuant Qwen2-VL support at %s", patched)
+            patched_paths = patch_masquant_qwen2_vl_quant_support(config.root)
+            LOGGER.info("Patched MASQuant Qwen2-VL quant support at %s", ", ".join(map(str, patched_paths)))
         if args.attn_implementation != "flash_attention_2" and not args.dry_run:
             patched = patch_lmclass_attention_implementation(config.root)
             LOGGER.info("Patched MASQuant attention implementation at %s", patched)
