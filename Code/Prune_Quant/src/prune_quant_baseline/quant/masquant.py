@@ -961,6 +961,16 @@ def _language_model_layers(model: Any) -> Any:
     raise AttributeError("Could not locate Qwen2-VL language model layers for MASQuant.")
 
 
+def _capture_attention_types(layers: Any) -> list[Any]:
+    return [getattr(layer, "attention_type", None) for layer in layers]
+
+
+def _restore_attention_types(model: Any, attention_types: Sequence[Any]) -> None:
+    for layer, attention_type in zip(_language_model_layers(model), attention_types):
+        if attention_type is not None and not hasattr(layer, "attention_type"):
+            layer.attention_type = attention_type
+
+
 def _masquant_cmc_model_type(model_type: str, model_id_or_path: str) -> str:
     if model_type == "qwen2vl" or ("qwen2-vl" in model_id_or_path.lower() and "qwen2.5" not in model_id_or_path.lower()):
         return "qwen2_vl"
@@ -985,13 +995,14 @@ def _apply_cmc_quantization(
         scales = torch.load(args.scales_path, weights_only=False)
         low_rank_adapters = torch.load(low_rank_adapters_path, weights_only=False)
         layers = _language_model_layers(model)
+        attention_types = _capture_attention_types(layers)
         down_shape = layers[0].mlp.down_proj.weight.shape[1]
         text_scales, vision_scales, audio_scales = trans_scales(
             scales,
             down_shape,
             _masquant_cmc_model_type(model_type, model_id_or_path),
         )
-        return mas_quantize_model(
+        quantized_model = mas_quantize_model(
             model,
             low_rank_adapters=low_rank_adapters,
             text_scales=text_scales,
@@ -999,6 +1010,8 @@ def _apply_cmc_quantization(
             audio_scales=audio_scales,
             args=args,
         )
+        _restore_attention_types(quantized_model, attention_types)
+        return quantized_model
 
 
 def load_masquant_model_and_processor(
@@ -1079,6 +1092,7 @@ def load_masquant_model_and_processor(
             llm.model.eval()
             for param in llm.model.parameters():
                 param.requires_grad_(False)
+            attention_types = _capture_attention_types(_language_model_layers(llm.model))
             if cmc_low_rank_adapters is None:
                 loaded_act_scales = None if act_scales is None else torch.load(act_scales, weights_only=False)
                 masquant(
@@ -1090,6 +1104,7 @@ def load_masquant_model_and_processor(
                     None,
                 )
                 model = llm.model
+                _restore_attention_types(model, attention_types)
             else:
                 if torch.cuda.is_available():
                     llm.model.to("cuda")
