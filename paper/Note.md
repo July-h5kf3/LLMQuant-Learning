@@ -1701,7 +1701,7 @@ $$
 
 可以见下图:
 
-![](/figure/SERQ_fig1.png)
+![](figure/SERQ_fig1.png)
 
 此外，传统的低秩误差重构方法通常对整个误差矩阵$E = W - Q(W)$做截断SVD，这带来的问题是固定 rank budget 会被分散到整个矩阵的所有行列上，而造成真正大影响的可能只是少数几个权重，这样会稀释低秩补偿能力。
 
@@ -1768,7 +1768,7 @@ $$
 
 至此，完整的流程可见下图:
 
-![](/figure/SERQ_fig2.png)
+![](figure/SERQ_fig2.png)
 
 #### ReSpinQuant: Efficient Layer-Wise LLM Quantization via Subspace Residual Rotation Approximation
 
@@ -1780,7 +1780,7 @@ ReSpinQuant克服了这一限制。实现了可融合的Layer-Wise Rotation base
 
 具体方法如下:
 
-![](/figure/respinquant_fig1.png)
+![](figure/respinquant_fig1.png)
 
 上图是respinquant应用于标准Transformer层时的完整架构。
 

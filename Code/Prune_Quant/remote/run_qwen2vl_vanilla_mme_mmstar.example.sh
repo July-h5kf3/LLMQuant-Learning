@@ -21,10 +21,9 @@ export PQ_ATTN_IMPLEMENTATION=eager
 export PQ_MAX_NEW_TOKENS=16
 
 # Optional image resolution controls.
-# Leave empty to use the processor defaults. Set min/max visual tokens if you
-# need to match a fixed-resolution run, for example 1500/1500.
-export PQ_MIN_VISUAL_TOKENS=
-export PQ_MAX_VISUAL_TOKENS=
+# Keep this fixed so vanilla, pure pruning, and MASQuant runs are comparable.
+export PQ_MIN_VISUAL_TOKENS=1500
+export PQ_MAX_VISUAL_TOKENS=1500
 export PQ_MIN_PIXELS=
 export PQ_MAX_PIXELS=
 

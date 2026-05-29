@@ -37,11 +37,12 @@ export DEVICE_MAP=auto
 # the Transformers default, or set it to false for the slow processor.
 export PROCESSOR_USE_FAST=
 
-# Optional image resolution controls. Leave empty to use processor defaults.
+# Optional image resolution controls. Keep this fixed so vanilla, pure pruning,
+# and MASQuant runs are comparable.
 export PROCESSOR_MIN_PIXELS=
 export PROCESSOR_MAX_PIXELS=
-export PROCESSOR_MIN_VISUAL_TOKENS=
-export PROCESSOR_MAX_VISUAL_TOKENS=
+export PROCESSOR_MIN_VISUAL_TOKENS=1500
+export PROCESSOR_MAX_VISUAL_TOKENS=1500
 
 # ---- Pruning behavior ----
 # 1.0 means no GAE pruning. Set to 0.5 to run prune-then-quant calibration.
