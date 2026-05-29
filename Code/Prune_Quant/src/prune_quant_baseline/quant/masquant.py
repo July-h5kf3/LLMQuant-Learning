@@ -517,6 +517,31 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
         target.write_text(f"# {marker}\n" + patched, encoding="utf-8")
         patched_paths.append(target)
 
+    text = target.read_text(encoding="utf-8")
+    catcher_marker = "prune_quant_baseline: preserve qwen2-vl Catcher attention_type"
+    if catcher_marker not in text:
+        old = "            self.module = module\n            self.is_llama = False\n"
+        new = (
+            "            self.module = module\n"
+            "            self.is_llama = False\n"
+            f"            # {catcher_marker}.\n"
+            "            if hasattr(module, \"attention_type\"):\n"
+            "                self.attention_type = module.attention_type\n"
+        )
+        if old not in text:
+            if "self.attention_type = module.attention_type" in text:
+                patched = f"# {catcher_marker}\n" + text
+            else:
+                raise RuntimeError(f"Could not patch {target}; expected Catcher module assignment was not found.")
+        else:
+            patched = text.replace(old, new, 1)
+        backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+        if not backup.exists():
+            backup.write_text(text, encoding="utf-8")
+        target.write_text(patched, encoding="utf-8")
+        if target not in patched_paths:
+            patched_paths.append(target)
+
     target = root / "quantize" / "infer_quant.py"
     if target.exists():
         text = target.read_text(encoding="utf-8")

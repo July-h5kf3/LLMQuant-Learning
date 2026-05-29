@@ -241,7 +241,12 @@ def test_patch_masquant_qwen2_vl_quant_support_is_idempotent(tmp_path: Path) -> 
         "    if False:\n"
         "        pass\n"
         "    elif 'Qwen2.5-VL' in args.model:\n"
-        "        qlayer = DecoderLayer(lm.model.config, layer, args, layer_idx=i)\n",
+        "        qlayer = DecoderLayer(lm.model.config, layer, args, layer_idx=i)\n"
+        "    class Catcher(nn.Module):\n"
+        "        def __init__(self, module):\n"
+        "            super().__init__()\n"
+        "            self.module = module\n"
+        "            self.is_llama = False\n",
         encoding="utf-8",
     )
 
@@ -255,6 +260,7 @@ def test_patch_masquant_qwen2_vl_quant_support_is_idempotent(tmp_path: Path) -> 
     assert "layers = qwen_language_model.layers" in first
     assert "qwen_layer_name_prefix = candidate" in first
     assert 'layer_name_prefix = f"{qwen_layer_name_prefix}.layers"' in first
+    assert "self.attention_type = module.attention_type" in first
     assert first == second
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
 
