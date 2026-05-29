@@ -413,7 +413,17 @@ bash remote/run_qwen2vl_masquant_pseudo_mme.local.sh
 
 The full pipeline logic is in `remote/run_masquant_pseudo_pipeline.sh`; the local script only stores paths and parameters. Set `RUN_CALIBRATE=0`, `RUN_CMC=0`, `RUN_INSTALL_VLMEVAL=0`, or `RUN_VLMEVAL=0` to skip completed stages. By default `CALIB_RETENTION_RATIO=1.0` and `EVAL_RETENTION_RATIO=1.0` mean no GAE pruning, evaluating MASQuant pseudo quant only; set either to a value such as `0.5` when you want pruning.
 
-MME does not need GPT-as-judge. The script defaults `VLMEVAL_DISABLE_OPENAI=1`, which clears OpenAI-related environment variables before calling VLMEvalKit to avoid external API timeouts during scoring.
+The VLMEvalKit stage uses `remote/run_vlmeval_smart.py` by default (`VLMEVAL_SMART_RUNNER=1`). It runs each dataset separately, reuses existing prediction xlsx files, switches to `--mode eval` when an xlsx already exists, and skips reruns when score files are already present. MME and MMStar default to `--judge exact_matching`, so they do not call GPT-as-judge. `VLMEVAL_DISABLE_OPENAI=1` still clears OpenAI-related environment variables for exact-matching runs to avoid accidental external API calls during scoring.
+
+Useful overrides:
+
+```bash
+export VLMEVAL_MODE=auto          # auto, all, infer, or eval
+export VLMEVAL_REUSE=1            # pass VLMEvalKit --reuse
+export VLMEVAL_FORCE_EVAL=1       # rebuild score files even if one is found
+export VLMEVAL_JUDGE=deepseek-v4-pro
+export VLMEVAL_EXACT_MATCH_DATASETS="MME MMStar"
+```
 
 Phase 1 calibrates MASQuant on already-pruned prompts:
 

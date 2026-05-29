@@ -68,8 +68,15 @@ export VLMEVAL_DATASETS=MME
 export VLMEVAL_MODEL_NAME=Qwen2VL_MASQuant_Pseudo
 export MAX_NEW_TOKENS=16
 export VLMEVAL_VERBOSE=1
-# MME does not need GPT-as-judge. Keep OpenAI env vars out of VLMEvalKit to avoid
-# slow or failing API calls during scoring.
+# The smart runner reuses existing xlsx files and forces exact-matching judges
+# for datasets like MME, so scoring will not call GPT for those benchmarks.
+export VLMEVAL_SMART_RUNNER=1
+export VLMEVAL_MODE=auto
+export VLMEVAL_REUSE=1
+export VLMEVAL_REUSE_AUX=1
+export VLMEVAL_EXACT_MATCH_DATASETS="MME MMStar"
+# Keep OpenAI env vars out of exact-matching runs to avoid slow or failing API
+# calls during scoring.
 export VLMEVAL_DISABLE_OPENAI=1
 
 # ---- Stage switches ----

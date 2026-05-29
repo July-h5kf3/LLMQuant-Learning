@@ -413,7 +413,17 @@ bash remote/run_qwen2vl_masquant_pseudo_mme.local.sh
 
 真正的流程逻辑在 `remote/run_masquant_pseudo_pipeline.sh` 中；用户脚本只负责填写地址和参数。若某个阶段已经跑完，可以在用户脚本里设置 `RUN_CALIBRATE=0`、`RUN_CMC=0`、`RUN_INSTALL_VLMEVAL=0` 或 `RUN_VLMEVAL=0` 跳过。默认 `CALIB_RETENTION_RATIO=1.0`、`EVAL_RETENTION_RATIO=1.0` 表示不做 GAE 剪枝，只评测 MASQuant pseudo quant；需要剪枝时把对应值改成例如 `0.5`。
 
-MME 不需要 GPT-as-judge。脚本默认设置 `VLMEVAL_DISABLE_OPENAI=1`，会在调用 VLMEvalKit 前清理 OpenAI 相关环境变量，避免评分阶段访问外部 API 超时。
+VLMEvalKit 阶段默认使用 `remote/run_vlmeval_smart.py`（`VLMEVAL_SMART_RUNNER=1`）。它会按数据集单独运行，复用已有 prediction xlsx；如果 xlsx 已经存在，会切到 `--mode eval` 只补评分；如果 score 文件已经存在，会直接跳过。MME 和 MMStar 默认使用 `--judge exact_matching`，因此不会调用 GPT-as-judge。`VLMEVAL_DISABLE_OPENAI=1` 仍会在 exact-matching 运行中清理 OpenAI 相关环境变量，避免评分阶段意外访问外部 API。
+
+常用覆盖参数：
+
+```bash
+export VLMEVAL_MODE=auto          # auto, all, infer, 或 eval
+export VLMEVAL_REUSE=1            # 传给 VLMEvalKit --reuse
+export VLMEVAL_FORCE_EVAL=1       # 即使找到 score，也重新补评分
+export VLMEVAL_JUDGE=deepseek-v4-pro
+export VLMEVAL_EXACT_MATCH_DATASETS="MME MMStar"
+```
 
 阶段 1：在已经剪枝的 prompt 上校准 MASQuant：
 

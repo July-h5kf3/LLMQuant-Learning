@@ -112,6 +112,13 @@ VLMEVAL_DATASETS="${VLMEVAL_DATASETS:-MME}"
 VLMEVAL_MODEL_NAME="${VLMEVAL_MODEL_NAME:-Qwen2VL_MASQuant_Pseudo}"
 VLMEVAL_VERBOSE="${VLMEVAL_VERBOSE:-1}"
 VLMEVAL_DISABLE_OPENAI="${VLMEVAL_DISABLE_OPENAI:-1}"
+VLMEVAL_SMART_RUNNER="${VLMEVAL_SMART_RUNNER:-1}"
+VLMEVAL_MODE="${VLMEVAL_MODE:-auto}"
+VLMEVAL_REUSE="${VLMEVAL_REUSE:-1}"
+VLMEVAL_REUSE_AUX="${VLMEVAL_REUSE_AUX:-1}"
+VLMEVAL_JUDGE="${VLMEVAL_JUDGE:-}"
+VLMEVAL_EXACT_MATCH_DATASETS="${VLMEVAL_EXACT_MATCH_DATASETS:-MME MMStar}"
+VLMEVAL_FORCE_EVAL="${VLMEVAL_FORCE_EVAL:-0}"
 
 RUN_CALIBRATE="${RUN_CALIBRATE:-1}"
 RUN_CMC="${RUN_CMC:-1}"
@@ -298,8 +305,31 @@ if [[ "$RUN_VLMEVAL" == "1" ]]; then
   fi
 
   read -r -a vlmeval_datasets <<< "$VLMEVAL_DATASETS"
-  vlmeval_cmd=("$PYTHON" run.py --data "${vlmeval_datasets[@]}" --model "$VLMEVAL_MODEL_NAME" --work-dir "$VLMEVAL_WORK_DIR")
-  append_bool_flag vlmeval_cmd --verbose "$VLMEVAL_VERBOSE"
+  if [[ "$VLMEVAL_SMART_RUNNER" == "1" ]]; then
+    cd "$PROJECT_ROOT"
+    vlmeval_cmd=(
+      "$PYTHON" "$PROJECT_ROOT/remote/run_vlmeval_smart.py"
+      --vlmeval-root "$VLMEVALKIT_ROOT"
+      --data "${vlmeval_datasets[@]}"
+      --model "$VLMEVAL_MODEL_NAME"
+      --work-dir "$VLMEVAL_WORK_DIR"
+      --python "$PYTHON"
+      --mode "$VLMEVAL_MODE"
+      --exact-match-datasets "$VLMEVAL_EXACT_MATCH_DATASETS"
+    )
+    append_if_set vlmeval_cmd --judge "$VLMEVAL_JUDGE"
+    append_bool_flag vlmeval_cmd --verbose "$VLMEVAL_VERBOSE"
+    append_bool_flag vlmeval_cmd --force-eval "$VLMEVAL_FORCE_EVAL"
+    if [[ "$VLMEVAL_REUSE" != "1" ]]; then
+      vlmeval_cmd+=(--no-reuse)
+    fi
+    if [[ "$VLMEVAL_REUSE_AUX" != "1" ]]; then
+      vlmeval_cmd+=(--no-reuse-aux)
+    fi
+  else
+    vlmeval_cmd=("$PYTHON" run.py --data "${vlmeval_datasets[@]}" --model "$VLMEVAL_MODEL_NAME" --work-dir "$VLMEVAL_WORK_DIR")
+    append_bool_flag vlmeval_cmd --verbose "$VLMEVAL_VERBOSE"
+  fi
   run_cmd "${vlmeval_cmd[@]}"
 else
   log "Skipping VLMEvalKit evaluation because RUN_VLMEVAL=$RUN_VLMEVAL"
