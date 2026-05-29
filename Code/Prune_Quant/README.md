@@ -504,10 +504,10 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --cmc-white-matrix-path "$CMC_WHITE" \
   --tensorrt-engine-dir "$TRT_ENGINE_DIR" \
   --tensorrt-artifact-dir "$MASQUANT_TRT_ARTIFACT" \
-  --tensorrt-builder-command "python /path/to/masquant_trt_builder.py --model {model_path} --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --cmc-low-rank {cmc_low_rank_adapters} --cmc-white-matrix {cmc_white_matrix} --output {engine_dir} --wbits {wbits} --abits {abits}"
+  --tensorrt-builder-command "python -m prune_quant_baseline.scripts.build_masquant_tensorrt --model {model_path} --model-type qwen2vl --masquant-root $MASQUANT_ROOT --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --cmc-low-rank {cmc_low_rank_adapters} --cmc-white-matrix {cmc_white_matrix} --output {engine_dir} --wbits {wbits} --abits {abits} --convert-command 'python /path/to/masquant_trt_convert.py --model {hf_export_dir} --state {torch_export_dir}/masquant_state.pt --out {checkpoint_dir}' --llm-build-command 'trtllm-build --checkpoint_dir {checkpoint_dir} --output_dir {llm_engine_dir} --gemm_plugin=float16 --gpt_attention_plugin=float16 --max_batch_size 1 --max_input_len 2048 --max_seq_len 3072 --max_multimodal_len 1296' --vision-build-command 'python /path/to/build_qwen2vl_vision_engine.py --model {hf_export_dir} --output_dir {vision_engine_dir}'"
 ```
 
-If `TRT_ENGINE_DIR` was already built by another workflow, omit `--tensorrt-builder-command` and only write the artifact manifest. Non-dry-run mode checks that the engine directory is non-empty before registering it.
+`build_masquant_tensorrt` first writes the MASQuant + CMC materialized model to `$TRT_ENGINE_DIR/.build/masquant_export`, then runs the TensorRT conversion/build commands you provide. Replace `/path/to/masquant_trt_convert.py` and `/path/to/build_qwen2vl_vision_engine.py` with scripts that really understand MASQuant `QuantLinear`, split modality scales, and CMC low-rank branches in your environment. TensorRT-LLM's stock Qwen2-VL converter usually does not understand MASQuant custom modules; for a plumbing-only TensorRT-LLM check, pass `--tensorrt-llm-root "$TENSORRT_LLM_ROOT" --allow-stock-trtllm-example` to the builder. If `TRT_ENGINE_DIR` was already built by another workflow, omit `--tensorrt-builder-command` and only write the artifact manifest. Non-dry-run mode checks that the engine directory is non-empty before registering it.
 
 Then run VLMEvalKit against the saved TensorRT artifact:
 

@@ -9,6 +9,7 @@ from prune_quant_baseline.quant.tensorrt import (
     load_masquant_tensorrt_artifact,
     write_masquant_tensorrt_artifact,
 )
+from prune_quant_baseline.scripts.build_masquant_tensorrt import build_arg_parser, build_commands
 
 
 def test_format_tensorrt_builder_command_substitutes_paths_with_quotes(tmp_path: Path) -> None:
@@ -93,3 +94,47 @@ def test_load_masquant_tensorrt_artifact_rejects_non_tensorrt_backend(tmp_path: 
 
     with pytest.raises(ValueError, match="backend='tensorrt'"):
         load_masquant_tensorrt_artifact(artifact_dir)
+
+
+def test_build_masquant_tensorrt_accepts_custom_commands(tmp_path: Path) -> None:
+    args = build_arg_parser().parse_args(
+        [
+            "--model",
+            "/models/Qwen2-VL-7B-Instruct",
+            "--masquant-root",
+            "/ext/masquant",
+            "--masquant-resume",
+            "/work/mas_parameters.pth",
+            "--cmc-low-rank",
+            "/work/low_rank.pt",
+            "--output",
+            str(tmp_path / "engine"),
+            "--convert-command",
+            "python convert.py --model {hf_export_dir} --out {checkpoint_dir}",
+            "--llm-build-command",
+            "python build_llm.py --checkpoint {checkpoint_dir} --out {llm_engine_dir}",
+            "--vision-build-command",
+            "python build_vision.py --model {hf_export_dir} --out {vision_engine_dir}",
+        ]
+    )
+    values = {
+        "hf_export_dir": tmp_path / "work" / "masquant_export" / "hf_model",
+        "torch_export_dir": tmp_path / "work" / "masquant_export",
+        "checkpoint_dir": tmp_path / "work" / "trtllm_checkpoint",
+        "engine_dir": tmp_path / "engine",
+        "llm_engine_dir": tmp_path / "engine" / "llm",
+        "vision_engine_dir": tmp_path / "engine" / "vision",
+        "dtype": "float16",
+        "model": args.model,
+        "masquant_resume": args.masquant_resume,
+        "act_scales": "",
+        "cmc_low_rank": args.cmc_low_rank,
+        "cmc_white_matrix": "",
+    }
+
+    commands = build_commands(args, values)
+
+    assert commands[0][:2] == ["python", "convert.py"]
+    assert str(values["checkpoint_dir"]) in commands[0]
+    assert str(values["llm_engine_dir"]) in commands[1]
+    assert str(values["vision_engine_dir"]) in commands[2]

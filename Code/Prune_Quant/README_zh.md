@@ -504,10 +504,10 @@ python -m prune_quant_baseline.scripts.run_prune_then_quant_masquant \
   --cmc-white-matrix-path "$CMC_WHITE" \
   --tensorrt-engine-dir "$TRT_ENGINE_DIR" \
   --tensorrt-artifact-dir "$MASQUANT_TRT_ARTIFACT" \
-  --tensorrt-builder-command "python /path/to/masquant_trt_builder.py --model {model_path} --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --cmc-low-rank {cmc_low_rank_adapters} --cmc-white-matrix {cmc_white_matrix} --output {engine_dir} --wbits {wbits} --abits {abits}"
+  --tensorrt-builder-command "python -m prune_quant_baseline.scripts.build_masquant_tensorrt --model {model_path} --model-type qwen2vl --masquant-root $MASQUANT_ROOT --masquant-resume {masquant_resume} --act-scales {masquant_act_scales} --cmc-low-rank {cmc_low_rank_adapters} --cmc-white-matrix {cmc_white_matrix} --output {engine_dir} --wbits {wbits} --abits {abits} --convert-command 'python /path/to/masquant_trt_convert.py --model {hf_export_dir} --state {torch_export_dir}/masquant_state.pt --out {checkpoint_dir}' --llm-build-command 'trtllm-build --checkpoint_dir {checkpoint_dir} --output_dir {llm_engine_dir} --gemm_plugin=float16 --gpt_attention_plugin=float16 --max_batch_size 1 --max_input_len 2048 --max_seq_len 3072 --max_multimodal_len 1296' --vision-build-command 'python /path/to/build_qwen2vl_vision_engine.py --model {hf_export_dir} --output_dir {vision_engine_dir}'"
 ```
 
-如果 `TRT_ENGINE_DIR` 已经由别的流程构建好，可以省略 `--tensorrt-builder-command`，只写 artifact manifest。非 dry-run 模式会检查 engine 目录非空，避免注册空产物。
+`build_masquant_tensorrt` 会先把 MASQuant + CMC 权重量化结果写到 `$TRT_ENGINE_DIR/.build/masquant_export`，再执行你传入的 TensorRT 转换/构建命令。这里的 `/path/to/masquant_trt_convert.py` 和 `/path/to/build_qwen2vl_vision_engine.py` 需要替换成你环境里真正支持 MASQuant `QuantLinear`、分模态 scale 和 CMC 低秩分支的转换脚本。TensorRT-LLM 自带 Qwen2-VL 示例 converter 通常不认识 MASQuant 的自定义模块；若只想做 TensorRT-LLM 连通性检查，可以在 builder 上传 `--tensorrt-llm-root "$TENSORRT_LLM_ROOT" --allow-stock-trtllm-example`。若 `TRT_ENGINE_DIR` 已经由别的流程构建好，可以省略 `--tensorrt-builder-command`，只写 artifact manifest。非 dry-run 模式会检查 engine 目录非空，避免注册空产物。
 
 然后用 VLMEvalKit 直接加载这个保存好的 TensorRT artifact：
 
