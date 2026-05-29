@@ -386,6 +386,35 @@ VLMEvalKit evaluation can use MASQuant pseudo quant directly: the evaluation pro
 
 The prune-then-quant baseline has two phases.
 
+For the complete Qwen2-VL MASQuant pseudo quant + CMC + VLMEvalKit MME workflow, use the script entrypoint:
+
+```bash
+cd "$PROJECT_ROOT"
+cp remote/run_qwen2vl_masquant_pseudo_mme.example.sh remote/run_qwen2vl_masquant_pseudo_mme.local.sh
+```
+
+Edit paths and parameters at the top of `remote/run_qwen2vl_masquant_pseudo_mme.local.sh`, for example:
+
+- `PROJECT_ROOT`: this repository path;
+- `EXT_ROOT`: external checkout root;
+- `MODEL_PATH`: Qwen2-VL model path;
+- `WORK_DIR`: MASQuant intermediate artifact and VLMEvalKit output directory;
+- `MASQUANT_ROOT`: `EfficientAI/masquant` path;
+- `VLMEVALKIT_ROOT`: VLMEvalKit path;
+- `CALIB_JSONL`: JSONL used by phase 1 MASQuant calibration;
+- `CMC_VISION_JSON` / `CMC_VISION_PREFIX`: ShareGPT4V-style JSON and image directory used by CMC;
+- `WBITS` / `ABITS` / `NSAMPLES` / `EPOCHS` / `CMC_RANK` / `MAX_NEW_TOKENS` and other experiment parameters.
+
+Then run:
+
+```bash
+bash remote/run_qwen2vl_masquant_pseudo_mme.local.sh
+```
+
+The full pipeline logic is in `remote/run_masquant_pseudo_pipeline.sh`; the local script only stores paths and parameters. Set `RUN_CALIBRATE=0`, `RUN_CMC=0`, `RUN_INSTALL_VLMEVAL=0`, or `RUN_VLMEVAL=0` to skip completed stages. By default `CALIB_RETENTION_RATIO=1.0` and `EVAL_RETENTION_RATIO=1.0` mean no GAE pruning, evaluating MASQuant pseudo quant only; set either to a value such as `0.5` when you want pruning.
+
+MME does not need GPT-as-judge. The script defaults `VLMEVAL_DISABLE_OPENAI=1`, which clears OpenAI-related environment variables before calling VLMEvalKit to avoid external API timeouts during scoring.
+
 Phase 1 calibrates MASQuant on already-pruned prompts:
 
 ```bash

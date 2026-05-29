@@ -386,6 +386,35 @@ VLMEvalKit 评测默认可以直接使用 MASQuant pseudo quant：评测进程�
 
 prune-then-quant baseline 分为两个阶段。
 
+如果只想跑完整的 Qwen2-VL MASQuant pseudo quant + CMC + VLMEvalKit MME 流程，推荐使用脚本入口：
+
+```bash
+cd "$PROJECT_ROOT"
+cp remote/run_qwen2vl_masquant_pseudo_mme.example.sh remote/run_qwen2vl_masquant_pseudo_mme.local.sh
+```
+
+编辑 `remote/run_qwen2vl_masquant_pseudo_mme.local.sh` 顶部的路径和参数，例如：
+
+- `PROJECT_ROOT`：本项目路径；
+- `EXT_ROOT`：外部仓库根目录；
+- `MODEL_PATH`：Qwen2-VL 模型路径；
+- `WORK_DIR`：MASQuant 中间产物和 VLMEvalKit 输出目录；
+- `MASQUANT_ROOT`：`EfficientAI/masquant` 路径；
+- `VLMEVALKIT_ROOT`：VLMEvalKit 路径；
+- `CALIB_JSONL`：阶段 1 MASQuant 校准用 JSONL；
+- `CMC_VISION_JSON` / `CMC_VISION_PREFIX`：CMC 校准用 ShareGPT4V-style JSON 和图片目录；
+- `WBITS` / `ABITS` / `NSAMPLES` / `EPOCHS` / `CMC_RANK` / `MAX_NEW_TOKENS` 等模型和实验参数。
+
+然后运行：
+
+```bash
+bash remote/run_qwen2vl_masquant_pseudo_mme.local.sh
+```
+
+真正的流程逻辑在 `remote/run_masquant_pseudo_pipeline.sh` 中；用户脚本只负责填写地址和参数。若某个阶段已经跑完，可以在用户脚本里设置 `RUN_CALIBRATE=0`、`RUN_CMC=0`、`RUN_INSTALL_VLMEVAL=0` 或 `RUN_VLMEVAL=0` 跳过。默认 `CALIB_RETENTION_RATIO=1.0`、`EVAL_RETENTION_RATIO=1.0` 表示不做 GAE 剪枝，只评测 MASQuant pseudo quant；需要剪枝时把对应值改成例如 `0.5`。
+
+MME 不需要 GPT-as-judge。脚本默认设置 `VLMEVAL_DISABLE_OPENAI=1`，会在调用 VLMEvalKit 前清理 OpenAI 相关环境变量，避免评分阶段访问外部 API 超时。
+
 阶段 1：在已经剪枝的 prompt 上校准 MASQuant：
 
 ```bash
