@@ -48,11 +48,15 @@ export PROCESSOR_MAX_VISUAL_TOKENS=1500
 # ---- Pruning behavior ----
 # 0.5 means keep the top 50% visual tokens during MASQuant calibration.
 export CALIB_RETENTION_RATIO=0.5
-# 0.5 means evaluate MASQuant with the same GAE 50% pruning policy.
-export EVAL_RETENTION_RATIO=0.5
+# 0.5 means evaluate MASQuant with GAE 50% visual-token pruning.
+export EVAL_RETENTION_RATIO="${EVAL_RETENTION_RATIO:-0.5}"
 export MIN_KEEP=1
 export GAE_ANSWER_SOURCE=generated
 export GAE_PER_TOKEN=false
+# GAE scoring still needs gradients and attention maps; keep MASQuant for final
+# generation, but bypass fake-quant Linear internals only while computing scores.
+export GAE_DISABLE_MASQUANT_FAKE_QUANT="${GAE_DISABLE_MASQUANT_FAKE_QUANT:-1}"
+export ALLOW_VANILLA_FALLBACK="${ALLOW_VANILLA_FALLBACK:-0}"
 
 # Qwen2-VL path builds multimodal masks in the MASQuant bridge.
 export PATCH_MASQUANT_INPUTS_EMBEDS_MASK=0
@@ -128,6 +132,7 @@ export RUN_VLMEVAL="${RUN_VLMEVAL:-1}"
 
 echo "[gae50] RUN_CALIBRATE=${RUN_CALIBRATE:-1} MASQUANT_RESUME=${MASQUANT_RESUME:-<auto-after-calibrate>}"
 echo "[gae50] RUN_CMC=${RUN_CMC:-1} CMC_LOW_RANK=$CMC_LOW_RANK CMC_WHITE=$CMC_WHITE"
+echo "[gae50] EVAL_RETENTION_RATIO=$EVAL_RETENTION_RATIO GAE_DISABLE_MASQUANT_FAKE_QUANT=$GAE_DISABLE_MASQUANT_FAKE_QUANT"
 
 # Resume examples:
 # export MASQUANT_RESUME="$WORK_DIR/masquant_outputs/.../mas_parameters.pth"

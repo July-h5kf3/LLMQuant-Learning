@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager, nullcontext
+from types import MethodType
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from vlmeval.vlm.base import BaseModel
 from vlmeval.vlm.qwen2_vl.prompt import Qwen2VLPromptMixin
 
@@ -48,6 +51,29 @@ def _resolve_pixels(*, pixels: Any, visual_tokens: Any, name: str) -> int | None
     return _visual_tokens_to_pixels(visual_tokens)
 
 
+@contextmanager
+def _disable_masquant_fake_quant_for_scoring(model: Any):
+    patched: list[tuple[Any, Any]] = []
+
+    def plain_linear_forward(self: Any, input: torch.Tensor, multi_modal_mask: Any = None) -> torch.Tensor:
+        del multi_modal_mask
+        bias = getattr(self, "bias", None)
+        if not torch.is_tensor(bias):
+            bias = None
+        return F.linear(input, self.weight.to(dtype=input.dtype), bias.to(dtype=input.dtype) if bias is not None else None)
+
+    try:
+        for module in model.modules():
+            if not hasattr(module, "weight") or not hasattr(module, "forward_mas_infer"):
+                continue
+            patched.append((module, module.forward))
+            module.forward = MethodType(plain_linear_forward, module)
+        yield
+    finally:
+        for module, forward in patched:
+            module.forward = forward
+
+
 class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
     """VLMEvalKit Qwen2-VL wrapper with GAE-guided visual token pruning."""
 
@@ -90,6 +116,8 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         masquant_cmc_quant_cmc: int = 0,
         use_custom_prompt: bool = True,
         system_prompt: str | None = None,
+        gae_score_disable_masquant_fake_quant: bool = False,
+        allow_vanilla_fallback: bool = False,
         verbose: bool = False,
         **_: Any,
     ) -> None:
@@ -111,6 +139,8 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         self.gae_per_token = _bool_value(gae_per_token)
         self.use_custom_prompt_flag = _bool_value(use_custom_prompt)
         self.system_prompt = system_prompt
+        self.gae_score_disable_masquant_fake_quant = _bool_value(gae_score_disable_masquant_fake_quant)
+        self.allow_vanilla_fallback = _bool_value(allow_vanilla_fallback)
         self.verbose = _bool_value(verbose)
 
         load_kwargs: dict[str, Any] = {
@@ -213,16 +243,31 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
             answer = ""
         sample["answer"] = answer or "Yes"
 
-        with torch.enable_grad():
-            scores = _score_gae_oracle(
-                model=self.model,
-                processor=self.processor,
-                adapter=self._pq_adapter,
-                pruner=self._pq_pruner,
-                sample=sample,
-                answer=sample["answer"],
-                per_token=self.gae_per_token,
-            )
+        score_context = (
+            _disable_masquant_fake_quant_for_scoring(self.model)
+            if self.gae_score_disable_masquant_fake_quant
+            else nullcontext()
+        )
+        try:
+            with torch.enable_grad():
+                with score_context:
+                    scores = _score_gae_oracle(
+                        model=self.model,
+                        processor=self.processor,
+                        adapter=self._pq_adapter,
+                        pruner=self._pq_pruner,
+                        sample=sample,
+                        answer=sample["answer"],
+                        per_token=self.gae_per_token,
+                    )
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if self.allow_vanilla_fallback:
+                logging.warning("GAE scoring OOM; falling back to unpruned generation for this sample.")
+                return _generate_vanilla(self.model, self.processor, inputs, self.max_new_tokens)
+            raise
+        scores = scores.detach()
+        torch.cuda.empty_cache()
         pruned_inputs, _, _ = _build_pruned_generation_inputs(
             model=self.model,
             adapter=self._pq_adapter,
