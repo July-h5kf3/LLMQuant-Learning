@@ -78,11 +78,56 @@ export VLMEVAL_REUSE_AUX=1
 export VLMEVAL_EXACT_MATCH_DATASETS="MME MMStar"
 export VLMEVAL_DISABLE_OPENAI=1
 
-# ---- Stage switches ----
-export RUN_CALIBRATE=1
-export RUN_CMC=1
-export RUN_INSTALL_VLMEVAL=1
-export RUN_VLMEVAL=1
+# ---- Resume / stage switches ----
+model_name="${MODEL_PATH%/}"
+model_name="${model_name##*/}"
+
+export MASQUANT_ACT_SCALES="${MASQUANT_ACT_SCALES:-$WORK_DIR/act_scales/${model_name}-${DATASET_TYPE}-${NSAMPLES}.pt}"
+export CMC_LOW_RANK="${CMC_LOW_RANK:-$WORK_DIR/cmc/low_rank_adapters_quantcmc${CMC_QUANT_CMC}_rank${CMC_RANK}_${CMC_CALI_DATA_TYPE}.pt}"
+export CMC_WHITE="${CMC_WHITE:-$WORK_DIR/cmc/white_matrix_${CMC_CALI_DATA_TYPE}.pt}"
+
+run_calibrate_was_set=0
+run_cmc_was_set=0
+if [[ -n "${RUN_CALIBRATE+x}" ]]; then
+  run_calibrate_was_set=1
+fi
+if [[ -n "${RUN_CMC+x}" ]]; then
+  run_cmc_was_set=1
+fi
+
+if [[ -z "${MASQUANT_RESUME:-}" && -d "$WORK_DIR/masquant_outputs" ]]; then
+  found_resume="$(find "$WORK_DIR/masquant_outputs" -name mas_parameters.pth | sort | tail -n 1 || true)"
+  if [[ -n "$found_resume" ]]; then
+    export MASQUANT_RESUME="$found_resume"
+  fi
+fi
+
+if [[ "$run_calibrate_was_set" == "0" ]]; then
+  if [[ -n "${MASQUANT_RESUME:-}" && -f "$MASQUANT_RESUME" && -f "$MASQUANT_ACT_SCALES" ]]; then
+    export RUN_CALIBRATE=0
+  else
+    export RUN_CALIBRATE=1
+  fi
+fi
+
+if [[ "${RUN_CALIBRATE:-1}" == "1" ]]; then
+  # A calibration run should not accidentally reuse an older resume file later in the pipeline.
+  unset MASQUANT_RESUME
+fi
+
+if [[ "$run_cmc_was_set" == "0" ]]; then
+  if [[ -f "$CMC_LOW_RANK" && -f "$CMC_WHITE" ]]; then
+    export RUN_CMC=0
+  else
+    export RUN_CMC=1
+  fi
+fi
+
+export RUN_INSTALL_VLMEVAL="${RUN_INSTALL_VLMEVAL:-1}"
+export RUN_VLMEVAL="${RUN_VLMEVAL:-1}"
+
+echo "[gae50] RUN_CALIBRATE=${RUN_CALIBRATE:-1} MASQUANT_RESUME=${MASQUANT_RESUME:-<auto-after-calibrate>}"
+echo "[gae50] RUN_CMC=${RUN_CMC:-1} CMC_LOW_RANK=$CMC_LOW_RANK CMC_WHITE=$CMC_WHITE"
 
 # Resume examples:
 # export MASQUANT_RESUME="$WORK_DIR/masquant_outputs/.../mas_parameters.pth"

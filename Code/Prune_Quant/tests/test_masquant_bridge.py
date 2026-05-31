@@ -8,6 +8,7 @@ from prune_quant_baseline.quant.masquant import (
     build_generate_act_scales_command,
     build_train_command,
     _patch_decoder_forward_compat,
+    _patch_int_qwen_vl_layer_logger,
     patch_custom_dataset_paths,
     patch_masquant_qwen2_vl_quant_support,
     patch_lmclass_attention_implementation,
@@ -270,6 +271,26 @@ def test_patch_masquant_qwen2_vl_quant_support_is_idempotent(tmp_path: Path) -> 
     assert "self.attention_type = module.attention_type" in first
     assert 'cache.get("qwen2_vl_input_ids")' in first
     assert 'cache["qwen2_vl_input_ids"] = inputs.get("input_ids")' in first
+    assert first == second
+    assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
+
+
+def test_patch_int_qwen_vl_layer_logger_defines_warning_once_logger(tmp_path: Path) -> None:
+    root = _make_masquant_root(tmp_path)
+    target = root / "models" / "int_qwen_vl_layer.py"
+    target.write_text(
+        "def forward_sdpa():\n"
+        "    logger.warning_once('falling back')\n",
+        encoding="utf-8",
+    )
+
+    _patch_int_qwen_vl_layer_logger(root)
+    first = target.read_text(encoding="utf-8")
+    _patch_int_qwen_vl_layer_logger(root)
+    second = target.read_text(encoding="utf-8")
+
+    assert "prune_quant_baseline: define int_qwen_vl_layer logger" in first
+    assert "logger = _prune_quant_baseline_hf_logging.get_logger(__name__)" in first
     assert first == second
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
 

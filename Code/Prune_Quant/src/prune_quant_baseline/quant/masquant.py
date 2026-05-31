@@ -416,6 +416,9 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
 
     root = validate_masquant_root(masquant_root)
     patched_paths: list[Path] = []
+    logger_patch = _patch_int_qwen_vl_layer_logger(root)
+    if logger_patch is not None:
+        patched_paths.append(logger_patch)
 
     target = root / "quantize" / "masquant.py"
     text = target.read_text(encoding="utf-8")
@@ -779,6 +782,33 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
             patched_paths.append(target)
 
     return tuple(patched_paths)
+
+
+def _patch_int_qwen_vl_layer_logger(root: Path) -> Path | None:
+    """Patch MASQuant's Qwen-VL layer module when it calls logger.warning_once."""
+
+    target = root / "models" / "int_qwen_vl_layer.py"
+    if not target.exists():
+        return None
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: define int_qwen_vl_layer logger"
+    if marker in text:
+        return target
+    if "logger.warning_once" not in text:
+        return None
+    if re.search(r"^logger\s*=", text, flags=re.MULTILINE):
+        return None
+
+    injection = (
+        f"# {marker}.\n"
+        "from transformers.utils import logging as _prune_quant_baseline_hf_logging\n"
+        "logger = _prune_quant_baseline_hf_logging.get_logger(__name__)\n\n"
+    )
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    target.write_text(injection + text, encoding="utf-8")
+    return target
 
 
 def patch_custom_dataset_paths(
