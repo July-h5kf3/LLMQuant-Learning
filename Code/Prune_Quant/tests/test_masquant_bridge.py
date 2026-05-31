@@ -9,6 +9,7 @@ from prune_quant_baseline.quant.masquant import (
     build_train_command,
     _patch_decoder_forward_compat,
     _patch_int_qwen_vl_layer_logger,
+    _patch_masquant_attention_runtime_compat,
     patch_custom_dataset_paths,
     patch_masquant_qwen2_vl_quant_support,
     patch_lmclass_attention_implementation,
@@ -388,3 +389,25 @@ def test_patch_decoder_forward_compat_maps_transformers_cache_keyword() -> None:
     )
 
     assert result == ("hidden", "cache", "mask")
+
+
+def test_patch_masquant_attention_runtime_compat_adds_new_transformers_attrs() -> None:
+    class QuantQwenAttentionV2:
+        head_dim = 128
+        num_heads = 32
+        num_key_value_heads = 8
+
+    class Model:
+        def __init__(self):
+            self.attn = QuantQwenAttentionV2()
+
+        def modules(self):
+            return [self, self.attn]
+
+    model = Model()
+    _patch_masquant_attention_runtime_compat(model)
+
+    assert model.attn.scaling == 128**-0.5
+    assert model.attn.num_key_value_groups == 4
+    assert model.attn.layer_type is None
+    assert model.attn.sliding_window is None

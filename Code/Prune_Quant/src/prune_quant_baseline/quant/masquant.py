@@ -822,6 +822,17 @@ def _patch_int_qwen_vl_layer_logger(root: Path) -> Path | None:
             "    _PQB_Qwen25OmniAttention = None\n"
             "\n"
             "def _prune_quant_baseline_eager_attention_forward(module, *args, **kwargs):\n"
+            "    head_dim = getattr(module, 'head_dim', None)\n"
+            "    if head_dim is not None and not hasattr(module, 'scaling'):\n"
+            "        module.scaling = float(head_dim) ** -0.5\n"
+            "    num_heads = getattr(module, 'num_heads', None)\n"
+            "    num_key_value_heads = getattr(module, 'num_key_value_heads', None)\n"
+            "    if num_heads is not None and num_key_value_heads not in (None, 0) and not hasattr(module, 'num_key_value_groups'):\n"
+            "        module.num_key_value_groups = int(num_heads) // int(num_key_value_heads)\n"
+            "    if not hasattr(module, 'layer_type'):\n"
+            "        module.layer_type = None\n"
+            "    if not hasattr(module, 'sliding_window'):\n"
+            "        module.sliding_window = None\n"
             "    module_name = module.__class__.__name__.lower()\n"
             "    config_name = module.config.__class__.__name__.lower() if hasattr(module, 'config') else ''\n"
             "    candidates = []\n"
@@ -1092,6 +1103,28 @@ def _patch_decoder_forward_compat(model: Any) -> None:
         layer._prune_quant_baseline_forward_compat = True
 
 
+def _patch_masquant_attention_runtime_compat(model: Any) -> None:
+    for module in model.modules():
+        class_name = module.__class__.__name__
+        if "Attention" not in class_name:
+            continue
+        head_dim = getattr(module, "head_dim", None)
+        if head_dim is not None and not hasattr(module, "scaling"):
+            module.scaling = float(head_dim) ** -0.5
+        num_heads = getattr(module, "num_heads", None)
+        num_key_value_heads = getattr(module, "num_key_value_heads", None)
+        if (
+            num_heads is not None
+            and num_key_value_heads not in (None, 0)
+            and not hasattr(module, "num_key_value_groups")
+        ):
+            module.num_key_value_groups = int(num_heads) // int(num_key_value_heads)
+        if not hasattr(module, "layer_type"):
+            module.layer_type = None
+        if not hasattr(module, "sliding_window"):
+            module.sliding_window = None
+
+
 def _masquant_cmc_model_type(model_type: str, model_id_or_path: str) -> str:
     if model_type == "qwen2vl" or ("qwen2-vl" in model_id_or_path.lower() and "qwen2.5" not in model_id_or_path.lower()):
         return "qwen2_vl"
@@ -1228,6 +1261,7 @@ def load_masquant_model_and_processor(
                 model = llm.model
                 _restore_attention_types(model, attention_types)
                 _patch_decoder_forward_compat(model)
+                _patch_masquant_attention_runtime_compat(model)
             else:
                 if torch.cuda.is_available():
                     llm.model.to("cuda")
@@ -1239,6 +1273,7 @@ def load_masquant_model_and_processor(
                     low_rank_adapters_path=cmc_low_rank_adapters,
                     args=args,
                 )
+                _patch_masquant_attention_runtime_compat(model)
             processor_kwargs: dict[str, Any] = {
                 "trust_remote_code": True,
                 "local_files_only": local_files_only,
