@@ -280,7 +280,8 @@ def test_patch_int_qwen_vl_layer_logger_defines_warning_once_logger(tmp_path: Pa
     target = root / "models" / "int_qwen_vl_layer.py"
     target.write_text(
         "def forward_sdpa():\n"
-        "    logger.warning_once('falling back')\n",
+        "    logger.warning_once('falling back')\n"
+        "    return super().forward(hidden_states=hidden_states)\n",
         encoding="utf-8",
     )
 
@@ -291,6 +292,8 @@ def test_patch_int_qwen_vl_layer_logger_defines_warning_once_logger(tmp_path: Pa
 
     assert "prune_quant_baseline: define int_qwen_vl_layer logger" in first
     assert "logger = _prune_quant_baseline_hf_logging.get_logger(__name__)" in first
+    assert "prune_quant_baseline: fix int_qwen_vl_layer sdpa attention fallback" in first
+    assert "return _prune_quant_baseline_eager_attention_forward(self,hidden_states=hidden_states)" in first
     assert first == second
     assert target.with_suffix(target.suffix + ".prune_quant_baseline.bak").exists()
 

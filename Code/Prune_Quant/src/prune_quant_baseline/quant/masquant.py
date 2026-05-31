@@ -785,29 +785,88 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
 
 
 def _patch_int_qwen_vl_layer_logger(root: Path) -> Path | None:
-    """Patch MASQuant's Qwen-VL layer module when it calls logger.warning_once."""
+    """Patch MASQuant's Qwen-VL layer module for newer Transformers behavior."""
 
     target = root / "models" / "int_qwen_vl_layer.py"
     if not target.exists():
         return None
     text = target.read_text(encoding="utf-8")
-    marker = "prune_quant_baseline: define int_qwen_vl_layer logger"
-    if marker in text:
-        return target
-    if "logger.warning_once" not in text:
-        return None
-    if re.search(r"^logger\s*=", text, flags=re.MULTILINE):
+    patched = text
+    injections: list[str] = []
+
+    logger_marker = "prune_quant_baseline: define int_qwen_vl_layer logger"
+    if logger_marker not in patched and "logger.warning_once" in patched and not re.search(
+        r"^logger\s*=", patched, flags=re.MULTILINE
+    ):
+        injections.append(
+            f"# {logger_marker}.\n"
+            "from transformers.utils import logging as _prune_quant_baseline_hf_logging\n"
+            "logger = _prune_quant_baseline_hf_logging.get_logger(__name__)\n"
+        )
+
+    sdpa_marker = "prune_quant_baseline: fix int_qwen_vl_layer sdpa attention fallback"
+    if sdpa_marker not in patched and "return super().forward(" in patched:
+        injections.append(
+            f"# {sdpa_marker}.\n"
+            "try:\n"
+            "    from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLAttention as _PQB_Qwen2VLAttention\n"
+            "except Exception:\n"
+            "    _PQB_Qwen2VLAttention = None\n"
+            "try:\n"
+            "    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLAttention as _PQB_Qwen25VLAttention\n"
+            "except Exception:\n"
+            "    _PQB_Qwen25VLAttention = None\n"
+            "try:\n"
+            "    from transformers.models.qwen2_5_omni.modeling_qwen2_5_omni import Qwen2_5OmniAttention as _PQB_Qwen25OmniAttention\n"
+            "except Exception:\n"
+            "    _PQB_Qwen25OmniAttention = None\n"
+            "\n"
+            "def _prune_quant_baseline_eager_attention_forward(module, *args, **kwargs):\n"
+            "    module_name = module.__class__.__name__.lower()\n"
+            "    config_name = module.config.__class__.__name__.lower() if hasattr(module, 'config') else ''\n"
+            "    candidates = []\n"
+            "    if 'omni' in module_name or 'omni' in config_name:\n"
+            "        candidates.extend([_PQB_Qwen25OmniAttention, _PQB_Qwen25VLAttention, _PQB_Qwen2VLAttention])\n"
+            "    elif '2_5' in module_name or '2_5' in config_name or 'qwen2_5' in module_name or 'qwen2_5' in config_name:\n"
+            "        candidates.extend([_PQB_Qwen25VLAttention, _PQB_Qwen25OmniAttention, _PQB_Qwen2VLAttention])\n"
+            "    else:\n"
+            "        candidates.extend([_PQB_Qwen2VLAttention, _PQB_Qwen25VLAttention, _PQB_Qwen25OmniAttention])\n"
+            "    last_error = None\n"
+            "    for attention_cls in candidates:\n"
+            "        if attention_cls is None:\n"
+            "            continue\n"
+            "        try:\n"
+            "            old_attn_impl = getattr(module.config, '_attn_implementation', None) if hasattr(module, 'config') else None\n"
+            "            if hasattr(module, 'config'):\n"
+            "                module.config._attn_implementation = 'eager'\n"
+            "            try:\n"
+            "                result = attention_cls.forward(module, *args, **kwargs)\n"
+            "            finally:\n"
+            "                if old_attn_impl is not None:\n"
+            "                    module.config._attn_implementation = old_attn_impl\n"
+            "            if isinstance(result, tuple) and len(result) == 2:\n"
+            "                return result[0], result[1], None\n"
+            "            return result\n"
+            "        except TypeError as exc:\n"
+            "            last_error = exc\n"
+            "    if last_error is not None:\n"
+            "        raise last_error\n"
+            "    raise RuntimeError('No compatible Transformers eager Qwen-VL attention class is available.')\n"
+        )
+        patched = patched.replace(
+            "return super().forward(",
+            "return _prune_quant_baseline_eager_attention_forward(self,",
+        )
+
+    if patched == text and not injections:
         return None
 
-    injection = (
-        f"# {marker}.\n"
-        "from transformers.utils import logging as _prune_quant_baseline_hf_logging\n"
-        "logger = _prune_quant_baseline_hf_logging.get_logger(__name__)\n\n"
-    )
     backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
     if not backup.exists():
         backup.write_text(text, encoding="utf-8")
-    target.write_text(injection + text, encoding="utf-8")
+    if injections:
+        patched = "\n".join(injections) + "\n\n" + patched
+    target.write_text(patched, encoding="utf-8")
     return target
 
 
