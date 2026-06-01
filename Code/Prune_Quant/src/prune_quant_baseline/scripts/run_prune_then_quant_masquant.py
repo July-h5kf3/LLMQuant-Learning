@@ -37,8 +37,9 @@ from prune_quant_baseline.scripts.run_infer_pruned import (
     _read_jsonl,
     _resolve_processor_pixels,
     _score_gae_oracle,
+    _score_gae_quant_joint,
 )
-from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner
+from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, QuantJointGAEPruner
 
 
 LOGGER = get_logger(__name__)
@@ -73,8 +74,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retention-ratio", type=float, default=0.5)
     parser.add_argument("--min-keep", type=int, default=1)
     parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--pruner", choices=["gae_oracle", "gae_quant_joint"], default="gae_oracle")
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--gae-per-token", choices=["true", "false"], default="true")
+    parser.add_argument("--gae-quant-lambda", type=float, default=1.0)
+    parser.add_argument("--gae-quant-method", choices=["rtn"], default="rtn")
+    parser.add_argument("--rtn-bits", type=int, default=4)
+    parser.add_argument("--rtn-group-size", type=int, default=0)
     parser.add_argument("--dataset-type", default="text-vision")
     parser.add_argument("--nsamples", type=int, default=128)
     parser.add_argument("--batch-size", type=int, default=1)
@@ -331,7 +337,7 @@ def prepare_pruned_calibration_artifacts(args: argparse.Namespace, config: MASQu
     )
     model.eval()
     adapter = _make_adapter(args.model_type)
-    pruner = GAEOraclePruner()
+    pruner = QuantJointGAEPruner(quant_lambda=args.gae_quant_lambda) if args.pruner == "gae_quant_joint" else GAEOraclePruner()
     collector = None if args.skip_act_scale_collection else ActivationScaleCollector(model)
     if collector is not None:
         collector.install()
@@ -357,15 +363,29 @@ def prepare_pruned_calibration_artifacts(args: argparse.Namespace, config: MASQu
                     raise ValueError("GAE calibration requires sample answers or --gae-answer-source generated.")
 
                 with torch.enable_grad():
-                    scores = _score_gae_oracle(
-                        model=model,
-                        processor=processor,
-                        adapter=adapter,
-                        pruner=pruner,
-                        sample=sample,
-                        answer=answer,
-                        per_token=args.gae_per_token == "true",
-                    )
+                    if isinstance(pruner, QuantJointGAEPruner):
+                        scores = _score_gae_quant_joint(
+                            model=model,
+                            processor=processor,
+                            adapter=adapter,
+                            pruner=pruner,
+                            sample=sample,
+                            answer=answer,
+                            per_token=args.gae_per_token == "true",
+                            quant_method=args.gae_quant_method,
+                            rtn_bits=args.rtn_bits,
+                            rtn_group_size=args.rtn_group_size,
+                        )
+                    else:
+                        scores = _score_gae_oracle(
+                            model=model,
+                            processor=processor,
+                            adapter=adapter,
+                            pruner=pruner,
+                            sample=sample,
+                            answer=answer,
+                            per_token=args.gae_per_token == "true",
+                        )
                 pruned_inputs, before, after = _build_pruned_generation_inputs(
                     model=model,
                     adapter=adapter,
@@ -373,6 +393,7 @@ def prepare_pruned_calibration_artifacts(args: argparse.Namespace, config: MASQu
                     scores=scores,
                     retention_ratio=args.retention_ratio,
                     min_keep=args.min_keep,
+                    score_mode="drop" if isinstance(pruner, QuantJointGAEPruner) else "keep",
                 )
             if collector is not None:
                 forward_inputs = _forward_inputs_for_scale_collection(pruned_inputs)
@@ -382,7 +403,9 @@ def prepare_pruned_calibration_artifacts(args: argparse.Namespace, config: MASQu
             metadata_records.append(
                 {
                     "id": sample.get("id", str(row_idx)),
+                    "pruner": args.pruner,
                     "retention_ratio": args.retention_ratio,
+                    "score_mode": "drop" if isinstance(pruner, QuantJointGAEPruner) else "keep",
                     "num_visual_tokens_before": before,
                     "num_visual_tokens_after": after,
                     "cache_file": str(config.cache_file),
@@ -428,7 +451,7 @@ def run_pruned_masquant_inference(args: argparse.Namespace, config: MASQuantRunC
         "--output-jsonl",
         args.output_jsonl,
         "--pruner",
-        "gae_oracle",
+        args.pruner,
         "--retention-ratio",
         str(args.retention_ratio),
         "--min-keep",
@@ -459,6 +482,14 @@ def run_pruned_masquant_inference(args: argparse.Namespace, config: MASQuantRunC
         args.gae_answer_source,
         "--gae-per-token",
         args.gae_per_token,
+        "--gae-quant-lambda",
+        str(args.gae_quant_lambda),
+        "--gae-quant-method",
+        args.gae_quant_method,
+        "--rtn-bits",
+        str(args.rtn_bits),
+        "--rtn-group-size",
+        str(args.rtn_group_size),
     ]
     if resume is not None:
         argv.extend(["--masquant-resume", resume])

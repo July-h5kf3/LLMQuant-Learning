@@ -20,6 +20,7 @@ class Qwen2VLMASQuantPseudo(Qwen2VLPrunedGAE):
         masquant_cmc_rank: float = 0.2,
         masquant_cmc_quant_cmc: int = 0,
         retention_ratio: float = 1.0,
+        pruner: str = "gae_oracle",
         gae_score_disable_masquant_fake_quant: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -35,6 +36,7 @@ class Qwen2VLMASQuantPseudo(Qwen2VLPrunedGAE):
             masquant_cmc_rank=masquant_cmc_rank,
             masquant_cmc_quant_cmc=masquant_cmc_quant_cmc,
             retention_ratio=retention_ratio,
+            pruner=pruner,
             gae_score_disable_masquant_fake_quant=gae_score_disable_masquant_fake_quant,
             **kwargs,
         )

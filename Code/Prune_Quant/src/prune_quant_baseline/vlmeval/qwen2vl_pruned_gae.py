@@ -11,7 +11,7 @@ from vlmeval.vlm.base import BaseModel
 from vlmeval.vlm.qwen2_vl.prompt import Qwen2VLPromptMixin
 
 from prune_quant_baseline.models.qwen2vl_hf import Qwen2VLHFAdapter
-from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner
+from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, QuantJointGAEPruner
 from prune_quant_baseline.quant.loaders import load_model_and_processor
 from prune_quant_baseline.scripts.run_infer_pruned import (
     _build_pruned_generation_inputs,
@@ -19,6 +19,7 @@ from prune_quant_baseline.scripts.run_infer_pruned import (
     _generate_vanilla,
     _move_inputs_to_model_device,
     _score_gae_oracle,
+    _score_gae_quant_joint,
     _visual_tokens_to_pixels,
 )
 
@@ -97,8 +98,13 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         max_new_tokens: int = 16,
         retention_ratio: float = 0.5,
         min_keep: int = 1,
+        pruner: str = "gae_oracle",
         gae_answer_source: str = "generated",
         gae_per_token: bool = False,
+        gae_quant_lambda: float = 1.0,
+        gae_quant_method: str = "rtn",
+        rtn_bits: int = 4,
+        rtn_group_size: int = 0,
         attn_implementation: str = "eager",
         processor_use_fast: bool | None = None,
         masquant_root: str | None = None,
@@ -135,8 +141,13 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         self.max_new_tokens = int(max_new_tokens)
         self.retention_ratio = float(retention_ratio)
         self.min_keep = int(min_keep)
+        self.pruner_name = pruner
         self.gae_answer_source = gae_answer_source
         self.gae_per_token = _bool_value(gae_per_token)
+        self.gae_quant_lambda = float(gae_quant_lambda)
+        self.gae_quant_method = gae_quant_method
+        self.rtn_bits = int(rtn_bits)
+        self.rtn_group_size = int(rtn_group_size)
         self.use_custom_prompt_flag = _bool_value(use_custom_prompt)
         self.system_prompt = system_prompt
         self.gae_score_disable_masquant_fake_quant = _bool_value(gae_score_disable_masquant_fake_quant)
@@ -179,7 +190,12 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         )
         self.model.eval()
         self._pq_adapter = Qwen2VLHFAdapter()
-        self._pq_pruner = GAEOraclePruner()
+        if self.pruner_name == "gae_oracle":
+            self._pq_pruner = GAEOraclePruner()
+        elif self.pruner_name == "gae_quant_joint":
+            self._pq_pruner = QuantJointGAEPruner(quant_lambda=self.gae_quant_lambda)
+        else:
+            raise ValueError("pruner must be one of: gae_oracle, gae_quant_joint.")
 
     def use_custom_prompt(self, dataset: str) -> bool:
         return self.use_custom_prompt_flag
@@ -251,15 +267,29 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
         try:
             with torch.enable_grad():
                 with score_context:
-                    scores = _score_gae_oracle(
-                        model=self.model,
-                        processor=self.processor,
-                        adapter=self._pq_adapter,
-                        pruner=self._pq_pruner,
-                        sample=sample,
-                        answer=sample["answer"],
-                        per_token=self.gae_per_token,
-                    )
+                    if isinstance(self._pq_pruner, QuantJointGAEPruner):
+                        scores = _score_gae_quant_joint(
+                            model=self.model,
+                            processor=self.processor,
+                            adapter=self._pq_adapter,
+                            pruner=self._pq_pruner,
+                            sample=sample,
+                            answer=sample["answer"],
+                            per_token=self.gae_per_token,
+                            quant_method=self.gae_quant_method,
+                            rtn_bits=self.rtn_bits,
+                            rtn_group_size=self.rtn_group_size,
+                        )
+                    else:
+                        scores = _score_gae_oracle(
+                            model=self.model,
+                            processor=self.processor,
+                            adapter=self._pq_adapter,
+                            pruner=self._pq_pruner,
+                            sample=sample,
+                            answer=sample["answer"],
+                            per_token=self.gae_per_token,
+                        )
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
             if self.allow_vanilla_fallback:
@@ -275,6 +305,7 @@ class Qwen2VLPrunedGAE(Qwen2VLPromptMixin, BaseModel):
             scores=scores,
             retention_ratio=self.retention_ratio,
             min_keep=self.min_keep,
+            score_mode="drop" if isinstance(self._pq_pruner, QuantJointGAEPruner) else "keep",
         )
         response = _generate_from_pruned_inputs(
             model=self.model,

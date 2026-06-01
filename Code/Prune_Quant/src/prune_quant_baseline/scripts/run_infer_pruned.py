@@ -10,6 +10,7 @@ from prune_quant_baseline.models.llava_onevision_hf import LlavaOneVisionHFAdapt
 from prune_quant_baseline.models.qwen2vl_hf import Qwen2VLHFAdapter
 from prune_quant_baseline.pruners.gae_oracle import (
     GAEOraclePruner,
+    QuantJointGAEPruner,
     compute_answer_logprob_target,
     compute_answer_token_logprobs,
     normalize_relevance_scores,
@@ -19,9 +20,11 @@ from prune_quant_baseline.pruners.learned_compressor import LearnedCompressorPru
 from prune_quant_baseline.pruners.token_gather import (
     build_keep_indices,
     gather_sequence_tensors,
+    select_visual_tokens_by_drop_scores,
     select_topk_visual_tokens,
 )
 from prune_quant_baseline.quant.loaders import load_model_and_processor
+from prune_quant_baseline.quant.rtn import rtn_fake_quant_linear_context
 
 
 LOGGER = get_logger(__name__)
@@ -34,7 +37,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-path")
     parser.add_argument("--input-jsonl")
     parser.add_argument("--output-jsonl")
-    parser.add_argument("--pruner", choices=["attention_proxy", "gae_oracle", "learned_compressor"])
+    parser.add_argument("--pruner", choices=["attention_proxy", "gae_oracle", "gae_quant_joint", "learned_compressor"])
     parser.add_argument("--retention-ratio", type=float)
     parser.add_argument("--min-keep", type=int)
     parser.add_argument("--quant-method", choices=["none", "bnb4", "bnb8", "gptq", "awq", "masquant"])
@@ -63,6 +66,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--processor-max-visual-tokens", type=int)
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--gae-per-token", choices=["true", "false"], default="true")
+    parser.add_argument("--gae-quant-lambda", type=float)
+    parser.add_argument("--gae-quant-method", choices=["rtn"])
+    parser.add_argument("--rtn-bits", type=int)
+    parser.add_argument("--rtn-group-size", type=int)
     parser.add_argument("--log-oracle-replay", action="store_true")
     parser.add_argument("--compressor-checkpoint")
     parser.add_argument("--allow-vanilla-fallback", action="store_true")
@@ -135,6 +142,10 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "processor_max_pixels": processor_max_pixels,
         "gae_answer_source": args.gae_answer_source,
         "gae_per_token": args.gae_per_token == "true",
+        "gae_quant_lambda": args.gae_quant_lambda if args.gae_quant_lambda is not None else pruning.get("quant_lambda", 1.0),
+        "gae_quant_method": args.gae_quant_method or pruning.get("quant_method", "rtn"),
+        "rtn_bits": args.rtn_bits if args.rtn_bits is not None else pruning.get("rtn_bits", 4),
+        "rtn_group_size": args.rtn_group_size if args.rtn_group_size is not None else pruning.get("rtn_group_size", 0),
         "log_oracle_replay": args.log_oracle_replay,
         "compressor_checkpoint": args.compressor_checkpoint or pruning.get("compressor_checkpoint"),
         "allow_vanilla_fallback": args.allow_vanilla_fallback,
@@ -151,11 +162,13 @@ def _make_adapter(model_type: str):
     raise ValueError("model_type must be one of: llava_onevision, qwen2vl, qwen2_5_vl.")
 
 
-def _make_pruner(name: str, *, checkpoint_path: str | None = None):
+def _make_pruner(name: str, *, checkpoint_path: str | None = None, quant_lambda: float = 1.0):
     if name == "attention_proxy":
         return AttentionProxyPruner()
     if name == "gae_oracle":
         return GAEOraclePruner()
+    if name == "gae_quant_joint":
+        return QuantJointGAEPruner(quant_lambda=quant_lambda)
     if name == "learned_compressor":
         if not checkpoint_path:
             raise ValueError("learned_compressor requires --compressor-checkpoint.")
@@ -392,6 +405,7 @@ def _build_pruned_generation_inputs(
     scores: Any,
     retention_ratio: float,
     min_keep: int,
+    score_mode: str = "keep",
 ) -> tuple[dict[str, Any], int, int]:
     import torch
 
@@ -400,12 +414,23 @@ def _build_pruned_generation_inputs(
         raise ValueError(
             f"Score count {scores.numel()} does not match visual token count {meta.visual_indices.numel()}."
         )
-    kept_visual = select_topk_visual_tokens(
-        meta.visual_indices,
-        scores.to(meta.visual_indices.device),
-        retention_ratio=retention_ratio,
-        min_keep=min_keep,
-    )
+    scores = scores.to(meta.visual_indices.device)
+    if score_mode == "keep":
+        kept_visual = select_topk_visual_tokens(
+            meta.visual_indices,
+            scores,
+            retention_ratio=retention_ratio,
+            min_keep=min_keep,
+        )
+    elif score_mode == "drop":
+        kept_visual = select_visual_tokens_by_drop_scores(
+            meta.visual_indices,
+            scores,
+            retention_ratio=retention_ratio,
+            min_keep=min_keep,
+        )
+    else:
+        raise ValueError("score_mode must be either 'keep' or 'drop'.")
     if kept_visual.numel() == meta.visual_indices.numel():
         return inputs, int(meta.visual_indices.numel()), int(kept_visual.numel())
     keep_indices = build_keep_indices(
@@ -525,6 +550,116 @@ def _score_gae_oracle(
     return scores
 
 
+def _score_gae_quant_joint(
+    *,
+    model: Any,
+    processor: Any,
+    adapter: Any,
+    pruner: QuantJointGAEPruner,
+    sample: dict[str, Any],
+    answer: str,
+    per_token: bool = True,
+    quant_method: str = "rtn",
+    rtn_bits: int = 4,
+    rtn_group_size: int = 0,
+) -> Any:
+    import torch
+
+    if quant_method != "rtn":
+        raise ValueError("Quant-joint GAE currently supports quant_method='rtn' only.")
+
+    _freeze_parameters(model)
+    device = next(model.parameters()).device
+    teacher_inputs, answer_start = adapter.prepare_teacher_forcing_inputs(processor, sample, answer, device=device)
+    teacher_meta = adapter.get_visual_token_meta(model, teacher_inputs)
+
+    with torch.no_grad():
+        base_inputs_embeds = adapter.build_inputs_embeds(model, teacher_inputs)
+        position_ids = adapter.build_position_ids(model, teacher_inputs)
+
+    def forward_original_with_retained_attentions():
+        inputs_embeds = base_inputs_embeds.detach().requires_grad_(True)
+        model.zero_grad(set_to_none=True)
+        outputs = model(
+            inputs_embeds=inputs_embeds,
+            attention_mask=teacher_inputs.get("attention_mask"),
+            position_ids=position_ids,
+            output_attentions=True,
+            use_cache=False,
+        )
+        if outputs.attentions is None:
+            raise ValueError("Model did not return attentions; use attn_implementation='eager'.")
+        for attn in outputs.attentions:
+            if attn is not None and attn.requires_grad:
+                attn.retain_grad()
+        return outputs
+
+    def compute_quantized_attentions() -> tuple[Any, ...]:
+        with torch.no_grad():
+            with rtn_fake_quant_linear_context(model, bits=rtn_bits, group_size=rtn_group_size):
+                outputs = model(
+                    inputs_embeds=base_inputs_embeds.detach(),
+                    attention_mask=teacher_inputs.get("attention_mask"),
+                    position_ids=position_ids,
+                    output_attentions=True,
+                    use_cache=False,
+                )
+        if outputs.attentions is None:
+            raise ValueError("RTN scoring forward did not return attentions; use attn_implementation='eager'.")
+        return tuple(attn.detach().cpu() if attn is not None else None for attn in outputs.attentions)
+
+    def clear_attention_grads(attentions: Any) -> None:
+        for attn in attentions:
+            if attn is not None:
+                attn.grad = None
+
+    quantized_attentions = compute_quantized_attentions()
+    if per_token:
+        outputs = forward_original_with_retained_attentions()
+        token_logprobs, query_indices = compute_answer_token_logprobs(
+            logits=outputs.logits,
+            input_ids=teacher_inputs["input_ids"],
+            answer_start=answer_start,
+        )
+        if token_logprobs.numel() == 0:
+            raise ValueError("Quant-joint GAE requires at least one answer token.")
+        token_components: list[dict[str, torch.Tensor]] = []
+        for token_logprob, query_idx in zip(token_logprobs, query_indices):
+            model.zero_grad(set_to_none=True)
+            clear_attention_grads(outputs.attentions)
+            token_logprob.backward(retain_graph=True)
+            token_components.append(
+                pruner.score_components(
+                    attentions=outputs.attentions,
+                    quantized_attentions=quantized_attentions,
+                    meta=teacher_meta,
+                    query_indices=query_idx.view(1),
+                    normalize=False,
+                )
+            )
+        c_drop = normalize_relevance_scores(torch.stack([item["c_drop"] for item in token_components], dim=0).mean(dim=0))
+        c_quant = normalize_relevance_scores(
+            torch.stack([item["c_quant"] for item in token_components], dim=0).mean(dim=0)
+        )
+        scores = pruner.quant_lambda * c_quant - c_drop
+    else:
+        outputs = forward_original_with_retained_attentions()
+        target, query_indices = compute_answer_logprob_target(
+            logits=outputs.logits,
+            input_ids=teacher_inputs["input_ids"],
+            answer_start=answer_start,
+        )
+        target.backward()
+        scores = pruner.score(
+            attentions=outputs.attentions,
+            quantized_attentions=quantized_attentions,
+            meta=teacher_meta,
+            query_indices=query_indices,
+        )
+    model.zero_grad(set_to_none=True)
+    return scores.detach()
+
+
 def _generate_from_inputs(
     *,
     model: Any,
@@ -578,7 +713,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     model.eval()
     adapter = _make_adapter(cfg["model_type"])
-    pruner = _make_pruner(cfg["pruner"], checkpoint_path=cfg["compressor_checkpoint"])
+    pruner = _make_pruner(
+        cfg["pruner"],
+        checkpoint_path=cfg["compressor_checkpoint"],
+        quant_lambda=float(cfg["gae_quant_lambda"]),
+    )
 
     output_path = Path(cfg["output_jsonl"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -600,6 +739,26 @@ def main(argv: Sequence[str] | None = None) -> None:
                 num_visual_tokens_before = int(meta.visual_indices.numel())
                 if isinstance(pruner, (AttentionProxyPruner, LearnedCompressorPruner)):
                     scores = _score_attention_proxy(model, pruner, inputs, meta)
+                elif isinstance(pruner, QuantJointGAEPruner):
+                    answer = str(sample.get("answer") or "").strip()
+                    if cfg["gae_answer_source"] == "generated" or not answer:
+                        if cfg["log_oracle_replay"]:
+                            LOGGER.info("Generating quant-joint replay answer for sample %s.", sample.get("id", row_idx))
+                        answer = _generate_vanilla(model, processor, inputs, cfg["max_new_tokens"])
+                    if not answer:
+                        raise ValueError("Quant-joint GAE requires a non-empty sample answer or generated answer.")
+                    scores = _score_gae_quant_joint(
+                        model=model,
+                        processor=processor,
+                        adapter=adapter,
+                        pruner=pruner,
+                        sample=sample,
+                        answer=answer,
+                        per_token=bool(cfg["gae_per_token"]),
+                        quant_method=str(cfg["gae_quant_method"]),
+                        rtn_bits=int(cfg["rtn_bits"]),
+                        rtn_group_size=int(cfg["rtn_group_size"]),
+                    )
                 elif isinstance(pruner, GAEOraclePruner):
                     answer = str(sample.get("answer") or "").strip()
                     if cfg["gae_answer_source"] == "generated" or not answer:
@@ -626,6 +785,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     scores=scores,
                     retention_ratio=float(cfg["retention_ratio"]),
                     min_keep=int(cfg["min_keep"]),
+                    score_mode="drop" if isinstance(pruner, QuantJointGAEPruner) else "keep",
                 )
                 prediction = _generate_from_inputs(
                     model=model,
@@ -649,6 +809,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "num_visual_tokens_after": num_visual_tokens_after,
                 "pruning_applied": pruning_applied,
                 "quant_method": cfg["quant_method"],
+                "pruner": cfg["pruner"],
+                "score_mode": "drop" if isinstance(pruner, QuantJointGAEPruner) else "keep",
                 "model_type": cfg["model_type"],
                 **visual_meta,
             }

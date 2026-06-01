@@ -4,6 +4,7 @@ import torch
 from prune_quant_baseline.pruners.token_gather import (
     build_keep_indices,
     gather_sequence_tensors,
+    select_visual_tokens_by_drop_scores,
     select_topk_visual_tokens,
 )
 from prune_quant_baseline.scripts.run_infer_pruned import _build_pruned_generation_inputs
@@ -23,6 +24,13 @@ def test_retention_ratio_bounds() -> None:
         select_topk_visual_tokens(visual_indices, scores, retention_ratio=0.0)
     kept = select_topk_visual_tokens(visual_indices, scores, retention_ratio=1.0)
     assert kept.tolist() == [1, 3]
+
+
+def test_drop_scores_remove_highest_scores_in_sequence_order() -> None:
+    visual_indices = torch.tensor([2, 4, 6, 8])
+    drop_scores = torch.tensor([0.1, 0.9, 0.2, 0.8])
+    kept = select_visual_tokens_by_drop_scores(visual_indices, drop_scores, retention_ratio=0.5)
+    assert kept.tolist() == [2, 6]
 
 
 def test_build_keep_indices_keeps_non_visual_and_selected_visual() -> None:

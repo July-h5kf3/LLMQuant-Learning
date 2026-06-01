@@ -1,7 +1,7 @@
 import torch
 
 from prune_quant_baseline.core.datatypes import VisualTokenMeta
-from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner
+from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, QuantJointGAEPruner
 
 
 def _attention_with_grad(data: torch.Tensor, grad: torch.Tensor) -> torch.Tensor:
@@ -46,3 +46,25 @@ def test_gae_oracle_normalizes_scores() -> None:
     )
 
     assert torch.allclose(scores, torch.tensor([0.25, 0.75]))
+
+
+def test_quant_joint_gae_uses_attention_delta_and_drop_score() -> None:
+    attn_data = torch.zeros(1, 1, 3, 3)
+    attn_data[0, 0, 2, 0] = 1.0
+    attn_data[0, 0, 2, 1] = 3.0
+    quant_attn = attn_data.clone()
+    quant_attn[0, 0, 2, 0] = 0.5
+    quant_attn[0, 0, 2, 1] = 2.0
+    attn = _attention_with_grad(attn_data, torch.ones_like(attn_data))
+    meta = VisualTokenMeta(visual_indices=torch.tensor([0, 1]), text_indices=torch.tensor([2]))
+
+    components = QuantJointGAEPruner(quant_lambda=2.0, normalize=False).score_components(
+        attentions=[attn],
+        quantized_attentions=[quant_attn],
+        meta=meta,
+        query_indices=torch.tensor([2]),
+    )
+
+    assert torch.allclose(components["c_drop"], torch.tensor([1.0, 3.0]))
+    assert torch.allclose(components["c_quant"], torch.tensor([0.5, 1.0]))
+    assert torch.allclose(components["joint"], torch.tensor([0.0, -1.0]))

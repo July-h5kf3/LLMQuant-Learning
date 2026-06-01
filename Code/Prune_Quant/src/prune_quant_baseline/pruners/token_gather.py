@@ -37,6 +37,43 @@ def select_topk_visual_tokens(
     return torch.sort(kept).values.to(device=visual_indices.device, dtype=torch.long)
 
 
+def select_visual_tokens_by_drop_scores(
+    visual_indices: torch.LongTensor,
+    drop_scores: torch.Tensor,
+    retention_ratio: float,
+    min_keep: int = 1,
+) -> torch.LongTensor:
+    """Drop the highest-scoring visual tokens and return kept global indices in sequence order."""
+
+    if not (0 < retention_ratio <= 1):
+        raise ValueError("retention_ratio must be in the range (0, 1].")
+    if min_keep < 0:
+        raise ValueError("min_keep must be non-negative.")
+    if visual_indices.dim() != 1:
+        raise ValueError(f"visual_indices must be 1D, got shape {tuple(visual_indices.shape)}.")
+    if drop_scores.dim() != 1:
+        raise ValueError(f"drop_scores must be 1D, got shape {tuple(drop_scores.shape)}.")
+    if visual_indices.numel() == 0:
+        raise ValueError("visual_indices is empty; cannot select visual tokens.")
+    if drop_scores.numel() != visual_indices.numel():
+        raise ValueError(
+            f"drop_scores length ({drop_scores.numel()}) must match visual_indices length ({visual_indices.numel()})."
+        )
+
+    num_visual = visual_indices.numel()
+    keep_count = max(min_keep, math.ceil(num_visual * retention_ratio))
+    keep_count = min(keep_count, num_visual)
+    drop_count = num_visual - keep_count
+    if drop_count <= 0:
+        return visual_indices.to(dtype=torch.long)
+
+    drop_local = torch.topk(drop_scores, k=drop_count, largest=True, sorted=False).indices
+    keep_mask = torch.ones(num_visual, device=drop_scores.device, dtype=torch.bool)
+    keep_mask[drop_local] = False
+    kept = visual_indices.to(device=drop_scores.device).masked_select(keep_mask)
+    return torch.sort(kept).values.to(device=visual_indices.device, dtype=torch.long)
+
+
 def build_keep_indices(
     seq_len: int,
     visual_indices: torch.LongTensor,
