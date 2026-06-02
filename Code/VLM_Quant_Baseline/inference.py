@@ -78,8 +78,8 @@ def parse_quant_infer_args() -> argparse.Namespace:
     parser.add_argument("--max_new_tokens", default=256, type=int)
     parser.add_argument("--temperature", default=0.2, type=float)
     parser.add_argument("--do_sample", action="store_true")
-    parser.add_argument("--inference_engine", default="hf", choices=["hf", "vllm"],
-                        help="Inference backend. Use 'vllm' for real WNA16/packed-weight inference.")
+    parser.add_argument("--inference_engine", default="hf", choices=["hf", "vllm", "trtllm"],
+                        help="Inference backend. Use 'trtllm' for TensorRT-LLM real-quant smoke tests.")
     parser.add_argument("--vllm_model_path", default=None, type=str,
                         help="Path or HF id of a vLLM-loadable quantized checkpoint. "
                              "Defaults to model_args.pretrained.")
@@ -93,6 +93,25 @@ def parse_quant_infer_args() -> argparse.Namespace:
     parser.add_argument("--vllm_max_num_seqs", default=8, type=int)
     parser.add_argument("--vllm_trust_remote_code", action="store_true")
     parser.add_argument("--vllm_enforce_eager", action="store_true")
+    parser.add_argument("--trtllm_model_path", default=None, type=str)
+    parser.add_argument("--trtllm_tokenizer_path", default=None, type=str)
+    parser.add_argument("--trtllm_model_type", default=None, type=str)
+    parser.add_argument("--trtllm_backend", default="engine", choices=["engine", "pytorch"])
+    parser.add_argument("--trtllm_dtype", default="auto", type=str)
+    parser.add_argument("--trtllm_tensor_parallel_size", default=1, type=int)
+    parser.add_argument("--trtllm_pipeline_parallel_size", default=1, type=int)
+    parser.add_argument("--trtllm_max_batch_size", default=8, type=int)
+    parser.add_argument("--trtllm_max_num_tokens", default=8192, type=int)
+    parser.add_argument("--trtllm_max_multimodal_len", default=1296, type=int)
+    parser.add_argument("--trtllm_max_seq_len", default=None, type=int)
+    parser.add_argument("--trtllm_max_input_len", default=None, type=int)
+    parser.add_argument("--trtllm_kv_cache_free_gpu_memory_fraction", default=0.9, type=float)
+    parser.add_argument("--trtllm_trust_remote_code", action="store_true")
+    parser.add_argument("--trtllm_image_data_format", default="pil", choices=["pil", "pt"])
+    parser.add_argument("--trtllm_engine_dir", default=None, type=str)
+    parser.add_argument("--trtllm_workspace", default=None, type=str)
+    parser.add_argument("--trtllm_enable_build_cache", action="store_true")
+    parser.add_argument("--trtllm_fast_build", action="store_true")
 
     
     args = parser.parse_args()
@@ -128,6 +147,43 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
     # here we load MLLMs outside of the evaluator.
     if args.model_args is None:
         args.model_args = ""
+
+    if args.inference_engine == "trtllm":
+        if not args.infer_pairs or not args.save_path:
+            raise ValueError("--inference_engine trtllm requires --infer_pairs and --save_path")
+        if not args.trtllm_model_path:
+            raise ValueError("--inference_engine trtllm requires --trtllm_model_path")
+        if not args.trtllm_tokenizer_path:
+            raise ValueError(
+                "--inference_engine trtllm requires --trtllm_tokenizer_path "
+                "pointing to the original HF VLM checkpoint."
+            )
+        if args.w_bit == 3:
+            raise ValueError(
+                "TensorRT-LLM does not currently advertise W3A16 engine support. "
+                "Use W4A16/W4A8 for TRT-LLM smoke tests."
+            )
+        if not (args.w_bit == 4 and args.a_bit in (8, 16)):
+            raise ValueError("The TensorRT-LLM smoke path is wired for W4A16 and W4A8.")
+        quant_meta = build_quant_meta(args)
+        quant_meta.update({
+            "real_quant": True,
+            "engine": "trtllm",
+            "trtllm_model_path": args.trtllm_model_path,
+            "trtllm_backend": args.trtllm_backend,
+        })
+        run_trtllm_inference(
+            arch=args.model,
+            infer_pairs=args.infer_pairs,
+            save_path=args.save_path,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            do_sample=args.do_sample,
+            model_args_str=args.model_args,
+            quant_meta=quant_meta,
+            args=args,
+        )
+        return
 
     if args.inference_engine == "vllm":
         if not args.infer_pairs or not args.save_path:
@@ -499,6 +555,92 @@ def run_vllm_inference(
     with open(save_path, "w", encoding="utf-8") as f:
         json.dump(export, f, ensure_ascii=False, indent=2)
     print(f"[OK] Saved {len(outputs)} vLLM results to: {save_path}")
+
+
+def run_trtllm_inference(
+    arch: str,
+    infer_pairs: str,
+    save_path: str,
+    max_new_tokens=256,
+    temperature=0.2,
+    do_sample=False,
+    model_args_str: str = "",
+    quant_meta: Dict[str, Any] = None,
+    args=None,
+):
+    from qmllm.trtllm_eval import TRTLLMRealQuantModel
+
+    lm = TRTLLMRealQuantModel(
+        pretrained=args.trtllm_model_path,
+        tokenizer_path=args.trtllm_tokenizer_path,
+        model_type=args.trtllm_model_type,
+        backend=args.trtllm_backend,
+        dtype=args.trtllm_dtype,
+        tensor_parallel_size=args.trtllm_tensor_parallel_size,
+        pipeline_parallel_size=args.trtllm_pipeline_parallel_size,
+        max_batch_size=args.trtllm_max_batch_size,
+        max_num_tokens=args.trtllm_max_num_tokens,
+        max_multimodal_len=args.trtllm_max_multimodal_len,
+        max_seq_len=args.trtllm_max_seq_len,
+        max_input_len=args.trtllm_max_input_len,
+        kv_cache_free_gpu_memory_fraction=args.trtllm_kv_cache_free_gpu_memory_fraction,
+        trust_remote_code=args.trtllm_trust_remote_code,
+        image_data_format=args.trtllm_image_data_format,
+        engine_dir=args.trtllm_engine_dir,
+        workspace=args.trtllm_workspace,
+        enable_build_cache=args.trtllm_enable_build_cache,
+        fast_build=args.trtllm_fast_build,
+        batch_size=args.batch_size,
+    )
+
+    pairs = load_pairs(infer_pairs)
+    sampling_kwargs = {
+        "temperature": temperature if do_sample else 0.0,
+        "max_tokens": max_new_tokens,
+    }
+    sampling_params = lm.SamplingParams(**sampling_kwargs)
+    requests = []
+    item_meta = []
+    for i, item in enumerate(pairs):
+        question = item.get("question", "")
+        img_paths = ensure_list_images(item.get("images"))
+        if img_paths:
+            requests.append(lm._load_multimodal_prompt(question, img_paths))
+        else:
+            requests.append({"prompt": lm._apply_text_chat_template(question)})
+        item_meta.append((item.get("id", i), question, img_paths))
+
+    generations = lm._generate(requests, sampling_params)
+    outputs = []
+    for (item_id, q, img_paths), generation in zip(item_meta, generations):
+        text = generation.outputs[0].text.strip() if generation.outputs else ""
+        if text.lower().startswith("assistant"):
+            text = text[len("assistant"):].lstrip(":： \n\t")
+        outputs.append({
+            "id": item_id,
+            "question": q,
+            "images": img_paths,
+            "answer": text,
+        })
+
+    export = {
+        "meta": {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "arch": arch,
+            "model_args": model_args_str,
+            "engine": "trtllm",
+            "quant": quant_meta or {},
+        },
+        "results": outputs,
+    }
+
+    save_dir = os.path.dirname(save_path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+    with open(save_path, "w", encoding="utf-8") as f:
+        json.dump(export, f, ensure_ascii=False, indent=2)
+    print(f"[OK] Saved {len(outputs)} TRT-LLM results to: {save_path}")
+
 
 def pick_language_model(top_model):
     m = top_model

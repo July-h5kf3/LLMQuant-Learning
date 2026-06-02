@@ -15,10 +15,11 @@
 - `main_quant.py`: 量化搜索入口。
 - `main.py`: 评测入口。
 - `inference.py`: 推理示例入口。
-- `REAL_QUANTIZATION.md`: 将 pseudo quant baseline 迁移到真实推理加速后端的设计说明。
+- `REAL_QUANTIZATION.md`: TensorRT-LLM real quant 导出、安装与 lmms-eval 评测说明。
 - `configs/`: 不同模型与量化设置的配置文件。
 - `scripts/run_w3a16_eval.sh`: 使用本机已准备好的权重和样本对比 pseudo W3A16 与 real GPTQ W3A16 推理速度。
-- `scripts/run_qig_w3a16_real_vllm_eval.sh`: 使用 real GPTQ W3A16 checkpoint 和 vLLM 后端运行正式 lmms-eval/QIG 任务。
+- `scripts/run_qig_real_trtllm_eval.sh`: 使用 TensorRT-LLM real quant checkpoint 运行正式 lmms-eval/QIG 任务。
+- `scripts/run_qig_w3a16_real_vllm_eval.sh`: 旧 vLLM W3A16 实验脚本，保留作对照。
 - `qmllm/`: 模型、数据、校准与量化方法实现。
 - `3rdparty/`: 第三方依赖项目说明。
 
@@ -38,7 +39,22 @@ bash scripts/run_w3a16_eval.sh
 
 输出位于 `/root/autodl-tmp/eval/QIG/w3a16_speed/`，每条结果旁边会生成 `.time` 文件记录总耗时。
 
-## Real W3A16 Eval
+## Real Quant TensorRT-LLM Eval
+
+主路径是 `main.py` + lmms-eval + TensorRT-LLM：
+
+```bash
+cd /root/autodl-tmp/LLMQuant-Learning/Code/VLM_Quant_Baseline
+LIMIT=1 TASKS=mmmu_val \
+FP16_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
+REAL_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm \
+W_BIT=4 A_BIT=16 \
+bash scripts/run_qig_real_trtllm_eval.sh
+```
+
+安装、导出 W4A16/W4A8 checkpoint、W3A16 AutoRound fallback 和完整评测命令见 `REAL_QUANTIZATION.md`。
+
+## Legacy Real W3A16 Eval
 
 在 AutoDL 服务器运行正式 lmms-eval 任务：
 

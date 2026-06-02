@@ -293,7 +293,7 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument("--run_process", action="store_true")
     parser.add_argument("--pseudo_quant", action="store_true")
     parser.add_argument("--real_quant", action="store_true")
-    parser.add_argument("--inference_engine", default="hf", choices=["hf", "vllm"])
+    parser.add_argument("--inference_engine", default="hf", choices=["hf", "vllm", "trtllm"])
     parser.add_argument("--vllm_model_path", default=None, type=str)
     parser.add_argument("--vllm_processor_path", default=None, type=str)
     parser.add_argument("--vllm_quantization", default="gptq", type=str)
@@ -304,6 +304,25 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument("--vllm_max_num_seqs", default=8, type=int)
     parser.add_argument("--vllm_trust_remote_code", action="store_true")
     parser.add_argument("--vllm_enforce_eager", action="store_true")
+    parser.add_argument("--trtllm_model_path", default=None, type=str)
+    parser.add_argument("--trtllm_tokenizer_path", default=None, type=str)
+    parser.add_argument("--trtllm_model_type", default=None, type=str)
+    parser.add_argument("--trtllm_backend", default="engine", choices=["engine", "pytorch"])
+    parser.add_argument("--trtllm_dtype", default="auto", type=str)
+    parser.add_argument("--trtllm_tensor_parallel_size", default=1, type=int)
+    parser.add_argument("--trtllm_pipeline_parallel_size", default=1, type=int)
+    parser.add_argument("--trtllm_max_batch_size", default=8, type=int)
+    parser.add_argument("--trtllm_max_num_tokens", default=8192, type=int)
+    parser.add_argument("--trtllm_max_multimodal_len", default=1296, type=int)
+    parser.add_argument("--trtllm_max_seq_len", default=None, type=int)
+    parser.add_argument("--trtllm_max_input_len", default=None, type=int)
+    parser.add_argument("--trtllm_kv_cache_free_gpu_memory_fraction", default=0.9, type=float)
+    parser.add_argument("--trtllm_trust_remote_code", action="store_true")
+    parser.add_argument("--trtllm_image_data_format", default="pil", choices=["pil", "pt"])
+    parser.add_argument("--trtllm_engine_dir", default=None, type=str)
+    parser.add_argument("--trtllm_workspace", default=None, type=str)
+    parser.add_argument("--trtllm_enable_build_cache", action="store_true")
+    parser.add_argument("--trtllm_fast_build", action="store_true")
     # for GPTQ
     parser.add_argument("--percdamp", default=0.01, type=float)
 
@@ -498,7 +517,46 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
     if args.model_args is None:
         args.model_args = ""
     
-    if args.real_quant and args.inference_engine == "vllm":
+    if args.real_quant and args.inference_engine == "trtllm":
+        if not args.trtllm_model_path:
+            raise ValueError("--real_quant --inference_engine trtllm requires --trtllm_model_path")
+        if not args.trtllm_tokenizer_path:
+            raise ValueError(
+                "--real_quant --inference_engine trtllm requires --trtllm_tokenizer_path "
+                "pointing to the original HF VLM checkpoint."
+            )
+        if args.w_bit == 3:
+            raise ValueError(
+                "TensorRT-LLM does not currently advertise W3A16 engine support. "
+                "Use --w_bit 4 with --a_bit 16/8 for TRT-LLM, or run W3A16 through the documented AutoRound fallback."
+            )
+        if not (args.w_bit == 4 and args.a_bit in (8, 16)):
+            raise ValueError("The TensorRT-LLM real-quant path is wired for W4A16 and W4A8.")
+        from qmllm.trtllm_eval import TRTLLMRealQuantModel
+
+        lm = TRTLLMRealQuantModel(
+            pretrained=args.trtllm_model_path,
+            tokenizer_path=args.trtllm_tokenizer_path,
+            model_type=args.trtllm_model_type,
+            backend=args.trtllm_backend,
+            dtype=args.trtllm_dtype,
+            tensor_parallel_size=args.trtllm_tensor_parallel_size,
+            pipeline_parallel_size=args.trtllm_pipeline_parallel_size,
+            max_batch_size=args.trtllm_max_batch_size,
+            max_num_tokens=args.trtllm_max_num_tokens,
+            max_multimodal_len=args.trtllm_max_multimodal_len,
+            max_seq_len=args.trtllm_max_seq_len,
+            max_input_len=args.trtllm_max_input_len,
+            kv_cache_free_gpu_memory_fraction=args.trtllm_kv_cache_free_gpu_memory_fraction,
+            trust_remote_code=args.trtllm_trust_remote_code,
+            image_data_format=args.trtllm_image_data_format,
+            engine_dir=args.trtllm_engine_dir,
+            workspace=args.trtllm_workspace,
+            enable_build_cache=args.trtllm_enable_build_cache,
+            fast_build=args.trtllm_fast_build,
+            batch_size=args.batch_size,
+        )
+    elif args.real_quant and args.inference_engine == "vllm":
         if args.model != "qwen2_vl":
             raise ValueError("The real-quant vLLM eval path currently supports --model qwen2_vl")
         if not args.vllm_model_path:
