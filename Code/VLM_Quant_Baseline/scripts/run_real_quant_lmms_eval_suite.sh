@@ -13,11 +13,10 @@ GEN_KWARGS="${GEN_KWARGS:-temperature=0,max_new_tokens=64}"
 
 FP16_CHECKPOINT="${FP16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct}"
 W3A16_CHECKPOINT="${W3A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq-smoke}"
-W4A16_CHECKPOINT="${W4A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm}"
-W4A8_CHECKPOINT="${W4A8_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A8-trtllm}"
+W4A16_CHECKPOINT="${W4A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-vllm}"
+W4A8_CHECKPOINT="${W4A8_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A8-vllm}"
 
 QIG_CONDA_ENV="${QIG_CONDA_ENV:-QIG}"
-TRTLLM_CONDA_ENV="${TRTLLM_CONDA_ENV:-/root/autodl-tmp/envs/QIG_TRTLLM}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%F %T')" "$*" >&2
@@ -46,8 +45,8 @@ cd "$REPO_ROOT"
 
 require_checkpoint "FP16 processor" "$FP16_CHECKPOINT"
 require_checkpoint "W3A16 vLLM" "$W3A16_CHECKPOINT"
-require_checkpoint "W4A16 TensorRT-LLM" "$W4A16_CHECKPOINT"
-require_checkpoint "W4A8 TensorRT-LLM" "$W4A8_CHECKPOINT"
+require_checkpoint "W4A16 vLLM" "$W4A16_CHECKPOINT"
+require_checkpoint "W4A8 vLLM" "$W4A8_CHECKPOINT"
 
 run_variant \
   w3a16_vllm \
@@ -59,24 +58,26 @@ run_variant \
     bash scripts/run_qig_w3a16_real_vllm_eval.sh
 
 run_variant \
-  w4a16_trtllm \
+  w4a16_vllm \
   env \
-    CONDA_ENV="$TRTLLM_CONDA_ENV" \
+    CONDA_ENV="$QIG_CONDA_ENV" \
     FP16_CHECKPOINT="$FP16_CHECKPOINT" \
     REAL_CHECKPOINT="$W4A16_CHECKPOINT" \
     W_BIT=4 \
     A_BIT=16 \
-    bash scripts/run_qig_real_trtllm_eval.sh
+    VLLM_QUANTIZATION="${W4A16_VLLM_QUANTIZATION:-compressed-tensors}" \
+    bash scripts/run_qig_real_vllm_eval.sh
 
 run_variant \
-  w4a8_trtllm \
+  w4a8_vllm \
   env \
-    CONDA_ENV="$TRTLLM_CONDA_ENV" \
+    CONDA_ENV="$QIG_CONDA_ENV" \
     FP16_CHECKPOINT="$FP16_CHECKPOINT" \
     REAL_CHECKPOINT="$W4A8_CHECKPOINT" \
     W_BIT=4 \
     A_BIT=8 \
-    bash scripts/run_qig_real_trtllm_eval.sh
+    VLLM_QUANTIZATION="${W4A8_VLLM_QUANTIZATION:-compressed-tensors}" \
+    bash scripts/run_qig_real_vllm_eval.sh
 
 python scripts/summarize_lmms_eval_speed.py \
   --run_root "$SUITE_ROOT" \
