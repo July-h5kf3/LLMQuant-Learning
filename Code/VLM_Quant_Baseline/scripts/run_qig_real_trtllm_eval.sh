@@ -30,7 +30,7 @@ TRTLLM_TP_SIZE="${TRTLLM_TP_SIZE:-1}"
 TRTLLM_PP_SIZE="${TRTLLM_PP_SIZE:-1}"
 TRTLLM_MAX_BATCH_SIZE="${TRTLLM_MAX_BATCH_SIZE:-8}"
 TRTLLM_MAX_NUM_TOKENS="${TRTLLM_MAX_NUM_TOKENS:-8192}"
-TRTLLM_MAX_MULTIMODAL_LEN="${TRTLLM_MAX_MULTIMODAL_LEN:-1296}"
+TRTLLM_MAX_MULTIMODAL_LEN="${TRTLLM_MAX_MULTIMODAL_LEN:-$((TRTLLM_MAX_BATCH_SIZE * 324))}"
 TRTLLM_KV_CACHE_FRACTION="${TRTLLM_KV_CACHE_FRACTION:-0.9}"
 TRTLLM_MODEL_TYPE="${TRTLLM_MODEL_TYPE:-}"
 TRTLLM_ENGINE_DIR="${TRTLLM_ENGINE_DIR:-}"
@@ -188,6 +188,16 @@ setup_env() {
     require_path "$INFERENCE_DATA_ROOT"
     require_path "${FP16_CHECKPOINT}/config.json"
     require_path "${REAL_CHECKPOINT}/config.json"
+    if [[ "$TRTLLM_BACKEND" == "engine" && "$MODEL" == "qwen2_vl" ]]; then
+      if [[ -z "$TRTLLM_ENGINE_DIR" ]]; then
+        echo "Qwen2-VL TensorRT engine eval requires TRTLLM_ENGINE_DIR." >&2
+        echo "Build it first with scripts/build_qwen2vl_trtllm_engines.sh." >&2
+        exit 1
+      fi
+      require_path "${TRTLLM_ENGINE_DIR}/vision/config.json"
+      require_path "${TRTLLM_ENGINE_DIR}/vision/model.engine"
+      require_path "${TRTLLM_ENGINE_DIR}/llm/config.json"
+    fi
   fi
 
   if [[ "$DRY_RUN" != "1" ]]; then

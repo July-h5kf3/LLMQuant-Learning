@@ -48,11 +48,12 @@ cd /root/autodl-tmp/LLMQuant-Learning/Code/VLM_Quant_Baseline
 LIMIT=1 TASKS=mmmu_val \
 FP16_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
 REAL_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm \
+TRTLLM_ENGINE_DIR=/root/autodl-fs/trtllm_workspace/Qwen2-VL-7B-Instruct-W4A16-engine \
 W_BIT=4 A_BIT=16 \
 bash scripts/run_qig_real_trtllm_eval.sh
 ```
 
-安装、导出 W4A16/W4A8 checkpoint、W3A16 AutoRound fallback 和完整评测命令见 `REAL_QUANTIZATION.md`。
+安装、导出 W4A16/W4A8 checkpoint、构建 Qwen2-VL multimodal TensorRT engine、W3A16 AutoRound fallback 和完整评测命令见 `REAL_QUANTIZATION.md`。
 
 ## Legacy Real W3A16 Eval
 

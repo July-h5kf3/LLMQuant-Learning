@@ -87,7 +87,7 @@ def write_manifest(args, backend: str, extra=None):
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
 
-def normalize_qwen2_vl_trtllm_text_config(output_dir: Path):
+def normalize_qwen2_vl_trtllm_config(output_dir: Path):
     config_path = output_dir / "config.json"
     if not config_path.exists():
         return False
@@ -106,10 +106,24 @@ def normalize_qwen2_vl_trtllm_text_config(output_dir: Path):
     if not backup_path.exists():
         shutil.copy2(config_path, backup_path)
 
-    config["architecture"] = "Qwen2ForCausalLM"
-    config["architectures"] = ["Qwen2ForCausalLM"]
-    config["model_type"] = "qwen2"
-    config["qwen_type"] = "qwen2"
+    config["architecture"] = "Qwen2VLForConditionalGeneration"
+    config["architectures"] = ["Qwen2VLForConditionalGeneration"]
+    config["model_type"] = "qwen2_vl"
+    config["qwen_type"] = "qwen2_vl"
+    config["position_embedding_type"] = "mrope"
+    config["rotary_base"] = config.get("rotary_base", 1000000.0)
+    config["rotary_embedding_dim"] = config.get(
+        "rotary_embedding_dim",
+        config.get("hidden_size", 3584) // config.get("num_attention_heads", 28),
+    )
+    config["rotary_scaling"] = {
+        "type": "mrope",
+        "mrope_section": config.get("rotary_scaling", {}).get(
+            "mrope_section", [16, 24, 24]
+        ),
+        "rope_theta": config["rotary_base"],
+        "rope_type": "default",
+    }
     config.setdefault("seq_length", config.get("max_position_embeddings", 32768))
     config.pop("decoder", None)
     config.pop("text_config", None)
@@ -165,14 +179,14 @@ def export_trtllm_modelopt(args):
     )
     normalized_config = False
     if args.model == "qwen2_vl":
-        normalized_config = normalize_qwen2_vl_trtllm_text_config(Path(args.output_dir))
+        normalized_config = normalize_qwen2_vl_trtllm_config(Path(args.output_dir))
     write_manifest(args, "trtllm-modelopt", {
         "trtllm_qformat": qformat,
         "block_size": args.awq_block_size,
         "awq_block_size": args.awq_block_size,
         "calib_dataset": args.calib_dataset,
         "calib_size": args.calib_size,
-        "normalized_qwen2_vl_text_config": normalized_config,
+        "normalized_qwen2_vl_config": normalized_config,
     })
 
 

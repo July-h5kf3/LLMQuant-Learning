@@ -1,7 +1,9 @@
 import inspect
+import json
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Union
 
 from PIL import Image
@@ -72,6 +74,19 @@ def _call_with_supported_kwargs(fn, **kwargs):
     return fn(**{key: value for key, value in kwargs.items() if key in parameters})
 
 
+def _load_trtllm_checkpoint_config(path: str) -> Dict[str, Any]:
+    config_path = Path(path) / "config.json"
+    if not config_path.exists():
+        return {}
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _require_file(path: Path, description: str) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing {description}: {path}")
+
+
 class TRTLLMRealQuantModel(lmms):
     """lmms-eval adapter for TensorRT-LLM real-quant multimodal generation."""
 
@@ -112,6 +127,20 @@ class TRTLLMRealQuantModel(lmms):
         self.tokenizer_path = tokenizer_path or pretrained
         inferred_model_type = _load_model_type(self.tokenizer_path, model_type)
         self.model_type = _canonical_model_type(inferred_model_type)
+        self._checkpoint_config = _load_trtllm_checkpoint_config(pretrained)
+        self._checkpoint_model_type = self._checkpoint_config.get("model_type")
+        self._checkpoint_architectures = self._checkpoint_config.get("architectures") or []
+        if (
+            self.model_type == "qwen2_vl"
+            and self._checkpoint_model_type == "qwen2"
+            and "Qwen2ForCausalLM" in self._checkpoint_architectures
+        ):
+            raise ValueError(
+                "This TensorRT-LLM checkpoint is configured as plain qwen2/Qwen2ForCausalLM, "
+                "but the tokenizer_path is Qwen2-VL. That combination silently produces "
+                "garbage because Qwen2-VL requires mRoPE and multimodal prompt-tuning inputs. "
+                "Re-export the checkpoint with qwen2_vl/mRoPE config using quantize_trtllm.py."
+            )
         if not _model_type_supports_default_loader(self.model_type):
             raise ValueError(
                 f"TensorRT-LLM multimodal input support for model_type={self.model_type!r} "
@@ -128,6 +157,8 @@ class TRTLLMRealQuantModel(lmms):
             "generated_tokens": 0,
             "generate_sec": 0.0,
         }
+        self._qwen2vl_runner = None
+        self._qwen2vl_image_size = 504
 
         self._processor = AutoProcessor.from_pretrained(
             self.tokenizer_path,
@@ -156,6 +187,7 @@ class TRTLLMRealQuantModel(lmms):
             from tensorrt_llm.llmapi import SchedulerConfig
             from tensorrt_llm.llmapi import ContextChunkingPolicy
             from tensorrt_llm.inputs import default_multimodal_input_loader
+            from tensorrt_llm.runtime.multimodal_model_runner import MultimodalModelRunner
             from tensorrt_llm.tokenizer import TransformersTokenizer
         except ImportError as exc:
             raise ImportError(
@@ -179,6 +211,17 @@ class TRTLLMRealQuantModel(lmms):
 
         if backend not in {"engine", "pytorch"}:
             raise ValueError("--trtllm_backend must be 'engine' or 'pytorch'")
+
+        if backend == "engine" and self.model_type == "qwen2_vl":
+            self._qwen2vl_runner = self._init_qwen2vl_multimodal_runner(
+                MultimodalModelRunner,
+                engine_dir=engine_dir,
+                max_batch_size=max_batch_size,
+                kv_cache_free_gpu_memory_fraction=kv_cache_free_gpu_memory_fraction,
+                trust_remote_code=trust_remote_code,
+                scheduler_context_chunking_policy=scheduler_context_chunking_policy,
+            )
+            return
 
         kv_cache_config = KvCacheConfig(
             free_gpu_memory_fraction=kv_cache_free_gpu_memory_fraction,
@@ -242,6 +285,71 @@ class TRTLLMRealQuantModel(lmms):
         if engine_dir and hasattr(self.llm, "save"):
             self.llm.save(engine_dir)
 
+    def _init_qwen2vl_multimodal_runner(
+        self,
+        runner_cls,
+        *,
+        engine_dir: Optional[str],
+        max_batch_size: int,
+        kv_cache_free_gpu_memory_fraction: float,
+        trust_remote_code: bool,
+        scheduler_context_chunking_policy: Optional[str],
+    ):
+        if scheduler_context_chunking_policy:
+            raise ValueError(
+                "TensorRT-LLM MultimodalModelRunner does not expose the LLM API "
+                "scheduler_context_chunking_policy knob. Leave "
+                "--trtllm_scheduler_context_chunking_policy unset for the Qwen2-VL engine path."
+            )
+        if not engine_dir:
+            raise ValueError(
+                "Qwen2-VL TensorRT engine backend requires --trtllm_engine_dir pointing "
+                "to a prebuilt multimodal engine directory with vision/ and llm/ subdirs. "
+                "The old LLM API path is disabled because it omits Qwen2-VL mRoPE and "
+                "prompt-table inputs, which produces fast but incorrect garbage outputs."
+            )
+
+        engine_path = Path(engine_dir)
+        _require_file(engine_path / "vision" / "config.json", "Qwen2-VL vision engine config")
+        _require_file(engine_path / "vision" / "model.engine", "Qwen2-VL vision engine")
+        _require_file(engine_path / "llm" / "config.json", "Qwen2-VL LLM engine config")
+        if not list((engine_path / "llm").glob("rank*.engine")):
+            raise FileNotFoundError(f"Missing Qwen2-VL LLM rank engine under {engine_path / 'llm'}")
+
+        self.batch_size_per_gpu = max(1, min(self.batch_size_per_gpu, max_batch_size))
+        args = SimpleNamespace(
+            engine_dir=str(engine_path),
+            hf_model_dir=self.tokenizer_path,
+            batch_size=self.batch_size_per_gpu,
+            session="cpp_llm_only",
+            visual_engine_name="model.engine",
+            image_path=None,
+            video_path=None,
+            video_num_frames=None,
+            path_sep=",",
+            top_k=1,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            num_beams=1,
+            lora_task_uids=None,
+            enable_chunked_context=False,
+            mm_embedding_offloading=None,
+            enable_context_fmha_fp32_acc=False,
+            kv_cache_free_gpu_memory_fraction=kv_cache_free_gpu_memory_fraction,
+            cross_kv_cache_fraction=None,
+            multi_block_mode=True,
+            debug_mode=False,
+            trust_remote_code=trust_remote_code,
+        )
+        runner = runner_cls(args)
+        self.llm = runner
+        self._tokenizer = runner.tokenizer
+        self._tokenizer.padding_side = "right"
+        if getattr(self._processor, "tokenizer", None) is not None:
+            self._processor.tokenizer = runner.tokenizer
+        return runner
+
     @property
     def tokenizer(self):
         return self._tokenizer
@@ -298,6 +406,34 @@ class TRTLLMRealQuantModel(lmms):
             return [str(visual)]
         return [visual]
 
+    def _to_qwen2vl_runner_image(self, visual: Any) -> Image.Image:
+        if isinstance(visual, Image.Image):
+            image = visual.convert("RGB")
+        elif isinstance(visual, (str, os.PathLike)):
+            image = Image.open(visual).convert("RGB")
+        else:
+            raise TypeError(
+                "Qwen2-VL TensorRT runner expects PIL images or image paths from lmms-eval, "
+                f"got {type(visual)!r}."
+            )
+        return image.resize((self._qwen2vl_image_size, self._qwen2vl_image_size))
+
+    def _build_qwen2vl_runner_request(self, context, doc_to_visual, doc_id, task, split):
+        doc = self.task_dict[task][split][doc_id]
+        visuals = self._flatten_visuals(doc_to_visual(doc))
+        if not visuals:
+            raise ValueError(
+                "The Qwen2-VL TensorRT multimodal runner path currently expects one image per request. "
+                "Use the PyTorch/debug backend for pure-text checks."
+            )
+        if len(visuals) != 1:
+            raise ValueError(
+                "The Qwen2-VL TensorRT multimodal runner batch path currently expects exactly "
+                f"one image per request, got {len(visuals)}. Run multi-image tasks with batch_size=1 "
+                "after adding a dedicated multi-image prompt-table layout."
+            )
+        return _strip_image_tokens(context), self._to_qwen2vl_runner_image(visuals[0])
+
     def _apply_text_chat_template(self, prompt: str) -> str:
         if hasattr(self.processor, "apply_chat_template"):
             messages = [{"role": "user", "content": prompt}]
@@ -343,6 +479,59 @@ class TRTLLMRealQuantModel(lmms):
             if "use_tqdm" not in str(exc):
                 raise
             return self.llm.generate(requests, sampling_params=sampling_params)
+
+    def _normalize_runner_sampling(self, temperature, top_p, top_k) -> Dict[str, Any]:
+        temperature = 1.0 if temperature is None else float(temperature)
+        if temperature <= 0:
+            temperature = 1.0
+            top_k = 1
+        return {
+            "temperature": temperature,
+            "top_p": 1.0 if top_p is None else float(top_p),
+            "top_k": 1 if top_k is None else int(top_k),
+        }
+
+    def _generate_qwen2vl_runner(
+        self,
+        prompts: List[str],
+        images: List[Image.Image],
+        *,
+        max_new_tokens: int,
+        temperature,
+        top_p,
+        top_k,
+    ) -> List[str]:
+        runner = self._qwen2vl_runner
+        if runner is None:
+            raise RuntimeError("Qwen2-VL TensorRT multimodal runner was not initialized.")
+
+        sampling = self._normalize_runner_sampling(temperature, top_p, top_k)
+        runner.args.batch_size = len(prompts)
+        runner.args.temperature = sampling["temperature"]
+        runner.args.top_p = sampling["top_p"]
+        runner.args.top_k = sampling["top_k"]
+
+        (
+            _input_text,
+            pre_prompt,
+            post_prompt,
+            image,
+            decoder_input_ids,
+            other_vision_inputs,
+            other_audio_inputs,
+            other_decoder_inputs,
+        ) = runner.setup_inputs(prompts, images)
+        outputs = runner.generate(
+            pre_prompt,
+            post_prompt,
+            image,
+            decoder_input_ids,
+            max_new_tokens,
+            other_vision_inputs=other_vision_inputs,
+            other_audio_inputs=other_audio_inputs,
+            other_decoder_inputs=other_decoder_inputs,
+        )
+        return [beam_group[0].strip() if beam_group else "" for beam_group in outputs]
 
     def _count_generated_tokens(self, output, text: str) -> int:
         if output.outputs:
@@ -409,25 +598,43 @@ class TRTLLMRealQuantModel(lmms):
                 sampling_kwargs["top_k"] = top_k
             if until:
                 sampling_kwargs["stop"] = until
-            sampling_params = self.SamplingParams(**sampling_kwargs)
 
-            trtllm_requests = [
-                self._build_request(context, doc_to_visual, doc_id, task, split)
-                for context, doc_to_visual, doc_id, task, split in zip(contexts, doc_to_visuals, doc_ids, tasks, splits)
-            ]
             start = time.perf_counter()
-            outputs = self._generate(trtllm_requests, sampling_params)
+            if self._qwen2vl_runner is not None:
+                runner_requests = [
+                    self._build_qwen2vl_runner_request(context, doc_to_visual, doc_id, task, split)
+                    for context, doc_to_visual, doc_id, task, split in zip(contexts, doc_to_visuals, doc_ids, tasks, splits)
+                ]
+                prompts, images = zip(*runner_requests)
+                outputs = self._generate_qwen2vl_runner(
+                    list(prompts),
+                    list(images),
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                )
+            else:
+                sampling_params = self.SamplingParams(**sampling_kwargs)
+                trtllm_requests = [
+                    self._build_request(context, doc_to_visual, doc_id, task, split)
+                    for context, doc_to_visual, doc_id, task, split in zip(contexts, doc_to_visuals, doc_ids, tasks, splits)
+                ]
+                outputs = self._generate(trtllm_requests, sampling_params)
             self._speed_stats["generate_sec"] += time.perf_counter() - start
 
             for output, context in zip(outputs, contexts):
-                ans = output.outputs[0].text.strip() if output.outputs else ""
+                ans = output if isinstance(output, str) else (output.outputs[0].text.strip() if output.outputs else "")
                 if ans.lower().startswith("assistant"):
                     ans = ans[len("assistant"):].lstrip(":： \n\t")
                 for term in until:
                     if term:
                         ans = ans.split(term)[0]
                 self._speed_stats["requests"] += 1
-                self._speed_stats["generated_tokens"] += self._count_generated_tokens(output, ans)
+                if isinstance(output, str):
+                    self._speed_stats["generated_tokens"] += len(self.tokenizer.encode(ans, add_special_tokens=False))
+                else:
+                    self._speed_stats["generated_tokens"] += self._count_generated_tokens(output, ans)
                 res.append(ans)
                 self.cache_hook.add_partial("generate_until", (context, all_gen_kwargs[0]), ans)
                 pbar.update(1)

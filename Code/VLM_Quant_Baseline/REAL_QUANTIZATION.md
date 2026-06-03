@@ -101,6 +101,23 @@ For large models, increase `--tp_size` during export and use the same `TRTLLM_TP
 
 The W4 exporter currently enables `--model qwen2_vl`, `--model llava_onevision`, `--model vila`, and `--model llava`. If you want to try Qwen2.5-VL/Qwen3-VL, first check the TensorRT-LLM version on the target machine for a matching ModelOpt export branch; otherwise use the PyTorch backend only for functional debugging, not speedup numbers.
 
+## Build Qwen2-VL TensorRT Engines
+
+For Qwen2-VL, the real TensorRT path must use TensorRT-LLM's multimodal runner. Do not evaluate the exported W4 checkpoint directly through the generic LLM API: that path omits Qwen2-VL mRoPE and prompt-table inputs and can produce fast but invalid outputs.
+
+Build the multimodal engine directory first:
+
+```bash
+FP16_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
+REAL_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm \
+TRTLLM_ENGINE_DIR=/root/autodl-fs/trtllm_workspace/Qwen2-VL-7B-Instruct-W4A16-engine \
+TRTLLM_MAX_BATCH_SIZE=8 \
+TRTLLM_MAX_MULTIMODAL_LEN=2592 \
+bash scripts/build_qwen2vl_trtllm_engines.sh
+```
+
+Switch to W4A8 by changing both `REAL_CHECKPOINT` and `TRTLLM_ENGINE_DIR`. Build time is separate from throughput measurements.
+
 ## W3A16 Fallback
 
 W3A16 is exported through AutoRound because TensorRT-LLM does not currently advertise W3A16/INT3 engine support:
@@ -129,6 +146,7 @@ LIMIT=1 \
 TASKS=mmmu_val \
 FP16_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
 REAL_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm \
+TRTLLM_ENGINE_DIR=/root/autodl-fs/trtllm_workspace/Qwen2-VL-7B-Instruct-W4A16-engine \
 W_BIT=4 A_BIT=16 \
 bash scripts/run_qig_real_trtllm_eval.sh
 ```
@@ -139,6 +157,7 @@ Full run:
 TASKS=mmmu_val,vizwiz_vqa_val,chartqa,ai2d,scienceqa_img \
 FP16_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
 REAL_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm \
+TRTLLM_ENGINE_DIR=/root/autodl-fs/trtllm_workspace/Qwen2-VL-7B-Instruct-W4A16-engine \
 W_BIT=4 A_BIT=16 \
 bash scripts/run_qig_real_trtllm_eval.sh
 ```
@@ -148,10 +167,9 @@ Switch to W4A8 by changing `REAL_CHECKPOINT` to the W4A8 export directory and se
 Useful script knobs:
 
 - `MODEL=qwen2_vl` selects the lmms-eval model adapter name. The script defaults to `qwen2_vl`.
-- `TRTLLM_ENGINE_DIR=/path/to/engine-cache` saves a built engine after the first run.
+- `TRTLLM_ENGINE_DIR=/path/to/qwen2vl-engine` points to a prebuilt multimodal engine directory containing `vision/` and `llm/`.
 - `TRTLLM_WORKSPACE=/path/to/workspace` controls TensorRT-LLM temporary build files.
-- `TRTLLM_ENABLE_BUILD_CACHE=1` enables TensorRT-LLM LLM API build cache.
-- `TRTLLM_FAST_BUILD=1` requests TensorRT-LLM fast build mode.
+- `TRTLLM_ENABLE_BUILD_CACHE=1` and `TRTLLM_FAST_BUILD=1` are only relevant to the old generic LLM API path, not the Qwen2-VL multimodal engine runner.
 - `DRY_RUN=1` prints the command without touching conda, checkpoint paths, or output folders.
 
 Equivalent direct command:
@@ -168,6 +186,7 @@ python -W ignore main.py \
   --trtllm_model_path /root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm \
   --trtllm_tokenizer_path /root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
   --trtllm_backend engine \
+  --trtllm_engine_dir /root/autodl-fs/trtllm_workspace/Qwen2-VL-7B-Instruct-W4A16-engine \
   --trtllm_max_multimodal_len 1296 \
   --trtllm_trust_remote_code \
   --w_bit 4 \
@@ -177,7 +196,7 @@ python -W ignore main.py \
 
 `--trtllm_model_path` points to the real-quant TensorRT-LLM checkpoint. `--trtllm_tokenizer_path` must point to the original HF checkpoint because the multimodal processor and chat template live there.
 
-`--trtllm_max_multimodal_len` maps to TensorRT-LLM `max_prompt_embedding_table_size`. The default `1296` follows the TensorRT-LLM Qwen2-VL example for `max_batch_size=4` and `image_shape=[504,504]`. Increase it if a task uses larger images, more images per prompt, or larger eval batch sizes.
+`--trtllm_max_multimodal_len` maps to TensorRT-LLM `max_prompt_embedding_table_size`. For Qwen2-VL images resized to `504x504`, use at least `batch_size * 324`; the scripts default to that formula. Increase it if a task uses larger images, more images per prompt, or larger eval batch sizes.
 
 ## Inference Smoke Test
 
