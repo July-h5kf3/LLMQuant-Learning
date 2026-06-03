@@ -12,7 +12,7 @@ LIMIT="${LIMIT:-}"
 GEN_KWARGS="${GEN_KWARGS:-temperature=0,max_new_tokens=64}"
 
 FP16_CHECKPOINT="${FP16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct}"
-W3A16_CHECKPOINT="${W3A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq}"
+W3A16_CHECKPOINT="${W3A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq/Qwen2-VL-7B-Instruct-w3g128}"
 W4A16_CHECKPOINT="${W4A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-vllm}"
 W4A8_CHECKPOINT="${W4A8_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A8-vllm-smoke}"
 

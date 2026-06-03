@@ -11,7 +11,7 @@ INFERENCE_DATA_ROOT="${INFERENCE_DATA_ROOT:-/root/autodl-tmp/dataset/inferecne}"
 NETWORK_TURBO="${NETWORK_TURBO:-1}"
 
 FP16_CHECKPOINT="${FP16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct}"
-REAL_CHECKPOINT="${REAL_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq}"
+REAL_CHECKPOINT="${REAL_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq/Qwen2-VL-7B-Instruct-w3g128}"
 EVAL_ROOT="${EVAL_ROOT:-/root/autodl-tmp/eval/QIG/real_w3a16_vllm}"
 LOG_ROOT="${LOG_ROOT:-${EVAL_ROOT}/logs}"
 
