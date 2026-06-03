@@ -86,6 +86,39 @@ def write_manifest(args, backend: str, extra=None):
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
 
+def normalize_qwen2_vl_trtllm_text_config(output_dir: Path):
+    config_path = output_dir / "config.json"
+    if not config_path.exists():
+        return False
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    if (
+        config.get("architecture") != "Qwen2VLTextModel"
+        and config.get("model_type") != "llama"
+        and config.get("decoder") != "llama"
+    ):
+        return False
+
+    backup_path = output_dir / "config.json.bak_qwen2vltext"
+    if not backup_path.exists():
+        shutil.copy2(config_path, backup_path)
+
+    config["architecture"] = "Qwen2ForCausalLM"
+    config["architectures"] = ["Qwen2ForCausalLM"]
+    config["model_type"] = "qwen2"
+    config["qwen_type"] = "qwen2"
+    config.setdefault("seq_length", config.get("max_position_embeddings", 32768))
+    config.pop("decoder", None)
+    config.pop("text_config", None)
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    return True
+
+
 def export_trtllm_modelopt(args):
     if args.awq_block_size not in (64, 128):
         raise ValueError("TensorRT-LLM AWQ block size should be 64 or 128.")
@@ -129,11 +162,15 @@ def export_trtllm_modelopt(args):
         device_map=args.device_map,
         quantize_lm_head=False,
     )
+    normalized_config = False
+    if args.model == "qwen2_vl":
+        normalized_config = normalize_qwen2_vl_trtllm_text_config(Path(args.output_dir))
     write_manifest(args, "trtllm-modelopt", {
         "trtllm_qformat": qformat,
         "awq_block_size": args.awq_block_size,
         "calib_dataset": args.calib_dataset,
         "calib_size": args.calib_size,
+        "normalized_qwen2_vl_text_config": normalized_config,
     })
 
 

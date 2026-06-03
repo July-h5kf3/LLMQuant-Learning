@@ -147,6 +147,7 @@ class TRTLLMRealQuantModel(lmms):
         try:
             import tensorrt_llm._torch.models  # noqa: F401
             from tensorrt_llm.builder import BuildConfig
+            from tensorrt_llm.plugin import _load_plugin_lib
             from tensorrt_llm.llmapi import LLM as TorchLLM
             from tensorrt_llm.sampling_params import SamplingParams
             from tensorrt_llm.inputs import create_input_processor
@@ -157,6 +158,15 @@ class TRTLLMRealQuantModel(lmms):
             raise ImportError(
                 "TensorRT-LLM is required for --inference_engine trtllm. "
                 "Install it in the target NVIDIA environment with `pip install tensorrt_llm`."
+            ) from exc
+
+        try:
+            _load_plugin_lib()
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to load the TensorRT-LLM plugin library. W4A8 AWQ needs "
+                "TensorRT plugin creators such as WeightOnlyGroupwiseQuantMatmul; "
+                "make sure tensorrt_llm/libs is visible in LD_LIBRARY_PATH."
             ) from exc
 
         trt_tokenizer = TransformersTokenizer(self._tokenizer)

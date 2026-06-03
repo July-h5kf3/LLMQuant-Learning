@@ -93,9 +93,15 @@ setup_env() {
   if [[ -n "$conda_prefix" && -d "${conda_prefix}/lib/python3.12/site-packages/nvidia/cu13/lib" ]]; then
     export LD_LIBRARY_PATH="${conda_prefix}/lib/python3.12/site-packages/nvidia/cu13/lib:${LD_LIBRARY_PATH:-}"
   fi
+  if [[ -n "$conda_prefix" && -d "${conda_prefix}/lib/python3.12/site-packages/tensorrt_llm/libs" ]]; then
+    export LD_LIBRARY_PATH="${conda_prefix}/lib/python3.12/site-packages/tensorrt_llm/libs:${LD_LIBRARY_PATH:-}"
+  fi
 
   if [[ "$DRY_RUN" != "1" ]]; then
     mkdir -p "$EVAL_ROOT" "$LOG_ROOT"
+    if [[ -n "$TRTLLM_WORKSPACE" ]]; then
+      mkdir -p "$TRTLLM_WORKSPACE"
+    fi
   fi
 }
 
