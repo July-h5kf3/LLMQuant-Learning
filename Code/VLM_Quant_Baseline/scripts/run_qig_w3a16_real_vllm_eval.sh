@@ -8,6 +8,7 @@ CONDA_SH="${CONDA_SH:-/root/miniconda3/etc/profile.d/conda.sh}"
 CONDA_ENV="${CONDA_ENV:-QIG}"
 LMMS_EVAL_ROOT="${LMMS_EVAL_ROOT:-/root/autodl-tmp/QIG/3rdparty/lmms-eval}"
 INFERENCE_DATA_ROOT="${INFERENCE_DATA_ROOT:-/root/autodl-tmp/dataset/inferecne}"
+NETWORK_TURBO="${NETWORK_TURBO:-1}"
 
 FP16_CHECKPOINT="${FP16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct}"
 REAL_CHECKPOINT="${REAL_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq}"
@@ -57,6 +58,10 @@ setup_env() {
   # shellcheck disable=SC1090
   source "$CONDA_SH"
   conda activate "$CONDA_ENV"
+  if [[ "$NETWORK_TURBO" == "1" && -f /etc/network_turbo ]]; then
+    # shellcheck disable=SC1091
+    source /etc/network_turbo || true
+  fi
   cd "$REPO_ROOT"
 
   export PYTHONPATH="${LMMS_EVAL_ROOT}:${PYTHONPATH:-}"

@@ -17,6 +17,7 @@ W4A16_CHECKPOINT="${W4A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-
 W4A8_CHECKPOINT="${W4A8_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A8-vllm-smoke}"
 
 QIG_CONDA_ENV="${QIG_CONDA_ENV:-QIG}"
+PYTHON_BIN="${PYTHON_BIN:-/root/miniconda3/envs/${QIG_CONDA_ENV}/bin/python}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%F %T')" "$*" >&2
@@ -79,7 +80,7 @@ run_variant \
     VLLM_QUANTIZATION="${W4A8_VLLM_QUANTIZATION:-compressed-tensors}" \
     bash scripts/run_qig_real_vllm_eval.sh
 
-python scripts/summarize_lmms_eval_speed.py \
+"$PYTHON_BIN" scripts/summarize_lmms_eval_speed.py \
   --run_root "$SUITE_ROOT" \
   --output_csv "${SUITE_ROOT}/summary.csv"
 
