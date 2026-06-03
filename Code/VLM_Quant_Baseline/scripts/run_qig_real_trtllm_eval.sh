@@ -37,6 +37,9 @@ TRTLLM_ENGINE_DIR="${TRTLLM_ENGINE_DIR:-}"
 TRTLLM_WORKSPACE="${TRTLLM_WORKSPACE:-}"
 TRTLLM_ENABLE_BUILD_CACHE="${TRTLLM_ENABLE_BUILD_CACHE:-0}"
 TRTLLM_FAST_BUILD="${TRTLLM_FAST_BUILD:-0}"
+TRTLLM_CONTEXT_CHUNKING_POLICY="${TRTLLM_CONTEXT_CHUNKING_POLICY:-}"
+TRTLLM_USE_SINGLE_RANK_MPI_STUB="${TRTLLM_USE_SINGLE_RANK_MPI_STUB:-1}"
+TRTLLM_MPI_STUB_DIR="${TRTLLM_MPI_STUB_DIR:-/tmp/mpi_stub}"
 
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -58,6 +61,124 @@ run_cmd() {
     return 0
   fi
   "$@"
+}
+
+setup_single_rank_mpi_stub() {
+  local stub_dir="$1"
+  local src_path="${stub_dir}/mpi_stub.c"
+  local lib_path="${stub_dir}/libmpi.so.40"
+  local cc_bin="${CC:-cc}"
+
+  mkdir -p "$stub_dir"
+  if [[ ! -f "$lib_path" ]]; then
+    if ! command -v "$cc_bin" >/dev/null 2>&1; then
+      echo "Cannot build TensorRT-LLM single-rank MPI stub: compiler not found: $cc_bin" >&2
+      exit 1
+    fi
+    cat > "$src_path" <<'EOF'
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+
+typedef void* MPI_Comm;
+typedef void* MPI_Group;
+typedef void* MPI_Info;
+typedef void* MPI_Datatype;
+typedef void* MPI_Op;
+typedef void* MPI_Request;
+typedef void* MPI_Message;
+typedef int MPI_Fint;
+
+char ompi_mpi_comm_world[8];
+char ompi_mpi_comm_self[8];
+char ompi_mpi_comm_null[8];
+char ompi_mpi_group_null[8];
+char ompi_mpi_info_null[8];
+char ompi_mpi_op_null[8];
+char ompi_mpi_op_sum[8];
+char ompi_mpi_op_prod[8];
+char ompi_mpi_op_max[8];
+char ompi_mpi_op_min[8];
+char ompi_mpi_op_maxloc[8];
+char ompi_mpi_op_minloc[8];
+char ompi_mpi_op_band[8];
+char ompi_mpi_op_bor[8];
+char ompi_mpi_op_bxor[8];
+char ompi_mpi_op_land[8];
+char ompi_mpi_op_lor[8];
+char ompi_mpi_op_lxor[8];
+char ompi_mpi_op_replace[8];
+char ompi_mpi_byte[8];
+char ompi_mpi_char[8];
+char ompi_mpi_c_bool[8];
+char ompi_mpi_int[8];
+char ompi_mpi_float[8];
+char ompi_mpi_double[8];
+char ompi_mpi_int8_t[8];
+char ompi_mpi_uint8_t[8];
+char ompi_mpi_int32_t[8];
+char ompi_mpi_uint16_t[8];
+char ompi_mpi_uint32_t[8];
+char ompi_mpi_int64_t[8];
+char ompi_mpi_uint64_t[8];
+
+static int g_initialized = 0;
+static char g_request[8];
+
+static int dtype_size(MPI_Datatype datatype) {
+    if (datatype == (void*)ompi_mpi_byte || datatype == (void*)ompi_mpi_char ||
+        datatype == (void*)ompi_mpi_int8_t || datatype == (void*)ompi_mpi_uint8_t ||
+        datatype == (void*)ompi_mpi_c_bool) return 1;
+    if (datatype == (void*)ompi_mpi_uint16_t) return 2;
+    if (datatype == (void*)ompi_mpi_int || datatype == (void*)ompi_mpi_int32_t ||
+        datatype == (void*)ompi_mpi_uint32_t || datatype == (void*)ompi_mpi_float) return 4;
+    if (datatype == (void*)ompi_mpi_int64_t || datatype == (void*)ompi_mpi_uint64_t ||
+        datatype == (void*)ompi_mpi_double) return 8;
+    return 1;
+}
+
+int MPI_Init_thread(int *argc, char ***argv, int required, int *provided) { g_initialized = 1; if (provided) *provided = required; return 0; }
+int MPI_Finalize(void) { g_initialized = 0; return 0; }
+int MPI_Initialized(int *flag) { if (flag) *flag = g_initialized; return 0; }
+int MPI_Abort(MPI_Comm comm, int errorcode) { return errorcode ? errorcode : 1; }
+int MPI_Comm_rank(MPI_Comm comm, int *rank) { if (rank) *rank = 0; return 0; }
+int MPI_Comm_size(MPI_Comm comm, int *size) { if (size) *size = 1; return 0; }
+int MPI_Comm_dup(MPI_Comm comm, MPI_Comm *newcomm) { if (newcomm) *newcomm = comm ? comm : (void*)ompi_mpi_comm_world; return 0; }
+int MPI_Comm_free(MPI_Comm *comm) { if (comm) *comm = (void*)ompi_mpi_comm_null; return 0; }
+int MPI_Comm_group(MPI_Comm comm, MPI_Group *group) { if (group) *group = (void*)ompi_mpi_group_null; return 0; }
+int MPI_Comm_create_group(MPI_Comm comm, MPI_Group group, int tag, MPI_Comm *newcomm) { if (newcomm) *newcomm = comm ? comm : (void*)ompi_mpi_comm_world; return 0; }
+int MPI_Comm_split(MPI_Comm comm, int color, int key, MPI_Comm *newcomm) { if (newcomm) *newcomm = comm ? comm : (void*)ompi_mpi_comm_world; return 0; }
+int MPI_Comm_split_type(MPI_Comm comm, int split_type, int key, MPI_Info info, MPI_Comm *newcomm) { if (newcomm) *newcomm = comm ? comm : (void*)ompi_mpi_comm_world; return 0; }
+MPI_Comm MPI_Comm_f2c(MPI_Fint comm) { return (void*)ompi_mpi_comm_world; }
+int MPI_Group_free(MPI_Group *group) { if (group) *group = (void*)ompi_mpi_group_null; return 0; }
+int MPI_Group_incl(MPI_Group group, int n, const int ranks[], MPI_Group *newgroup) { if (newgroup) *newgroup = group ? group : (void*)ompi_mpi_group_null; return 0; }
+int MPI_Group_rank(MPI_Group group, int *rank) { if (rank) *rank = 0; return 0; }
+int MPI_Group_size(MPI_Group group, int *size) { if (size) *size = 1; return 0; }
+int MPI_Group_translate_ranks(MPI_Group g1, int n, const int ranks1[], MPI_Group g2, int ranks2[]) { for (int i=0;i<n;i++) ranks2[i]=ranks1? ranks1[i] : 0; return 0; }
+int MPI_Barrier(MPI_Comm comm) { return 0; }
+int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm) { return 0; }
+int MPI_Ibcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm, MPI_Request *request) { if (request) *request = (void*)g_request; return 0; }
+int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm) { if (sendbuf && recvbuf && sendbuf != recvbuf) memcpy(recvbuf, sendbuf, (size_t)sendcount * dtype_size(sendtype)); return 0; }
+int MPI_Allgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, const int recvcounts[], const int displs[], MPI_Datatype recvtype, MPI_Comm comm) { if (sendbuf && recvbuf && sendbuf != recvbuf) memcpy((char*)recvbuf + (displs? displs[0] : 0) * dtype_size(recvtype), sendbuf, (size_t)sendcount * dtype_size(sendtype)); return 0; }
+int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm) { if (sendbuf && recvbuf && sendbuf != recvbuf) memcpy(recvbuf, sendbuf, (size_t)count * dtype_size(datatype)); return 0; }
+int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) { return 0; }
+int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm, MPI_Request *request) { if (request) *request = (void*)g_request; return 0; }
+int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, void *status) { return 0; }
+int MPI_Iprobe(int source, int tag, MPI_Comm comm, int *flag, void *status) { if (flag) *flag = 0; return 0; }
+int MPI_Improbe(int source, int tag, MPI_Comm comm, int *flag, MPI_Message *message, void *status) { if (flag) *flag = 0; if (message) *message = NULL; return 0; }
+int MPI_Mprobe(int source, int tag, MPI_Comm comm, MPI_Message *message, void *status) { if (message) *message = NULL; return 0; }
+int MPI_Mrecv(void *buf, int count, MPI_Datatype datatype, MPI_Message *message, void *status) { return 0; }
+int MPI_Wait(MPI_Request *request, void *status) { if (request) *request = NULL; return 0; }
+int MPI_Get_count(const void *status, MPI_Datatype datatype, int *count) { if (count) *count = 0; return 0; }
+int MPI_Type_size(MPI_Datatype datatype, int *size) { if (size) *size = dtype_size(datatype); return 0; }
+int MPI_Info_create(MPI_Info *info) { if (info) *info = (void*)ompi_mpi_info_null; return 0; }
+int MPI_Info_set(MPI_Info info, const char *key, const char *value) { return 0; }
+int MPI_Comm_spawn(const char *command, char *argv[], int maxprocs, MPI_Info info, int root, MPI_Comm comm, MPI_Comm *intercomm, int array_of_errcodes[]) { if (intercomm) *intercomm = comm ? comm : (void*)ompi_mpi_comm_world; if (array_of_errcodes) for (int i=0;i<maxprocs;i++) array_of_errcodes[i]=0; return 0; }
+EOF
+    "$cc_bin" -shared -fPIC -O2 "$src_path" -Wl,-soname,libmpi.so.40 -o "$lib_path"
+    ln -sf libmpi.so.40 "${stub_dir}/libmpi.so"
+  fi
+  export LD_LIBRARY_PATH="${stub_dir}:${LD_LIBRARY_PATH:-}"
 }
 
 setup_env() {
@@ -96,6 +217,17 @@ setup_env() {
   fi
   if [[ -n "$conda_prefix" && -d "${conda_prefix}/lib/python3.12/site-packages/tensorrt_llm/libs" ]]; then
     export LD_LIBRARY_PATH="${conda_prefix}/lib/python3.12/site-packages/tensorrt_llm/libs:${LD_LIBRARY_PATH:-}"
+  fi
+  if [[ "$TRTLLM_USE_SINGLE_RANK_MPI_STUB" == "1" ]]; then
+    if [[ "$TRTLLM_TP_SIZE" != "1" || "$TRTLLM_PP_SIZE" != "1" ]]; then
+      echo "TRTLLM_USE_SINGLE_RANK_MPI_STUB=1 is only valid for TP=1 and PP=1." >&2
+      exit 1
+    fi
+    if [[ "$DRY_RUN" != "1" ]]; then
+      setup_single_rank_mpi_stub "$TRTLLM_MPI_STUB_DIR"
+    else
+      export LD_LIBRARY_PATH="${TRTLLM_MPI_STUB_DIR}:${LD_LIBRARY_PATH:-}"
+    fi
   fi
 
   if [[ "$DRY_RUN" != "1" ]]; then
@@ -149,6 +281,9 @@ main() {
   fi
   if [[ "$TRTLLM_FAST_BUILD" == "1" ]]; then
     cmd+=(--trtllm_fast_build)
+  fi
+  if [[ -n "$TRTLLM_CONTEXT_CHUNKING_POLICY" ]]; then
+    cmd+=(--trtllm_scheduler_context_chunking_policy "$TRTLLM_CONTEXT_CHUNKING_POLICY")
   fi
   if [[ -n "$LIMIT" ]]; then
     cmd+=(--limit "$LIMIT")

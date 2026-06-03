@@ -96,6 +96,7 @@ class TRTLLMRealQuantModel(lmms):
         workspace: Optional[str] = None,
         enable_build_cache: bool = False,
         fast_build: bool = False,
+        scheduler_context_chunking_policy: Optional[str] = None,
         batch_size: Optional[Union[int, str]] = 1,
         **kwargs,
     ) -> None:
@@ -152,6 +153,8 @@ class TRTLLMRealQuantModel(lmms):
             from tensorrt_llm.sampling_params import SamplingParams
             from tensorrt_llm.inputs import create_input_processor
             from tensorrt_llm.llmapi import KvCacheConfig
+            from tensorrt_llm.llmapi import SchedulerConfig
+            from tensorrt_llm.llmapi import ContextChunkingPolicy
             from tensorrt_llm.inputs import default_multimodal_input_loader
             from tensorrt_llm.tokenizer import TransformersTokenizer
         except ImportError as exc:
@@ -180,6 +183,19 @@ class TRTLLMRealQuantModel(lmms):
         kv_cache_config = KvCacheConfig(
             free_gpu_memory_fraction=kv_cache_free_gpu_memory_fraction,
         )
+        scheduler_config = None
+        if scheduler_context_chunking_policy:
+            try:
+                context_chunking_policy = ContextChunkingPolicy[scheduler_context_chunking_policy]
+            except KeyError as exc:
+                valid = ", ".join(policy.name for policy in ContextChunkingPolicy)
+                raise ValueError(
+                    "--trtllm_scheduler_context_chunking_policy must be one of "
+                    f"{valid}, got {scheduler_context_chunking_policy!r}."
+                ) from exc
+            scheduler_config = SchedulerConfig(
+                context_chunking_policy=context_chunking_policy,
+            )
         llm_kwargs: Dict[str, Any] = {
             "model": pretrained,
             "tokenizer": trt_tokenizer,
@@ -189,6 +205,8 @@ class TRTLLMRealQuantModel(lmms):
             "dtype": dtype,
             "kv_cache_config": kv_cache_config,
         }
+        if scheduler_config is not None:
+            llm_kwargs["scheduler_config"] = scheduler_config
         if backend == "engine":
             from tensorrt_llm._tensorrt_engine import LLM
 

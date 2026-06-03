@@ -373,6 +373,7 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument("--trtllm_workspace", default=None, type=str)
     parser.add_argument("--trtllm_enable_build_cache", action="store_true")
     parser.add_argument("--trtllm_fast_build", action="store_true")
+    parser.add_argument("--trtllm_scheduler_context_chunking_policy", default=None, type=str)
     # for GPTQ
     parser.add_argument("--percdamp", default=0.01, type=float)
 
@@ -609,6 +610,7 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
             workspace=args.trtllm_workspace,
             enable_build_cache=args.trtllm_enable_build_cache,
             fast_build=args.trtllm_fast_build,
+            scheduler_context_chunking_policy=args.trtllm_scheduler_context_chunking_policy,
             batch_size=args.batch_size,
         )
     elif args.real_quant and args.inference_engine == "vllm":
