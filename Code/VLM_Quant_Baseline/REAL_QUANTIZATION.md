@@ -23,8 +23,8 @@ For RTX 4090, use the Ada compute capability target (`FLASHINFER_CUDA_ARCH_LIST=
 Use a Linux NVIDIA environment. TensorRT-LLM is not a macOS package. NVIDIA's current Linux pip guide installs the prebuilt wheel with `pip3 install tensorrt_llm` after CUDA/PyTorch prerequisites are aligned; if your target image already comes from a TensorRT-LLM NGC container, prefer the wheel and PyTorch version shipped in that container.
 
 ```bash
-conda create -n QIG_TRTLLM python=3.12 -y
-conda activate QIG_TRTLLM
+conda create -p /root/autodl-tmp/envs/QIG_TRTLLM python=3.12 -y
+conda activate /root/autodl-tmp/envs/QIG_TRTLLM
 
 cd /root/autodl-tmp/LLMQuant-Learning/Code/VLM_Quant_Baseline
 pip install -r requirements.txt

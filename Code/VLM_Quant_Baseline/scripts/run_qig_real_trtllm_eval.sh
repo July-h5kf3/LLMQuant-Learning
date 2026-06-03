@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CONDA_SH="${CONDA_SH:-/root/miniconda3/etc/profile.d/conda.sh}"
-CONDA_ENV="${CONDA_ENV:-QIG_TRTLLM}"
+CONDA_ENV="${CONDA_ENV:-/root/autodl-tmp/envs/QIG_TRTLLM}"
 LMMS_EVAL_ROOT="${LMMS_EVAL_ROOT:-/root/autodl-tmp/QIG/3rdparty/lmms-eval}"
 INFERENCE_DATA_ROOT="${INFERENCE_DATA_ROOT:-/root/autodl-tmp/dataset/inferecne}"
 NETWORK_TURBO="${NETWORK_TURBO:-1}"
