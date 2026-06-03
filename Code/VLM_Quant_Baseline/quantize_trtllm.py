@@ -95,14 +95,21 @@ def normalize_qwen2_vl_trtllm_config(output_dir: Path):
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    if (
-        config.get("architecture") != "Qwen2VLTextModel"
-        and config.get("model_type") != "llama"
-        and config.get("decoder") != "llama"
-    ):
+    is_qwen2_vl_text_export = (
+        config.get("architecture") == "Qwen2VLTextModel"
+        or config.get("model_type") == "llama"
+        or config.get("decoder") == "llama"
+    )
+    is_legacy_wrong_qwen2_export = (
+        config.get("architecture") == "Qwen2ForCausalLM"
+        or "Qwen2ForCausalLM" in (config.get("architectures") or [])
+        or config.get("model_type") == "qwen2"
+        or config.get("qwen_type") == "qwen2"
+    )
+    if not (is_qwen2_vl_text_export or is_legacy_wrong_qwen2_export):
         return False
 
-    backup_path = output_dir / "config.json.bak_qwen2vltext"
+    backup_path = output_dir / "config.json.bak_qwen2vl_normalize"
     if not backup_path.exists():
         shutil.copy2(config_path, backup_path)
 
