@@ -538,26 +538,69 @@ class TRTLLMRealQuantModel(lmms):
         runner.args.top_k = sampling["top_k"]
 
         (
-            _input_text,
             pre_prompt,
             post_prompt,
             image,
-            decoder_input_ids,
+            _decoder_input_ids,
             other_vision_inputs,
             other_audio_inputs,
-            other_decoder_inputs,
-        ) = runner.setup_inputs(prompts, images)
-        outputs = runner.generate(
+        ) = runner.setup_inputs(prompts, images)[1:7]
+
+        from tensorrt_llm.layers import MropeParams
+
+        input_ids, input_lengths, ptuning_args, _visual_features, mrope_args = runner.preprocess(
             pre_prompt,
             post_prompt,
             image,
-            decoder_input_ids,
-            max_new_tokens,
-            other_vision_inputs=other_vision_inputs,
-            other_audio_inputs=other_audio_inputs,
-            other_decoder_inputs=other_decoder_inputs,
+            other_vision_inputs,
+            other_audio_inputs,
         )
-        return [beam_group[0].strip() if beam_group else "" for beam_group in outputs]
+        mrope_params = MropeParams(
+            mrope_rotary_cos_sin=mrope_args[0],
+            mrope_position_deltas=mrope_args[1],
+        )
+        batch_size = len(prompts)
+        prompt_table = None
+        prompt_tasks = None
+        if ptuning_args[0] is not None:
+            prompt_tasks = ",".join(str(i) for i in range(batch_size))
+            prompt_table = ptuning_args[0].view(batch_size, -1, ptuning_args[0].shape[-1])
+
+        outputs = runner.model.generate(
+            input_ids,
+            mrope_params=mrope_params,
+            sampling_config=None,
+            prompt_table=prompt_table,
+            prompt_tasks=prompt_tasks,
+            max_new_tokens=max_new_tokens,
+            end_id=runner.tokenizer.eos_token_id,
+            pad_id=(
+                runner.tokenizer.pad_token_id
+                if runner.tokenizer.pad_token_id is not None
+                else runner.tokenizer.all_special_ids[0]
+            ),
+            top_k=sampling["top_k"],
+            top_p=sampling["top_p"],
+            temperature=sampling["temperature"],
+            repetition_penalty=runner.args.repetition_penalty,
+            num_beams=runner.args.num_beams,
+            output_sequence_lengths=True,
+            return_dict=True,
+            mm_embedding_offloading=runner.args.mm_embedding_offloading,
+        )
+
+        output_ids = outputs["output_ids"]
+        sequence_lengths = outputs.get("sequence_lengths")
+        decoded = []
+        for batch_idx in range(batch_size):
+            start = int(input_lengths[batch_idx])
+            if sequence_lengths is not None:
+                end = int(sequence_lengths[batch_idx][0])
+            else:
+                end = start + max_new_tokens
+            token_ids = output_ids[batch_idx, 0, start:end]
+            decoded.append(runner.tokenizer.decode(token_ids, skip_special_tokens=True).strip())
+        return decoded
 
     def _count_generated_tokens(self, output, text: str) -> int:
         if output.outputs:
