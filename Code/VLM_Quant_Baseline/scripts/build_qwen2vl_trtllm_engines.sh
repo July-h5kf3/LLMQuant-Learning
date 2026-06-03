@@ -80,13 +80,38 @@ build_vision() {
     log "Skipping vision engine build"
     return 0
   fi
-  run_cmd python -m tensorrt_llm.tools.multimodal_builder \
+  log python -m tensorrt_llm.tools.multimodal_builder \
     --model_type qwen2_vl \
     --model_path "$FP16_CHECKPOINT" \
     --output_dir "${TRTLLM_ENGINE_DIR}/vision" \
     --max_batch_size "$TRTLLM_MAX_BATCH_SIZE" \
     --min_hw_dims "$VISION_MIN_HW_DIMS" \
     --max_hw_dims "$VISION_MAX_HW_DIMS"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    return 0
+  fi
+  QWEN2VL_MODEL_PATH="$FP16_CHECKPOINT" \
+  QWEN2VL_VISION_OUTPUT_DIR="${TRTLLM_ENGINE_DIR}/vision" \
+  QWEN2VL_MAX_BATCH_SIZE="$TRTLLM_MAX_BATCH_SIZE" \
+  QWEN2VL_MIN_HW_DIMS="$VISION_MIN_HW_DIMS" \
+  QWEN2VL_MAX_HW_DIMS="$VISION_MAX_HW_DIMS" \
+  python - <<'PY'
+import os
+from types import SimpleNamespace
+
+from tensorrt_llm.tools.multimodal_builder import MultimodalEngineBuilder
+
+args = SimpleNamespace(
+    model_type="qwen2_vl",
+    model_path=os.environ["QWEN2VL_MODEL_PATH"],
+    output_dir=os.environ["QWEN2VL_VISION_OUTPUT_DIR"],
+    max_batch_size=int(os.environ["QWEN2VL_MAX_BATCH_SIZE"]),
+    min_hw_dims=int(os.environ["QWEN2VL_MIN_HW_DIMS"]),
+    max_hw_dims=int(os.environ["QWEN2VL_MAX_HW_DIMS"]),
+    vila_path=None,
+)
+MultimodalEngineBuilder(args).build()
+PY
 }
 
 build_llm() {
