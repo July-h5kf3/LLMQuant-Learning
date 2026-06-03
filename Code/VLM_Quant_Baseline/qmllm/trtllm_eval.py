@@ -1,5 +1,6 @@
 import inspect
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -119,6 +120,11 @@ class TRTLLMRealQuantModel(lmms):
         self.batch_size_per_gpu = _coerce_batch_size(batch_size)
         self._rank = 0
         self._world_size = 1
+        self._speed_stats = {
+            "requests": 0,
+            "generated_tokens": 0,
+            "generate_sec": 0.0,
+        }
 
         self._processor = AutoProcessor.from_pretrained(
             self.tokenizer_path,
@@ -306,6 +312,34 @@ class TRTLLMRealQuantModel(lmms):
                 raise
             return self.llm.generate(requests, sampling_params=sampling_params)
 
+    def _count_generated_tokens(self, output, text: str) -> int:
+        if output.outputs:
+            token_ids = getattr(output.outputs[0], "token_ids", None)
+            if token_ids is not None:
+                return len(token_ids)
+        try:
+            return len(self.tokenizer.encode(text, add_special_tokens=False))
+        except TypeError:
+            return len(self.tokenizer.encode(text))
+
+    def _print_speed_summary(self) -> None:
+        requests = self._speed_stats["requests"]
+        generate_sec = self._speed_stats["generate_sec"]
+        generated_tokens = self._speed_stats["generated_tokens"]
+        samples_per_sec = requests / generate_sec if generate_sec > 0 else 0.0
+        output_tokens_per_sec = generated_tokens / generate_sec if generate_sec > 0 else 0.0
+        avg_output_tokens = generated_tokens / requests if requests else 0.0
+        print(
+            "[TRTLLM_SPEED] "
+            f"requests={requests} "
+            f"generated_tokens={generated_tokens} "
+            f"generate_sec={generate_sec:.6f} "
+            f"samples_per_sec={samples_per_sec:.6f} "
+            f"output_tokens_per_sec={output_tokens_per_sec:.6f} "
+            f"avg_output_tokens={avg_output_tokens:.6f} "
+            f"batch_size={self.batch_size}"
+        )
+
     def generate_until(self, requests: List[Instance]) -> List[str]:
         def _collate(x):
             toks = self.tokenizer.encode(x[0])
@@ -349,7 +383,9 @@ class TRTLLMRealQuantModel(lmms):
                 self._build_request(context, doc_to_visual, doc_id, task, split)
                 for context, doc_to_visual, doc_id, task, split in zip(contexts, doc_to_visuals, doc_ids, tasks, splits)
             ]
+            start = time.perf_counter()
             outputs = self._generate(trtllm_requests, sampling_params)
+            self._speed_stats["generate_sec"] += time.perf_counter() - start
 
             for output, context in zip(outputs, contexts):
                 ans = output.outputs[0].text.strip() if output.outputs else ""
@@ -358,9 +394,13 @@ class TRTLLMRealQuantModel(lmms):
                 for term in until:
                     if term:
                         ans = ans.split(term)[0]
+                self._speed_stats["requests"] += 1
+                self._speed_stats["generated_tokens"] += self._count_generated_tokens(output, ans)
                 res.append(ans)
                 self.cache_hook.add_partial("generate_until", (context, all_gen_kwargs[0]), ans)
                 pbar.update(1)
 
         pbar.close()
+        if self.rank == 0:
+            self._print_speed_summary()
         return re_ords.get_original(res)

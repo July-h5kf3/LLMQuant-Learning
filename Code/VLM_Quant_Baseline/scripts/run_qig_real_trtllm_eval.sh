@@ -147,7 +147,10 @@ main() {
     set -e
     end="$(date +%s)"
     elapsed="$((end - start))"
-    printf 'elapsed_sec=%s\n' "$elapsed" > "${log_path}.time"
+    {
+      printf 'elapsed_sec=%s\n' "$elapsed"
+      printf 'status=%s\n' "$status"
+    } > "${log_path}.time"
     return "$status"
   fi
 }
