@@ -2,6 +2,7 @@ import inspect
 import json
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Union
@@ -85,6 +86,30 @@ def _load_trtllm_checkpoint_config(path: str) -> Dict[str, Any]:
 def _require_file(path: Path, description: str) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"Missing {description}: {path}")
+
+
+def _patch_qwen2vl_config(config: Any) -> Any:
+    text_config = getattr(config, "text_config", None)
+    if text_config is None:
+        return config
+    for name in ("max_position_embeddings", "hidden_size", "num_attention_heads", "rope_theta"):
+        if not hasattr(config, name) and hasattr(text_config, name):
+            setattr(config, name, getattr(text_config, name))
+    return config
+
+
+@contextmanager
+def _patched_qwen2vl_autoconfig():
+    original_from_pretrained = AutoConfig.from_pretrained
+
+    def patched_from_pretrained(*args, **kwargs):
+        return _patch_qwen2vl_config(original_from_pretrained(*args, **kwargs))
+
+    AutoConfig.from_pretrained = patched_from_pretrained
+    try:
+        yield
+    finally:
+        AutoConfig.from_pretrained = original_from_pretrained
 
 
 class TRTLLMRealQuantModel(lmms):
@@ -342,7 +367,8 @@ class TRTLLMRealQuantModel(lmms):
             debug_mode=False,
             trust_remote_code=trust_remote_code,
         )
-        runner = runner_cls(args)
+        with _patched_qwen2vl_autoconfig():
+            runner = runner_cls(args)
         self.llm = runner
         self._tokenizer = runner.tokenizer
         self._tokenizer.padding_side = "right"
