@@ -11,12 +11,13 @@ This repo keeps the fake-quant path for method research and adds a real-quant pa
 | Format | Export path | `lmms-eval` path | Status |
 | --- | --- | --- | --- |
 | W4A16 | TensorRT-LLM ModelOpt `int4_awq` | TensorRT-LLM engine | Main supported path. |
-| W4A8 | TensorRT-LLM ModelOpt `w4a8_awq` | TensorRT-LLM engine | Main supported path. |
+| W4A8 | TensorRT-LLM ModelOpt `w4a8_awq` | TensorRT-LLM engine | Supported export path; current Blackwell tests can hit `WeightOnlyGroupwiseQuantMatmul` tactic gaps. |
+| NVFP4 | TensorRT-LLM ModelOpt `nvfp4` | TensorRT-LLM engine | Preferred Blackwell real-acceleration path. Use `W_BIT=4 A_BIT=4` in eval logs. |
 | W3A16 | AutoRound `W3A16` | Not TensorRT-LLM accelerated | Real low-bit fallback only; TensorRT-LLM does not list INT3/W3A16 engine support. |
 
 The first target should be `qwen2_vl`. The eval adapter can also route TensorRT-LLM-supported Qwen2.5-VL/Qwen3-VL/LLaVA/VILA input processors, but `quantize_trtllm.py` keeps the W4 ModelOpt export path conservative because the upstream TensorRT-LLM exporter currently has an explicit Qwen2-VL branch. `internvl2` is intentionally blocked until TensorRT-LLM has a compatible multimodal input processor for it.
 
-For RTX PRO 6000 Blackwell, verify the exact CUDA driver, TensorRT-LLM release, and GPU compute capability on the target machine before treating W4A16/W4A8 numbers as final. Public TensorRT-LLM support matrices have been moving quickly around Blackwell workstation parts.
+For RTX PRO 6000 Blackwell, verify the exact CUDA driver, TensorRT-LLM release, and GPU compute capability on the target machine before treating W4A16/W4A8/NVFP4 numbers as final. Public TensorRT-LLM support matrices have been moving quickly around Blackwell workstation parts. If W4A8 AWQ fails with missing groupwise GEMM tactics, switch the TensorRT-LLM comparison to NVFP4 and compare it against the fake-quant W4A8 run separately.
 
 ## Installation
 
@@ -97,6 +98,24 @@ python quantize_trtllm.py \
 
 TensorRT-LLM AWQ internally caps `calib_size` to 32 in current releases when `qformat` contains `awq`, so `--calib_size 128` is a request for enough source examples rather than a guarantee that all 128 are used by the AWQ search.
 
+Blackwell NVFP4:
+
+```bash
+python quantize_trtllm.py \
+  --model qwen2_vl \
+  --model_dir /root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
+  --output_dir /root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-NVFP4-trtllm \
+  --quant_format nvfp4 \
+  --calib_dataset /root/autodl-tmp/dataset/calibration/trtllm_qwen_text_calib \
+  --calib_size 8 \
+  --calib_max_seq_length 512 \
+  --batch_size 1 \
+  --dtype bfloat16 \
+  --tp_size 1 \
+  --awq_block_size 16 \
+  --force
+```
+
 For large models, increase `--tp_size` during export and use the same `TRTLLM_TP_SIZE` during evaluation.
 
 The W4 exporter currently enables `--model qwen2_vl`, `--model llava_onevision`, `--model vila`, and `--model llava`. If you want to try Qwen2.5-VL/Qwen3-VL, first check the TensorRT-LLM version on the target machine for a matching ModelOpt export branch; otherwise use the PyTorch backend only for functional debugging, not speedup numbers.
@@ -130,6 +149,22 @@ TASKS=mmmu_val \
 FP16_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
 REAL_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm \
 W_BIT=4 A_BIT=16 \
+bash scripts/run_qig_real_trtllm_eval.sh
+```
+
+NVFP4 Blackwell smoke:
+
+```bash
+LIMIT=1 \
+TASKS=mmmu_val \
+FP16_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct \
+REAL_CHECKPOINT=/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-NVFP4-trtllm \
+W_BIT=4 A_BIT=4 \
+TRTLLM_MAX_BATCH_SIZE=1 \
+TRTLLM_MAX_NUM_TOKENS=2048 \
+TRTLLM_KV_CACHE_FRACTION=0.35 \
+TRTLLM_WORKSPACE=/root/autodl-tmp/eval/QIG/trtllm_workspace_nvfp4 \
+TRTLLM_FAST_BUILD=0 \
 bash scripts/run_qig_real_trtllm_eval.sh
 ```
 

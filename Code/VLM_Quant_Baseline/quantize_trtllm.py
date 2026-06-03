@@ -10,6 +10,7 @@ from pathlib import Path
 SUPPORTED_TRTLLM_FORMATS = {
     "w4a16": "int4_awq",
     "w4a8": "w4a8_awq",
+    "nvfp4": "nvfp4",
 }
 
 SUPPORTED_TRTLLM_MODELS = {
@@ -28,7 +29,7 @@ def parse_args():
                         choices=["qwen2_vl", "qwen2_5_vl", "llava_onevision", "vila", "llava"])
     parser.add_argument("--model_dir", required=True, help="HF model id or local checkpoint path.")
     parser.add_argument("--output_dir", required=True, help="Output checkpoint directory.")
-    parser.add_argument("--quant_format", required=True, choices=["w3a16", "w4a16", "w4a8"])
+    parser.add_argument("--quant_format", required=True, choices=["w3a16", "w4a16", "w4a8", "nvfp4"])
     parser.add_argument("--calib_dataset", default="cnn_dailymail",
                         help="Dataset understood by TensorRT-LLM ModelOpt exporter. "
                              "Use ScienceQA/scienceqa for multimodal Qwen2-VL calibration.")
@@ -39,7 +40,9 @@ def parse_args():
     parser.add_argument("--tp_size", type=int, default=1)
     parser.add_argument("--pp_size", type=int, default=1)
     parser.add_argument("--cp_size", type=int, default=1)
-    parser.add_argument("--awq_block_size", type=int, default=128)
+    parser.add_argument("--awq_block_size", type=int, default=128,
+                        help="AWQ group size for W4A16/W4A8. For NVFP4 this is passed as "
+                             "the TensorRT-LLM ModelOpt block size and should be 16.")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--device_map", default="auto", choices=["auto", "sequential", "cpu", "gpu"])
     parser.add_argument("--tokenizer_max_seq_length", type=int, default=2048)
@@ -120,7 +123,10 @@ def normalize_qwen2_vl_trtllm_text_config(output_dir: Path):
 
 
 def export_trtllm_modelopt(args):
-    if args.awq_block_size not in (64, 128):
+    if args.quant_format == "nvfp4":
+        if args.awq_block_size != 16:
+            raise ValueError("TensorRT-LLM NVFP4 export expects --awq_block_size 16.")
+    elif args.awq_block_size not in (64, 128):
         raise ValueError("TensorRT-LLM AWQ block size should be 64 or 128.")
     if args.model not in SUPPORTED_TRTLLM_MODELS:
         raise ValueError(
@@ -167,6 +173,7 @@ def export_trtllm_modelopt(args):
         normalized_config = normalize_qwen2_vl_trtllm_text_config(Path(args.output_dir))
     write_manifest(args, "trtllm-modelopt", {
         "trtllm_qformat": qformat,
+        "block_size": args.awq_block_size,
         "awq_block_size": args.awq_block_size,
         "calib_dataset": args.calib_dataset,
         "calib_size": args.calib_size,
