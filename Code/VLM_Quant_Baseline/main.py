@@ -32,12 +32,6 @@ from lmms_eval.utils import (
     simple_parse_args_string,
 )
 
-from qmllm.quantization.quant_wrapper import qwrapper
-from qmllm.models import get_process_model
-from qmllm.calibration.pileval import get_calib_dataset
-from qmllm.calibration.coco_vl import get_multimodal_calib_dataset
-
-
 def _int_or_none_list_arg_type(min_len: int, max_len: int, defaults: str, value: str, split_char: str = ","):
     def parse_value(item):
         item = item.strip().lower()
@@ -587,6 +581,11 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
         )
     # 
     if args.pseudo_quant:
+        from qmllm.calibration.coco_vl import get_multimodal_calib_dataset
+        from qmllm.calibration.pileval import get_calib_dataset
+        from qmllm.models import get_process_model
+        from qmllm.quantization.quant_wrapper import qwrapper
+
         print("Pseudo quant...")
         Process_ModelClass = get_process_model(args.model)
         process_model = Process_ModelClass(lm._model, 
