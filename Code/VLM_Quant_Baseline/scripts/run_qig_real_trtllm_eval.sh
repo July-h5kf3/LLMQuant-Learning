@@ -81,6 +81,11 @@ setup_env() {
   export HF_HUB_CACHE="${HF_HUB_CACHE:-${INFERENCE_DATA_ROOT}/hub}"
   export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-${INFERENCE_DATA_ROOT}/hub}"
   export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${INFERENCE_DATA_ROOT}/xdg}"
+  export RDMAV_FORK_SAFE="${RDMAV_FORK_SAFE:-1}"
+  local conda_prefix="${CONDA_PREFIX:-}"
+  if [[ -n "$conda_prefix" && -d "${conda_prefix}/lib/python3.12/site-packages/nvidia/cu13/lib" ]]; then
+    export LD_LIBRARY_PATH="${conda_prefix}/lib/python3.12/site-packages/nvidia/cu13/lib:${LD_LIBRARY_PATH:-}"
+  fi
 
   if [[ "$DRY_RUN" != "1" ]]; then
     mkdir -p "$EVAL_ROOT" "$LOG_ROOT"
