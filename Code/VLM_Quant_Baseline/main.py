@@ -354,6 +354,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
 
     args_list = []
     results_list = []
+    had_error = False
     if args.config:
         if not os.path.exists(args.config):
             raise ValueError(f"Config file does not exist: {args.config}")
@@ -398,6 +399,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
                 # wandb_logger.finish()
 
         except Exception as e:
+            had_error = True
             if args.verbosity == "DEBUG":
                 raise e
             else:
@@ -415,6 +417,9 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
 
     if args.wandb_args:
         wandb_logger.run.finish()
+
+    if had_error:
+        sys.exit(1)
 
 
 def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
