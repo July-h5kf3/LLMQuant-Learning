@@ -95,8 +95,7 @@ build_llm() {
     return 0
   fi
 
-  local cmd=(
-    trtllm-build
+  local build_args=(
     --checkpoint_dir "$REAL_CHECKPOINT"
     --output_dir "${TRTLLM_ENGINE_DIR}/llm"
     --max_batch_size "$TRTLLM_MAX_BATCH_SIZE"
@@ -109,12 +108,26 @@ build_llm() {
     --workers "$TRTLLM_WORKERS"
   )
   if [[ -n "$TRTLLM_OPT_NUM_TOKENS" ]]; then
-    cmd+=(--opt_num_tokens "$TRTLLM_OPT_NUM_TOKENS")
+    build_args+=(--opt_num_tokens "$TRTLLM_OPT_NUM_TOKENS")
   fi
   if [[ "$TRTLLM_FAST_BUILD" == "1" ]]; then
-    cmd+=(--fast_build)
+    build_args+=(--fast_build)
   fi
-  run_cmd "${cmd[@]}"
+  log trtllm-build "${build_args[@]}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    return 0
+  fi
+  TRTLLM_BUILD_ARGS="$(printf '%s\n' "${build_args[@]}")" python - <<'PY'
+import os
+import sys
+
+from tensorrt_llm.plugin import _load_plugin_lib
+from tensorrt_llm.commands.build import main
+
+_load_plugin_lib()
+sys.argv = ["trtllm-build"] + os.environ["TRTLLM_BUILD_ARGS"].splitlines()
+raise SystemExit(main())
+PY
 }
 
 main() {
