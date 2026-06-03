@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 import sys
+import time
 import traceback
 import warnings
 from functools import partial
@@ -77,6 +78,61 @@ def _handle_non_serializable(o):
         return list(o)
     else:
         return str(o)
+
+
+def _count_generated_tokens(lm, text):
+    tokenizer = getattr(lm, "tokenizer", None)
+    if tokenizer is None:
+        tokenizer = getattr(lm, "_tokenizer", None)
+    if tokenizer is None:
+        return len(str(text).split())
+    try:
+        return len(tokenizer.encode(text, add_special_tokens=False))
+    except TypeError:
+        return len(tokenizer.encode(text))
+    except Exception:
+        return len(str(text).split())
+
+
+def _wrap_generate_until_speed(lm, engine_label: str):
+    if getattr(lm, "_qmllm_speed_wrapped", False) or not hasattr(lm, "generate_until"):
+        return lm
+
+    original_generate_until = lm.generate_until
+    speed_stats = {
+        "requests": 0,
+        "generated_tokens": 0,
+        "generate_sec": 0.0,
+    }
+
+    def generate_until_with_speed(requests, *args, **kwargs):
+        start = time.perf_counter()
+        outputs = original_generate_until(requests, *args, **kwargs)
+        speed_stats["generate_sec"] += time.perf_counter() - start
+        speed_stats["requests"] += len(requests)
+        speed_stats["generated_tokens"] += sum(_count_generated_tokens(lm, text) for text in outputs)
+
+        requests_count = speed_stats["requests"]
+        generate_sec = speed_stats["generate_sec"]
+        generated_tokens = speed_stats["generated_tokens"]
+        samples_per_sec = requests_count / generate_sec if generate_sec > 0 else 0.0
+        output_tokens_per_sec = generated_tokens / generate_sec if generate_sec > 0 else 0.0
+        avg_output_tokens = generated_tokens / requests_count if requests_count else 0.0
+        print(
+            f"[{engine_label}_SPEED] "
+            f"requests={requests_count} "
+            f"generated_tokens={generated_tokens} "
+            f"generate_sec={generate_sec:.6f} "
+            f"samples_per_sec={samples_per_sec:.6f} "
+            f"output_tokens_per_sec={output_tokens_per_sec:.6f} "
+            f"avg_output_tokens={avg_output_tokens:.6f} "
+            f"batch_size={getattr(lm, 'batch_size', '')}"
+        )
+        return outputs
+
+    lm.generate_until = generate_until_with_speed
+    lm._qmllm_speed_wrapped = True
+    return lm
 
 
 def parse_eval_args() -> argparse.Namespace:
@@ -615,6 +671,7 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
         
 
         qwrapper(process_model, prompt_inputs, prompt_kwargs, args)
+        _wrap_generate_until_speed(lm, "FAKE_QUANT")
 
     evaluate_kwargs = {
         "model_args": args.model_args,

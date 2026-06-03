@@ -14,10 +14,15 @@ GEN_KWARGS="${GEN_KWARGS:-temperature=0,max_new_tokens=64}"
 FP16_CHECKPOINT="${FP16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct}"
 W3A16_CHECKPOINT="${W3A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq/Qwen2-VL-7B-Instruct-w3g128}"
 W4A16_CHECKPOINT="${W4A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-vllm}"
-W4A8_CHECKPOINT="${W4A8_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A8-vllm-smoke}"
+W4A8_CHECKPOINT="${W4A8_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A8-trtllm}"
+W4A8_FAKE_METHOD="${W4A8_FAKE_METHOD:-rtn}"
+W4A8_FAKE_SCALE_PATH="${W4A8_FAKE_SCALE_PATH:-}"
+W4A8_FAKE_RUN_PROCESS="${W4A8_FAKE_RUN_PROCESS:-0}"
+TRTLLM_CONDA_ENV="${TRTLLM_CONDA_ENV:-/root/autodl-tmp/envs/QIG_TRTLLM}"
 
 QIG_CONDA_ENV="${QIG_CONDA_ENV:-QIG}"
 PYTHON_BIN="${PYTHON_BIN:-/root/miniconda3/envs/${QIG_CONDA_ENV}/bin/python}"
+DRY_RUN="${DRY_RUN:-0}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%F %T')" "$*" >&2
@@ -36,18 +41,28 @@ run_variant() {
   local variant="$1"
   shift
   local out_dir="${SUITE_ROOT}/${variant}"
-  mkdir -p "$out_dir"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    mkdir -p "$out_dir"
+  fi
   log "Running ${variant}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "DRY_RUN command: EVAL_ROOT=${out_dir} TASKS=${TASKS} BATCH_SIZE=${BATCH_SIZE} GEN_KWARGS=${GEN_KWARGS} LIMIT=${LIMIT} $*"
+    return 0
+  fi
   EVAL_ROOT="$out_dir" TASKS="$TASKS" BATCH_SIZE="$BATCH_SIZE" GEN_KWARGS="$GEN_KWARGS" LIMIT="$LIMIT" "$@"
 }
 
-mkdir -p "$SUITE_ROOT"
+if [[ "$DRY_RUN" != "1" ]]; then
+  mkdir -p "$SUITE_ROOT"
+fi
 cd "$REPO_ROOT"
 
-require_checkpoint "FP16 processor" "$FP16_CHECKPOINT"
-require_checkpoint "W3A16 vLLM" "$W3A16_CHECKPOINT"
-require_checkpoint "W4A16 vLLM" "$W4A16_CHECKPOINT"
-require_checkpoint "W4A8 vLLM" "$W4A8_CHECKPOINT"
+if [[ "$DRY_RUN" != "1" ]]; then
+  require_checkpoint "FP16 processor" "$FP16_CHECKPOINT"
+  require_checkpoint "W3A16 vLLM" "$W3A16_CHECKPOINT"
+  require_checkpoint "W4A16 vLLM" "$W4A16_CHECKPOINT"
+  require_checkpoint "W4A8 TensorRT-LLM" "$W4A8_CHECKPOINT"
+fi
 
 run_variant \
   w3a16_vllm \
@@ -70,18 +85,31 @@ run_variant \
     bash scripts/run_qig_real_vllm_eval.sh
 
 run_variant \
-  w4a8_vllm \
+  w4a8_trtllm \
   env \
-    CONDA_ENV="$QIG_CONDA_ENV" \
+    CONDA_ENV="$TRTLLM_CONDA_ENV" \
     FP16_CHECKPOINT="$FP16_CHECKPOINT" \
     REAL_CHECKPOINT="$W4A8_CHECKPOINT" \
     W_BIT=4 \
     A_BIT=8 \
-    VLLM_QUANTIZATION="${W4A8_VLLM_QUANTIZATION:-compressed-tensors}" \
-    bash scripts/run_qig_real_vllm_eval.sh
+    bash scripts/run_qig_real_trtllm_eval.sh
 
-"$PYTHON_BIN" scripts/summarize_lmms_eval_speed.py \
-  --run_root "$SUITE_ROOT" \
-  --output_csv "${SUITE_ROOT}/summary.csv"
+run_variant \
+  w4a8_fake_quant \
+  env \
+    CONDA_ENV="$QIG_CONDA_ENV" \
+    FP16_CHECKPOINT="$FP16_CHECKPOINT" \
+    PSEUDO_METHOD="$W4A8_FAKE_METHOD" \
+    SCALE_PATH="$W4A8_FAKE_SCALE_PATH" \
+    RUN_PROCESS="$W4A8_FAKE_RUN_PROCESS" \
+    W_BIT=4 \
+    A_BIT=8 \
+    bash scripts/run_qig_fake_quant_lmms_eval.sh
 
-log "Summary: ${SUITE_ROOT}/summary.csv"
+if [[ "$DRY_RUN" != "1" ]]; then
+  "$PYTHON_BIN" scripts/summarize_lmms_eval_speed.py \
+    --run_root "$SUITE_ROOT" \
+    --output_csv "${SUITE_ROOT}/summary.csv"
+
+  log "Summary: ${SUITE_ROOT}/summary.csv"
+fi

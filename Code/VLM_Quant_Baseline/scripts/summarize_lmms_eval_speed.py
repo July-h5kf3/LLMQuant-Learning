@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 
-SPEED_RE = re.compile(r"\[(?P<engine>VLLM|TRTLLM)_SPEED\]\s+(?P<body>.*)")
+SPEED_RE = re.compile(r"\[(?P<engine>VLLM|TRTLLM|FAKE_QUANT)_SPEED\]\s+(?P<body>.*)")
 
 
 def parse_kv_line(body):

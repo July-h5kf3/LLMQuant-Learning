@@ -37,6 +37,15 @@ pip install -e .
 
 If pip resolves a TensorRT-LLM build that expects a different CUDA/PyTorch stack, recreate the environment from the matching NVIDIA container or follow the exact PyTorch command in the TensorRT-LLM install page for that release. Do not mix a random PyTorch wheel with a TensorRT-LLM wheel built against another CUDA major/minor version.
 
+On RTX PRO 6000 Blackwell systems where TensorRT-LLM import hangs at MPI initialization, use:
+
+```bash
+export TRT_LLM_NO_LIB_INIT=1
+export FLASHINFER_CUDA_ARCH_LIST=12.0f
+```
+
+The eval/export scripts set these by default and still allow overrides through the environment.
+
 Sanity check:
 
 ```bash

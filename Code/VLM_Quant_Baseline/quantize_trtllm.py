@@ -97,6 +97,9 @@ def export_trtllm_modelopt(args):
             "but not Qwen2.5-VL/Qwen3-VL."
         )
 
+    os.environ.setdefault("TRT_LLM_NO_LIB_INIT", "1")
+    os.environ.setdefault("FLASHINFER_CUDA_ARCH_LIST", "12.0f")
+
     try:
         from tensorrt_llm.quantization import quantize_and_export
     except ImportError as exc:

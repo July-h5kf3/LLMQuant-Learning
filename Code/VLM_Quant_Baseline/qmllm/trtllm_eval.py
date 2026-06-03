@@ -104,6 +104,8 @@ class TRTLLMRealQuantModel(lmms):
             raise ValueError(f"Unexpected kwargs for TRTLLMRealQuantModel: {kwargs}")
 
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        os.environ.setdefault("TRT_LLM_NO_LIB_INIT", "1")
+        os.environ.setdefault("FLASHINFER_CUDA_ARCH_LIST", "12.0f")
 
         self.model_path = pretrained
         self.tokenizer_path = tokenizer_path or pretrained
@@ -144,7 +146,9 @@ class TRTLLMRealQuantModel(lmms):
 
         try:
             import tensorrt_llm._torch.models  # noqa: F401
-            from tensorrt_llm import BuildConfig, LLM as TorchLLM, SamplingParams
+            from tensorrt_llm.builder import BuildConfig
+            from tensorrt_llm.llmapi import LLM as TorchLLM
+            from tensorrt_llm.sampling_params import SamplingParams
             from tensorrt_llm.inputs import create_input_processor
             from tensorrt_llm.llmapi import KvCacheConfig
             from tensorrt_llm.inputs import default_multimodal_input_loader
