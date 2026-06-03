@@ -162,10 +162,10 @@ def cli_quant_single(args: Union[argparse.Namespace, None] = None) -> None:
         if args.w_bit == 3:
             raise ValueError(
                 "TensorRT-LLM does not currently advertise W3A16 engine support. "
-                "Use W4A16/W4A8/NVFP4 for TRT-LLM smoke tests."
+                "Use W4A16/W4A8 for TRT-LLM smoke tests, or keep W3A16 on vLLM."
             )
-        if not (args.w_bit == 4 and args.a_bit in (4, 8, 16)):
-            raise ValueError("The TensorRT-LLM smoke path is wired for W4A16, W4A8, and NVFP4.")
+        if not (args.w_bit == 4 and args.a_bit in (8, 16)):
+            raise ValueError("The TensorRT-LLM smoke path is wired for W4A16 and W4A8.")
         quant_meta = build_quant_meta(args)
         quant_meta.update({
             "real_quant": True,

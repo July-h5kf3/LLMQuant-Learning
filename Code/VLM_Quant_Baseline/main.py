@@ -584,10 +584,10 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
         if args.w_bit == 3:
             raise ValueError(
                 "TensorRT-LLM does not currently advertise W3A16 engine support. "
-                "Use --w_bit 4 with --a_bit 16/8/4 for TRT-LLM, or run W3A16 through the documented AutoRound fallback."
+                "Use --w_bit 4 with --a_bit 16/8 for TRT-LLM, or keep W3A16 on the documented vLLM fallback."
             )
-        if not (args.w_bit == 4 and args.a_bit in (4, 8, 16)):
-            raise ValueError("The TensorRT-LLM real-quant path is wired for W4A16, W4A8, and NVFP4.")
+        if not (args.w_bit == 4 and args.a_bit in (8, 16)):
+            raise ValueError("The TensorRT-LLM real-quant path is wired for W4A16 and W4A8.")
         from qmllm.trtllm_eval import TRTLLMRealQuantModel
 
         lm = TRTLLMRealQuantModel(

@@ -106,7 +106,7 @@ class TRTLLMRealQuantModel(lmms):
 
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
         os.environ.setdefault("TRT_LLM_NO_LIB_INIT", "1")
-        os.environ.setdefault("FLASHINFER_CUDA_ARCH_LIST", "12.0f")
+        os.environ.setdefault("FLASHINFER_CUDA_ARCH_LIST", "8.9")
 
         self.model_path = pretrained
         self.tokenizer_path = tokenizer_path or pretrained

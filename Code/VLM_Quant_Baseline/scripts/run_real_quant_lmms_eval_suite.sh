@@ -13,12 +13,15 @@ GEN_KWARGS="${GEN_KWARGS:-temperature=0,max_new_tokens=64}"
 
 FP16_CHECKPOINT="${FP16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct}"
 W3A16_CHECKPOINT="${W3A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W3A16-autogptq/Qwen2-VL-7B-Instruct-w3g128}"
-W4A16_CHECKPOINT="${W4A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-vllm}"
+W4A16_CHECKPOINT="${W4A16_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A16-trtllm}"
 W4A8_CHECKPOINT="${W4A8_CHECKPOINT:-/root/autodl-tmp/weights/Qwen/Qwen2-VL-7B-Instruct-W4A8-trtllm}"
+W4A16_FAKE_METHOD="${W4A16_FAKE_METHOD:-rtn}"
+W4A16_FAKE_SCALE_PATH="${W4A16_FAKE_SCALE_PATH:-}"
+W4A16_FAKE_RUN_PROCESS="${W4A16_FAKE_RUN_PROCESS:-0}"
 W4A8_FAKE_METHOD="${W4A8_FAKE_METHOD:-rtn}"
 W4A8_FAKE_SCALE_PATH="${W4A8_FAKE_SCALE_PATH:-}"
 W4A8_FAKE_RUN_PROCESS="${W4A8_FAKE_RUN_PROCESS:-0}"
-TRTLLM_CONDA_ENV="${TRTLLM_CONDA_ENV:-/root/autodl-tmp/envs/QIG_TRTLLM}"
+TRTLLM_CONDA_ENV="${TRTLLM_CONDA_ENV:-QIG_TRTLLM}"
 
 QIG_CONDA_ENV="${QIG_CONDA_ENV:-QIG}"
 PYTHON_BIN="${PYTHON_BIN:-/root/miniconda3/envs/${QIG_CONDA_ENV}/bin/python}"
@@ -60,7 +63,7 @@ cd "$REPO_ROOT"
 if [[ "$DRY_RUN" != "1" ]]; then
   require_checkpoint "FP16 processor" "$FP16_CHECKPOINT"
   require_checkpoint "W3A16 vLLM" "$W3A16_CHECKPOINT"
-  require_checkpoint "W4A16 vLLM" "$W4A16_CHECKPOINT"
+  require_checkpoint "W4A16 TensorRT-LLM" "$W4A16_CHECKPOINT"
   require_checkpoint "W4A8 TensorRT-LLM" "$W4A8_CHECKPOINT"
 fi
 
@@ -74,15 +77,14 @@ run_variant \
     bash scripts/run_qig_w3a16_real_vllm_eval.sh
 
 run_variant \
-  w4a16_vllm \
+  w4a16_trtllm \
   env \
-    CONDA_ENV="$QIG_CONDA_ENV" \
+    CONDA_ENV="$TRTLLM_CONDA_ENV" \
     FP16_CHECKPOINT="$FP16_CHECKPOINT" \
     REAL_CHECKPOINT="$W4A16_CHECKPOINT" \
     W_BIT=4 \
     A_BIT=16 \
-    VLLM_QUANTIZATION="${W4A16_VLLM_QUANTIZATION:-compressed-tensors}" \
-    bash scripts/run_qig_real_vllm_eval.sh
+    bash scripts/run_qig_real_trtllm_eval.sh
 
 run_variant \
   w4a8_trtllm \
@@ -93,6 +95,18 @@ run_variant \
     W_BIT=4 \
     A_BIT=8 \
     bash scripts/run_qig_real_trtllm_eval.sh
+
+run_variant \
+  w4a16_fake_quant \
+  env \
+    CONDA_ENV="$QIG_CONDA_ENV" \
+    FP16_CHECKPOINT="$FP16_CHECKPOINT" \
+    PSEUDO_METHOD="$W4A16_FAKE_METHOD" \
+    SCALE_PATH="$W4A16_FAKE_SCALE_PATH" \
+    RUN_PROCESS="$W4A16_FAKE_RUN_PROCESS" \
+    W_BIT=4 \
+    A_BIT=16 \
+    bash scripts/run_qig_fake_quant_lmms_eval.sh
 
 run_variant \
   w4a8_fake_quant \

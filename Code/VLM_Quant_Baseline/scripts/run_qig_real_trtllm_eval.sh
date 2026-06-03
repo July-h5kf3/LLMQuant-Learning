@@ -209,7 +209,7 @@ setup_env() {
   export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${INFERENCE_DATA_ROOT}/xdg}"
   export RDMAV_FORK_SAFE="${RDMAV_FORK_SAFE:-1}"
   export TRT_LLM_NO_LIB_INIT="${TRT_LLM_NO_LIB_INIT:-1}"
-  export FLASHINFER_CUDA_ARCH_LIST="${FLASHINFER_CUDA_ARCH_LIST:-12.0f}"
+  export FLASHINFER_CUDA_ARCH_LIST="${FLASHINFER_CUDA_ARCH_LIST:-8.9}"
   export TLLM_WORKER_USE_SINGLE_PROCESS="${TLLM_WORKER_USE_SINGLE_PROCESS:-1}"
   local conda_prefix="${CONDA_PREFIX:-}"
   if [[ -n "$conda_prefix" && -d "${conda_prefix}/lib/python3.12/site-packages/nvidia/cu13/lib" ]]; then
