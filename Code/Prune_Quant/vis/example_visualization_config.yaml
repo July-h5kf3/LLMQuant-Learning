@@ -28,6 +28,9 @@ scoring:
 
 visualization:
   limit: 1
+  random_sample: true
+  seed:
+  image_overlay: true
   output_dir: outputs
   save_sample_artifacts: true
   sample_artifact_dir: samples

@@ -5,14 +5,22 @@
 - 原始 GAE：`gae_scores` 是保留分数，分数最低的一批 visual tokens 会被标红并删除。
 - 量化-剪枝协同指标：`quant_joint_scores = lambda * C_quant - C_drop` 是删除分数，分数最高的一批 visual tokens 会被标红并删除。
 
-输出图片会保存到 `vis/outputs/`。四宫格含义如下：
+输出图片会保存到 `vis/outputs/`。现在图中只展示 visual tokens，横轴是 visual token 的局部编号 `0 ... N_visual-1`。四宫格含义如下：
 
-- 左上：原始 token 分布，其中 GAE 删除的 visual tokens 用红色标注。
-- 右上：原始 token 分布，其中量化-剪枝协同指标删除的 visual tokens 用红色标注。
-- 左下：GAE 删除后剩余 token 的分布。
-- 右下：量化-剪枝协同指标删除后剩余 token 的分布。
+- 左上：原始 visual token 分布，其中 GAE 删除的 visual tokens 用红色标注。
+- 右上：原始 visual token 分布，其中量化-剪枝协同指标删除的 visual tokens 用红色标注。
+- 左下：GAE 删除后剩余 visual tokens 的分布。
+- 右下：量化-剪枝协同指标删除后剩余 visual tokens 的分布。
 
-每个 token 的纵向线段由该 token 的 `D_model` 通道最小值和最大值构成。粗黑线表示 Vision Token 与 Text Token 的边界。
+每个 visual token 的纵向线段由该 token 的 `D_model` 通道最小值和最大值构成。
+
+脚本还会额外生成一张 `_image_overlay.png`，把被删除的 visual tokens 投回原始图片：
+
+- 左列：原图。
+- 中列：GAE 删除位置。
+- 右列：量化-剪枝协同指标删除位置。
+
+这个映射基于 Qwen 的 `image_grid_thw` 和 `spatial_merge_size`，适用于单图样本；多图样本会先使用第一张图并打印提示。
 
 ## 快速预览
 
@@ -40,13 +48,13 @@ vis/outputs/demo_sample_token_pruning.png
     "inputs_embeds": Tensor_or_ndarray,        # [S, D] 或 [1, S, D]
     "visual_indices": Tensor_or_ndarray,      # [N_visual]，visual token 在完整序列中的位置
     "text_indices": Tensor_or_ndarray,        # 可选
-    "vision_text_boundary": int,              # 可选，text token 开始的位置
+    "vision_text_boundary": int,              # 可选，仅在没有 visual_indices 时用于推断前 N 个 token 为视觉 token
     "gae_scores": Tensor_or_ndarray,          # [N_visual]
     "quant_joint_scores": Tensor_or_ndarray,  # [N_visual]
 }
 ```
 
-如果样本没有 `visual_indices`，可以用 `--visual-count N` 表示前 `N` 个 token 是 visual tokens。若没有 `vision_text_boundary`，默认使用 `max(visual_indices) + 1` 作为黑色边界线位置。
+如果样本没有 `visual_indices`，可以用 `--visual-count N` 表示前 `N` 个 token 是 visual tokens。
 
 ## 运行真实样本
 
@@ -67,6 +75,10 @@ model:
   trust_remote_code: true
   local_files_only: true
   attn_implementation: eager
+  # 可选：控制 processor 的视觉 token budget。
+  # 如果希望 Qwen2-VL 图像样本接近 1500 个 visual tokens，可以先设置这个值。
+  # 实际 token 数仍会受原图尺寸和 processor resize 规则影响。
+  processor_max_visual_tokens: 1500
 
 calibration:
   path: ${CALIB_JSONL}
@@ -94,6 +106,9 @@ scoring:
 visualization:
   limit: 1
   sample_offset: 0
+  random_sample: true
+  seed: null           # 需要复现同一张样本时设置整数
+  image_overlay: true
   output_dir: outputs
   save_sample_artifacts: true
   sample_artifact_dir: samples
@@ -110,6 +125,9 @@ visualization:
 - 原始 GAE 分数通过 `_score_gae_oracle` 计算。
 - `save_sample_artifacts: true` 会额外保存 `.pt` 样本包，后续可以不加载模型直接重画。
 - YAML 内的相对路径按 YAML 文件所在目录解析；`vis/example_visualization_config.yaml` 里的 `outputs` 会解析到 `vis/outputs`。
+- YAML 模式运行时会打印 `seq_len`、`visual_tokens`、`image_grid_thw` 和 processor pixel budget；如果 visual token 数不是预期的约 1500，先看这行诊断。
+- Qwen2-VL/Qwen2.5-VL 的 visual token 数由 processor resize 后的 `image_grid_thw` 决定，不是固定 1500。若没有设置 `model.processor_max_visual_tokens` / `model.processor_max_pixels`，或者原图本身较小，实际 visual tokens 可能明显少于 1500。
+- `visualization.random_sample: true` 时，每次运行会从校准集中随机抽样；设置 `seed` 可以固定抽到同一批样本。
 
 也可以对已经保存好的样本包重画：
 
@@ -117,6 +135,7 @@ visualization:
 python vis/visualize_token_pruning.py \
   --sample /path/to/sample.pt \
   --retention-ratio 0.5 \
+  --image-overlay \
   --output-name sample_0001_pruning.png
 ```
 

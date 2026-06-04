@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -132,6 +133,9 @@ def _load_visualization_config(path: Path) -> dict[str, Any]:
         },
         "visualization": {
             "limit": 1,
+            "random_sample": True,
+            "seed": None,
+            "image_overlay": True,
             "output_dir": str(Path(__file__).resolve().parent / "outputs"),
             "save_sample_artifacts": False,
             "sample_artifact_dir": str(Path(__file__).resolve().parent / "samples"),
@@ -187,6 +191,25 @@ def _prepare_sample_paths(sample: dict[str, Any], image_root: Path | None) -> di
     return sample
 
 
+def _sample_image_path(sample: dict[str, Any]) -> str | None:
+    for key in ("image", "image_path"):
+        value = sample.get(key)
+        if isinstance(value, str):
+            return value
+    images = sample.get("images")
+    if isinstance(images, list) and images and isinstance(images[0], str):
+        return images[0]
+    return None
+
+
+def _spatial_merge_size(model: Any) -> int:
+    vision_config = getattr(getattr(model, "config", None), "vision_config", None)
+    value = getattr(vision_config, "spatial_merge_size", None)
+    if value is None:
+        value = getattr(getattr(model, "config", None), "spatial_merge_size", None)
+    return int(value or 2)
+
+
 def _build_sample_artifact(
     *,
     model: Any,
@@ -209,6 +232,11 @@ def _build_sample_artifact(
         "visual_indices": meta.visual_indices.detach().cpu(),
         "text_indices": None if meta.text_indices is None else meta.text_indices.detach().cpu(),
         "vision_text_boundary": boundary,
+        "image_grid_thw": None if meta.image_grid_thw is None else meta.image_grid_thw.detach().cpu(),
+        "image_path": _sample_image_path(sample),
+        "spatial_merge_size": _spatial_merge_size(model),
+        "num_visual_tokens": int(meta.visual_indices.numel()),
+        "seq_len": int(inputs["input_ids"].shape[-1]) if "input_ids" in inputs else int(inputs_embeds.shape[1]),
         "gae_scores": gae_scores.detach().float().cpu(),
         "quant_joint_scores": quant_joint_scores.detach().float().cpu(),
     }
@@ -267,6 +295,15 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
     image_root = _resolve_path(calibration_cfg.get("image_root") or data_cfg.get("image_root"), base_dir)
     limit = cli_limit if cli_limit is not None else int(vis_cfg.get("limit", 1))
     sample_offset = int(vis_cfg.get("sample_offset", 0))
+    raw_samples = list(_read_jsonl(calib_path))
+    candidate_indices = list(range(sample_offset, len(raw_samples)))
+    if not candidate_indices:
+        raise ValueError(f"No calibration samples available after sample_offset={sample_offset}.")
+    if _bool_value(vis_cfg.get("random_sample", True)):
+        rng = random.Random(vis_cfg.get("seed"))
+        selected_indices = rng.sample(candidate_indices, k=min(limit, len(candidate_indices)))
+    else:
+        selected_indices = candidate_indices[:limit]
 
     model, processor = load_model_and_processor(
         model_id_or_path=str(_required(config, "model.model_path")),
@@ -291,16 +328,22 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
     quant_lambda = float(quant_cfg.get("quant_lambda", pruning_cfg.get("quant_lambda", 1.0)))
     quant_pruner = QuantJointGAEPruner(quant_lambda=quant_lambda)
 
-    produced = 0
-    for row_idx, raw_sample in enumerate(_read_jsonl(calib_path)):
-        if row_idx < sample_offset:
-            continue
-        if limit is not None and produced >= limit:
-            break
+    for row_idx in selected_indices:
+        raw_sample = raw_samples[row_idx]
         sample = _prepare_sample_paths(raw_sample, image_root)
         inputs = adapter.prepare_inputs(processor, sample)
         inputs = _move_inputs_to_model_device(model, inputs)
         meta = adapter.get_visual_token_meta(model, inputs)
+        image_grid = None if meta.image_grid_thw is None else meta.image_grid_thw.detach().cpu().tolist()
+        seq_len = int(inputs["input_ids"].shape[-1]) if "input_ids" in inputs else None
+        print(
+            "[visualize] "
+            f"row={row_idx} id={sample.get('id', row_idx)} "
+            f"seq_len={seq_len} visual_tokens={int(meta.visual_indices.numel())} "
+            f"image_grid_thw={image_grid} "
+            f"processor_min_pixels={_resolve_processor_pixels(config, 'min')} "
+            f"processor_max_pixels={_resolve_processor_pixels(config, 'max')}"
+        )
         answer = _sample_answer(
             model=model,
             processor=processor,
@@ -346,11 +389,11 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             "output_dir": _resolve_path(vis_cfg.get("output_dir"), base_dir) or Path(__file__).resolve().parent / "outputs",
             "output_name": vis_cfg.get("output_name"),
             "save_sample_artifacts": _bool_value(vis_cfg.get("save_sample_artifacts", False)),
+            "image_overlay": _bool_value(vis_cfg.get("image_overlay", True)),
             "sample_artifact_dir": _resolve_path(vis_cfg.get("sample_artifact_dir"), base_dir)
             or Path(__file__).resolve().parent / "samples",
             "row_idx": row_idx,
         }
-        produced += 1
 
 
 def _squeeze_embeddings(embeds: np.ndarray) -> np.ndarray:
@@ -430,6 +473,142 @@ def _remaining_embeddings(embeds: np.ndarray, removed: np.ndarray) -> tuple[np.n
     return embeds[keep_mask], kept_positions
 
 
+def _first_image_grid(sample: dict[str, Any]) -> tuple[int, int, int] | None:
+    value = sample.get("image_grid_thw")
+    if value is None:
+        return None
+    grid = _as_numpy(value, name="image_grid_thw").astype(np.int64).reshape(-1, 3)
+    if grid.shape[0] != 1:
+        print(f"[visualize] image overlay currently uses the first image only; image_grid_thw={grid.tolist()}")
+    if grid.shape[0] == 0:
+        return None
+    t, h, w = grid[0].tolist()
+    return int(t), int(h), int(w)
+
+
+def _removed_mask_for_image(
+    removed: np.ndarray,
+    *,
+    image_grid_thw: tuple[int, int, int],
+    spatial_merge_size: int,
+) -> np.ndarray:
+    t, h, w = image_grid_thw
+    merge = max(1, int(spatial_merge_size))
+    grid_h = max(1, h // merge)
+    grid_w = max(1, w // merge)
+    per_frame = grid_h * grid_w
+    first_image_tokens = max(1, int(t) * per_frame)
+    mask = np.zeros((grid_h, grid_w), dtype=bool)
+    for token_idx in removed.astype(np.int64).tolist():
+        if token_idx < 0 or token_idx >= first_image_tokens:
+            continue
+        within_frame = token_idx % per_frame
+        y = within_frame // grid_w
+        x = within_frame % grid_w
+        mask[y, x] = True
+    return mask
+
+
+def _draw_image_overlay_panel(
+    image: Any,
+    mask: np.ndarray,
+    *,
+    title: str,
+    alpha: int = 118,
+) -> Any:
+    from PIL import Image, ImageDraw
+
+    base = image.convert("RGBA")
+    overlay = Image.new("RGBA", base.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(overlay)
+    h, w = mask.shape
+    cell_w = base.width / float(w)
+    cell_h = base.height / float(h)
+    for y in range(h):
+        for x in range(w):
+            if not mask[y, x]:
+                continue
+            box = (
+                int(round(x * cell_w)),
+                int(round(y * cell_h)),
+                int(round((x + 1) * cell_w)),
+                int(round((y + 1) * cell_h)),
+            )
+            draw.rectangle(box, fill=(220, 22, 22, alpha), outline=(150, 0, 0, 180), width=1)
+    composed = Image.alpha_composite(base, overlay).convert("RGB")
+    return composed, title
+
+
+def _save_image_overlay(
+    *,
+    sample: dict[str, Any],
+    sample_id: str,
+    output_path: Path,
+    gae_removed: np.ndarray,
+    quant_removed: np.ndarray,
+) -> Path | None:
+    from PIL import Image, ImageDraw, ImageFont
+
+    image_path = sample.get("image_path")
+    if not image_path:
+        print("[visualize] skipped image overlay: sample has no image_path.")
+        return None
+    image_path = Path(str(image_path)).expanduser()
+    if not image_path.exists():
+        print(f"[visualize] skipped image overlay: image_path does not exist: {image_path}")
+        return None
+    grid = _first_image_grid(sample)
+    if grid is None:
+        print("[visualize] skipped image overlay: missing image_grid_thw.")
+        return None
+    spatial_merge_size_value = sample.get("spatial_merge_size", 2)
+    if hasattr(spatial_merge_size_value, "detach"):
+        spatial_merge_size = int(_as_numpy(spatial_merge_size_value, name="spatial_merge_size").item())
+    else:
+        spatial_merge_size = int(np.asarray(spatial_merge_size_value).item())
+    image = Image.open(image_path).convert("RGB")
+    gae_mask = _removed_mask_for_image(
+        gae_removed,
+        image_grid_thw=grid,
+        spatial_merge_size=spatial_merge_size,
+    )
+    quant_mask = _removed_mask_for_image(
+        quant_removed,
+        image_grid_thw=grid,
+        spatial_merge_size=spatial_merge_size,
+    )
+    panels = [
+        (image, "Original image"),
+        _draw_image_overlay_panel(image, gae_mask, title=f"GAE removed ({int(gae_mask.sum())} cells)"),
+        _draw_image_overlay_panel(image, quant_mask, title=f"Quant-joint removed ({int(quant_mask.sum())} cells)"),
+    ]
+    max_panel_w = 560
+    resized = []
+    for panel, title in panels:
+        scale = min(1.0, max_panel_w / float(panel.width))
+        new_size = (max(1, int(panel.width * scale)), max(1, int(panel.height * scale)))
+        resized.append((panel.resize(new_size), title))
+    title_h = 34
+    margin = 24
+    gutter = 20
+    canvas_w = sum(panel.width for panel, _ in resized) + gutter * (len(resized) - 1) + margin * 2
+    canvas_h = max(panel.height for panel, _ in resized) + title_h + margin * 2 + 28
+    canvas = Image.new("RGB", (canvas_w, canvas_h), "white")
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+    draw.text((margin, 12), f"Pruned visual tokens projected to image: {sample_id}", fill=(10, 20, 30), font=font)
+    x = margin
+    y = margin + title_h
+    for panel, title in resized:
+        draw.text((x, y - 18), title, fill=(35, 45, 55), font=font)
+        canvas.paste(panel, (x, y))
+        x += panel.width + gutter
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output_path)
+    print(f"Wrote {output_path}")
+    return output_path
+
+
 def _plot_token_ranges(
     ax: Any,
     embeds: np.ndarray,
@@ -452,7 +631,7 @@ def _plot_token_ranges(
     if boundary_position is not None:
         ax.axvline(boundary_position, color="black", linewidth=3.0, alpha=0.95)
     ax.set_title(title, fontsize=12)
-    ax.set_xlabel("Token idx")
+    ax.set_xlabel("Visual token idx")
     ax.set_ylabel("proxy value")
     ax.grid(axis="y", color="#D0D7DE", linewidth=0.7, alpha=0.65)
     ax.spines["top"].set_visible(False)
@@ -494,7 +673,7 @@ def _draw_pillow_panel(
         y = int(plot_top + frac * (plot_bottom - plot_top))
         draw.line((plot_left, y, plot_right, y), fill=(224, 229, 235), width=1)
     draw.rectangle((plot_left, plot_top, plot_right, plot_bottom), outline=(170, 178, 188), width=1)
-    draw.text((plot_left + width // 2 - 28, bottom - 22), "Token idx", fill=(70, 78, 88), font=label_font)
+    draw.text((plot_left + width // 2 - 44, bottom - 22), "Visual token idx", fill=(70, 78, 88), font=label_font)
     draw.text((left + 8, plot_top + 8), "proxy", fill=(70, 78, 88), font=label_font)
 
     max_pos = max(1, int(positions.max()) if positions.size else 1)
@@ -522,7 +701,7 @@ def _save_with_pillow(
     sample_id: str,
     retention_ratio: float,
     embeds: np.ndarray,
-    boundary: int,
+    boundary: int | None,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
     gae_after: np.ndarray,
@@ -544,7 +723,7 @@ def _save_with_pillow(
     title_font = ImageFont.load_default()
     draw.text(
         (margin, 24),
-        f"Token pruning visualization: {sample_id} | retention={retention_ratio:g}",
+        f"Visual-token pruning visualization: {sample_id} | retention={retention_ratio:g} | visual_tokens={embeds.shape[0]}",
         fill=(10, 20, 30),
         font=title_font,
     )
@@ -568,9 +747,9 @@ def _save_with_pillow(
         boxes[0],
         embeds,
         original_positions,
-        boundary - 0.5,
+        None if boundary is None else boundary - 0.5,
         gae_removed,
-        title=f"Original tokens | GAE removed: {gae_removed.size}",
+        title=f"Original visual tokens | GAE removed: {gae_removed.size}",
         show_removed=True,
         value_min=value_min,
         value_max=value_max,
@@ -580,9 +759,9 @@ def _save_with_pillow(
         boxes[1],
         embeds,
         original_positions,
-        boundary - 0.5,
+        None if boundary is None else boundary - 0.5,
         quant_removed,
-        title=f"Original tokens | Quant-joint removed: {quant_removed.size}",
+        title=f"Original visual tokens | Quant-joint removed: {quant_removed.size}",
         show_removed=True,
         value_min=value_min,
         value_max=value_max,
@@ -592,7 +771,7 @@ def _save_with_pillow(
         boxes[2],
         gae_after,
         gae_after_positions,
-        boundary - 0.5,
+        None if boundary is None else boundary - 0.5,
         np.empty((0,), dtype=np.int64),
         title="After GAE pruning",
         show_removed=False,
@@ -604,7 +783,7 @@ def _save_with_pillow(
         boxes[3],
         quant_after,
         quant_after_positions,
-        boundary - 0.5,
+        None if boundary is None else boundary - 0.5,
         np.empty((0,), dtype=np.int64),
         title="After quant-joint pruning",
         show_removed=False,
@@ -617,8 +796,6 @@ def _save_with_pillow(
     draw.text((margin + 40, legend_y - 7), "kept/original token range", fill=(45, 52, 61), font=title_font)
     draw.line((margin + 310, legend_y, margin + 342, legend_y), fill=(200, 30, 30), width=4)
     draw.text((margin + 350, legend_y - 7), "removed visual token", fill=(45, 52, 61), font=title_font)
-    draw.line((margin + 570, legend_y, margin + 602, legend_y), fill=(0, 0, 0), width=4)
-    draw.text((margin + 610, legend_y - 7), "vision/text boundary", fill=(45, 52, 61), font=title_font)
     image.save(output_path)
 
 
@@ -640,6 +817,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "outputs")
     parser.add_argument("--output-name", help="Optional output PNG filename.")
     parser.add_argument("--limit", type=int, help="Override visualization.limit when using --config.")
+    parser.add_argument("--image-overlay", action="store_true", help="Also project removed visual tokens back to the source image when available.")
     parser.add_argument("--retention-ratio", type=float, default=0.5)
     parser.add_argument("--min-keep", type=int, default=1)
     parser.add_argument("--visual-count", type=int, help="Use first N tokens as visual tokens if the sample has no indices.")
@@ -664,25 +842,28 @@ def _render_sample(
     embeds_key: str,
     gae_key: str,
     quant_key: str,
+    image_overlay: bool = False,
     visual_count: int | None = None,
     boundary_override: int | None = None,
 ) -> Path:
-    embeds = _squeeze_embeddings(_as_numpy(sample.get(embeds_key), name=embeds_key))
-    visual_indices = _infer_visual_indices(sample, embeds.shape[0], visual_count)
-    boundary = _infer_boundary(sample, visual_indices, boundary_override)
+    full_embeds = _squeeze_embeddings(_as_numpy(sample.get(embeds_key), name=embeds_key))
+    visual_indices = _infer_visual_indices(sample, full_embeds.shape[0], visual_count)
+    del boundary_override
+    embeds = full_embeds[visual_indices]
+    visual_positions = np.arange(visual_indices.size, dtype=np.int64)
     gae_scores = _as_numpy(sample.get(gae_key), name=gae_key).astype(np.float32).reshape(-1)
     quant_scores = _as_numpy(sample.get(quant_key), name=quant_key).astype(np.float32).reshape(-1)
 
     gae_removed = _select_removed(
         gae_scores,
-        visual_indices,
+        visual_positions,
         retention_ratio,
         min_keep,
         score_mode="keep",
     )
     quant_removed = _select_removed(
         quant_scores,
-        visual_indices,
+        visual_positions,
         retention_ratio,
         min_keep,
         score_mode="drop",
@@ -695,6 +876,7 @@ def _render_sample(
     output_dir.mkdir(parents=True, exist_ok=True)
     resolved_output_name = output_name or f"{sample_id}_token_pruning.png"
     output_path = output_dir / resolved_output_name
+    overlay_path = output_path.with_name(f"{output_path.stem}_image_overlay.png")
 
     plt, Line2D = _load_matplotlib()
     if plt is None:
@@ -703,7 +885,7 @@ def _render_sample(
             sample_id=sample_id,
             retention_ratio=retention_ratio,
             embeds=embeds,
-            boundary=boundary,
+            boundary=None,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
             gae_after=gae_after,
@@ -712,11 +894,19 @@ def _render_sample(
             quant_after_positions=quant_after_positions,
         )
         print(f"Wrote {output_path} (Pillow fallback; install matplotlib for publication-style axes)")
+        if image_overlay:
+            _save_image_overlay(
+                sample=sample,
+                sample_id=sample_id,
+                output_path=overlay_path,
+                gae_removed=gae_removed,
+                quant_removed=quant_removed,
+            )
         return output_path
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 9), constrained_layout=True)
     fig.suptitle(
-        f"Token pruning visualization: {sample_id} | retention={retention_ratio:g}",
+        f"Visual-token pruning visualization: {sample_id} | retention={retention_ratio:g} | visual_tokens={embeds.shape[0]}",
         fontsize=15,
         fontweight="bold",
     )
@@ -726,25 +916,25 @@ def _render_sample(
         axes[0, 0],
         embeds,
         original_positions,
-        boundary - 0.5,
+        None,
         gae_removed,
-        title=f"Original tokens | GAE removed: {gae_removed.size}",
+        title=f"Original visual tokens | GAE removed: {gae_removed.size}",
         show_removed=True,
     )
     _plot_token_ranges(
         axes[0, 1],
         embeds,
         original_positions,
-        boundary - 0.5,
+        None,
         quant_removed,
-        title=f"Original tokens | Quant-joint removed: {quant_removed.size}",
+        title=f"Original visual tokens | Quant-joint removed: {quant_removed.size}",
         show_removed=True,
     )
     _plot_token_ranges(
         axes[1, 0],
         gae_after,
         gae_after_positions,
-        boundary - 0.5,
+        None,
         np.empty((0,), dtype=np.int64),
         title="After GAE pruning",
         show_removed=False,
@@ -753,7 +943,7 @@ def _render_sample(
         axes[1, 1],
         quant_after,
         quant_after_positions,
-        boundary - 0.5,
+        None,
         np.empty((0,), dtype=np.int64),
         title="After quant-joint pruning",
         show_removed=False,
@@ -762,11 +952,18 @@ def _render_sample(
     legend_handles = [
         Line2D([0], [0], color="#356A8A", lw=2.0, label="kept/original token range"),
         Line2D([0], [0], color="#C81E1E", lw=2.4, label="removed visual token"),
-        Line2D([0], [0], color="black", lw=3.0, label="vision/text boundary"),
     ]
     fig.legend(handles=legend_handles, loc="lower center", ncol=3, frameon=False)
     fig.savefig(output_path, dpi=220, bbox_inches="tight")
     print(f"Wrote {output_path}")
+    if image_overlay:
+        _save_image_overlay(
+            sample=sample,
+            sample_id=sample_id,
+            output_path=overlay_path,
+            gae_removed=gae_removed,
+            quant_removed=quant_removed,
+        )
     return output_path
 
 
@@ -795,6 +992,7 @@ def main() -> None:
                 embeds_key="inputs_embeds",
                 gae_key="gae_scores",
                 quant_key="quant_joint_scores",
+                image_overlay=bool(render_cfg["image_overlay"]),
             )
             if render_cfg["save_sample_artifacts"]:
                 sample_id = _scalar_id(artifact, f"sample_{int(render_cfg['row_idx']):04d}")
@@ -817,6 +1015,7 @@ def main() -> None:
         embeds_key=args.embeds_key,
         gae_key=args.gae_key,
         quant_key=args.quant_key,
+        image_overlay=args.image_overlay,
         visual_count=args.visual_count,
         boundary_override=args.boundary,
     )
