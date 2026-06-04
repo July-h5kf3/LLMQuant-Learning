@@ -50,6 +50,69 @@ vis/outputs/demo_sample_token_pruning.png
 
 ## 运行真实样本
 
+推荐方式是直接传入 YAML，让脚本按仓库现有运行逻辑从校准集样本生成可视化所需的 `inputs_embeds`、原始 GAE 分数和量化-剪枝协同分数：
+
+```bash
+python3 vis/visualize_token_pruning.py --config vis/example_visualization_config.yaml
+```
+
+YAML 至少需要包含三类信息：
+
+```yaml
+model:
+  model_type: qwen2_5_vl
+  model_path: ${MODEL_PATH}
+  dtype: bfloat16
+  device_map: auto
+  trust_remote_code: true
+  local_files_only: true
+  attn_implementation: eager
+
+calibration:
+  path: ${CALIB_JSONL}
+  image_root: ${IMAGE_ROOT}
+
+quant_joint:
+  quant_lambda: 1.0
+  quant_method: rtn
+  rtn_bits: 4
+  rtn_group_size: 0
+
+pruning:
+  retention_ratio: 0.5
+  min_keep: 1
+```
+
+可选字段：
+
+```yaml
+scoring:
+  answer_source: sample   # sample 或 generated
+  per_token: true
+  max_new_tokens: 16
+
+visualization:
+  limit: 1
+  sample_offset: 0
+  output_dir: outputs
+  save_sample_artifacts: true
+  sample_artifact_dir: samples
+```
+
+说明：
+
+- `calibration.path` 指向校准集 JSONL；其中每一行就是一个可视化样本。
+- 也兼容 `calibration.calib_jsonl`、`calibration.input_jsonl`、`data.calib_jsonl`、`data.input_jsonl`。
+- 校准样本沿用仓库 adapter 逻辑，需要包含 `prompt` / `question` / `text` 之一，以及 `image` / `image_path` / `images` 之一。
+- `answer_source: sample` 时优先使用样本里的 `answer`；没有 answer 会自动生成 replay answer。
+- 量化-剪枝协同分数通过仓库里的 `_score_gae_quant_joint` 计算，目前对应 RTN scoring forward。
+- 协同剪枝参数优先读取 `quant_joint.*`，也兼容已有配置中的 `pruning.quant_lambda`、`pruning.quant_method`、`pruning.rtn_bits`、`pruning.rtn_group_size`。
+- 原始 GAE 分数通过 `_score_gae_oracle` 计算。
+- `save_sample_artifacts: true` 会额外保存 `.pt` 样本包，后续可以不加载模型直接重画。
+- YAML 内的相对路径按 YAML 文件所在目录解析；`vis/example_visualization_config.yaml` 里的 `outputs` 会解析到 `vis/outputs`。
+
+也可以对已经保存好的样本包重画：
+
 ```bash
 python vis/visualize_token_pruning.py \
   --sample /path/to/sample.pt \
