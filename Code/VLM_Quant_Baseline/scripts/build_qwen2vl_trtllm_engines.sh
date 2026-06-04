@@ -99,7 +99,18 @@ build_vision() {
 import os
 from types import SimpleNamespace
 
+import transformers
 from tensorrt_llm.tools.multimodal_builder import MultimodalEngineBuilder
+
+original_from_pretrained = transformers.Qwen2VLForConditionalGeneration.from_pretrained
+
+def patched_from_pretrained(*args, **kwargs):
+    model = original_from_pretrained(*args, **kwargs)
+    if not hasattr(model, "visual") and hasattr(model, "model") and hasattr(model.model, "visual"):
+        model.visual = model.model.visual
+    return model
+
+transformers.Qwen2VLForConditionalGeneration.from_pretrained = patched_from_pretrained
 
 args = SimpleNamespace(
     model_type="qwen2_vl",
