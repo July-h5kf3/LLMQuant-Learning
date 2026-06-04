@@ -129,7 +129,7 @@ visualization:
 - 量化-剪枝协同分数通过仓库里的 `_score_gae_quant_joint` 计算，目前对应 RTN scoring forward。
 - 协同剪枝参数优先读取 `quant_joint.*`，也兼容已有配置中的 `pruning.quant_lambda`、`pruning.quant_method`、`pruning.rtn_bits`、`pruning.rtn_group_size`。
 - 原始 GAE 分数通过 `_score_gae_oracle` 计算。
-- `score_bars: true` 会额外生成 `_score_bars.png`，用柱状图展示每个 visual token 的 GAE score、`C_i^{quant}` 和 `D_i = lambda * C_i^{quant} - C_i^{drop}`。
+- `score_bars: true` 会额外生成 `_score_bars.png`，用柱状图展示每个 visual token 的通道范围代理值 `max(channel) - min(channel)`、GAE score、`C_i^{quant}` 和 `D_i = lambda * C_i^{quant} - C_i^{drop}`；红色 bar 表示该行对应策略删除的 token，其中 GAE 行删除低分 top-k，`D_i` 行删除高分 top-k。
 - `save_sample_artifacts: true` 会额外保存 `.pt` 样本包，后续可以不加载模型直接重画。
 - YAML 内的相对路径按 YAML 文件所在目录解析；`vis/example_visualization_config.yaml` 里的 `outputs` 会解析到 `vis/outputs`。
 - YAML 模式运行时会打印 `seq_len`、`visual_tokens`、`image_grid_thw` 和 processor pixel budget；如果 visual token 数不是预期的约 1500，先看这行诊断。

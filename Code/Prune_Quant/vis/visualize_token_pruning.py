@@ -1220,21 +1220,32 @@ def _save_score_bars_matplotlib(
     gae_scores: np.ndarray,
     c_quant: np.ndarray,
     joint_scores: np.ndarray,
+    channel_range: np.ndarray,
+    gae_removed: np.ndarray,
+    quant_removed: np.ndarray,
 ) -> None:
     plt, _ = _load_matplotlib()
     if plt is None:
         raise RuntimeError("matplotlib is not available.")
+    from matplotlib.patches import Patch
 
-    fig, axes = plt.subplots(3, 1, figsize=(18, 10), sharex=True, constrained_layout=True)
+    fig, axes = plt.subplots(4, 1, figsize=(18, 12), sharex=True, constrained_layout=True)
     series = [
-        ("GAE score", gae_scores, "#356A8A"),
-        (r"$C_i^{quant}$", c_quant, "#7A5C00"),
-        (r"$D_i = \lambda C_i^{quant} - C_i^{drop}$", joint_scores, "#8E3B46"),
+        ("Channel range proxy | max(channel) - min(channel)", channel_range, "#4D6B35", quant_removed),
+        ("GAE score | removed: lowest top-k", gae_scores, "#356A8A", gae_removed),
+        (r"$C_i^{quant}$ | quant-joint removed tokens", c_quant, "#7A5C00", quant_removed),
+        (r"$D_i = \lambda C_i^{quant} - C_i^{drop}$ | removed: highest top-k", joint_scores, "#8E3B46", quant_removed),
     ]
     x = np.arange(positions.size, dtype=np.int64)
-    for ax, (label, values, color) in zip(axes, series):
-        ax.bar(x, values, color=color, width=0.86, alpha=0.88)
+    removed_color = "#C81E1E"
+    for ax, (label, values, color, removed) in zip(axes, series):
+        removed_set = set(int(item) for item in removed.tolist())
+        colors = [removed_color if int(pos) in removed_set else color for pos in positions]
+        edgecolors = ["#7F0000" if int(pos) in removed_set else color for pos in positions]
+        ax.bar(x, values, color=colors, edgecolor=edgecolors, linewidth=0.35, width=0.86, alpha=0.9)
         ax.axhline(0.0, color="#24292F", linewidth=0.8, alpha=0.75)
+        value_min, value_max = _nice_score_limit([values])
+        ax.set_ylim(value_min, value_max)
         ax.set_ylabel(label)
         ax.grid(axis="y", color="#D0D7DE", linewidth=0.7, alpha=0.65)
         ax.spines["top"].set_visible(False)
@@ -1245,6 +1256,15 @@ def _save_score_bars_matplotlib(
     axes[-1].set_xticklabels([str(int(positions[i])) for i in tick_idx], rotation=0)
     axes[-1].set_xlabel("Visual token idx")
     fig.suptitle(f"Per-token pruning score statistics: {sample_id}", fontsize=15, fontweight="bold")
+    fig.legend(
+        handles=[
+            Patch(facecolor="#356A8A", label="kept / not removed by that row's pruning rule"),
+            Patch(facecolor=removed_color, edgecolor="#7F0000", label="removed token"),
+        ],
+        loc="lower center",
+        ncol=2,
+        frameon=False,
+    )
     fig.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
 
@@ -1257,14 +1277,18 @@ def _save_score_bars_pillow(
     gae_scores: np.ndarray,
     c_quant: np.ndarray,
     joint_scores: np.ndarray,
+    channel_range: np.ndarray,
+    gae_removed: np.ndarray,
+    quant_removed: np.ndarray,
 ) -> None:
     from PIL import Image, ImageDraw
 
     width, height = 1800, 1080
     margin = 52
     header = 70
-    gutter = 36
-    panel_h = (height - header - margin - gutter * 2 - 48) // 3
+    gutter = 24
+    footer = 76
+    panel_h = (height - header - margin - gutter * 3 - footer) // 4
     panel_w = width - 2 * margin
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
@@ -1273,13 +1297,16 @@ def _save_score_bars_pillow(
     draw.text((margin, 24), f"Per-token pruning score statistics: {sample_id}", fill=(10, 20, 30), font=title_font)
 
     series = [
-        ("GAE score", gae_scores, (53, 106, 138)),
-        ("C_i^quant", c_quant, (122, 92, 0)),
-        ("D_i = lambda*C_i^quant - C_i^drop", joint_scores, (142, 59, 70)),
+        ("Channel range proxy | max(channel) - min(channel)", channel_range, (77, 107, 53), quant_removed),
+        ("GAE score | removed: lowest top-k", gae_scores, (53, 106, 138), gae_removed),
+        ("C_i^quant | quant-joint removed tokens", c_quant, (122, 92, 0), quant_removed),
+        ("D_i = lambda*C_i^quant - C_i^drop | removed: highest top-k", joint_scores, (142, 59, 70), quant_removed),
     ]
-    value_min, value_max = _nice_score_limit([gae_scores, c_quant, joint_scores])
     x_count = max(1, positions.size)
-    for panel_idx, (label, values, color) in enumerate(series):
+    removed_color = (200, 30, 30)
+    removed_outline = (127, 0, 0)
+    for panel_idx, (label, values, color, removed) in enumerate(series):
+        removed_set = set(int(item) for item in removed.tolist())
         left = margin
         top = header + panel_idx * (panel_h + gutter)
         right = left + panel_w
@@ -1288,6 +1315,7 @@ def _save_score_bars_pillow(
         plot_top = top + 28
         plot_right = right - 24
         plot_bottom = bottom - 34
+        value_min, value_max = _nice_score_limit([values])
         draw.text((left + 8, top + 4), label, fill=(25, 34, 44), font=label_font)
         for frac in np.linspace(0.0, 1.0, 5):
             y = int(plot_top + frac * (plot_bottom - plot_top))
@@ -1304,10 +1332,20 @@ def _save_score_bars_pillow(
             x1 = center_x + max(1, bar_w // 2)
             y0 = int(min(zero_y, y_value))
             y1 = int(max(zero_y, y_value))
-            draw.rectangle((x0, y0, x1, y1), fill=color)
+            is_removed = int(positions[idx]) in removed_set
+            draw.rectangle(
+                (x0, y0, x1, y1),
+                fill=removed_color if is_removed else color,
+                outline=removed_outline if is_removed else None,
+            )
         draw.text((plot_left, bottom - 22), f"min={float(values.min()):.4g}", fill=(70, 78, 88), font=label_font)
         draw.text((plot_left + 150, bottom - 22), f"max={float(values.max()):.4g}", fill=(70, 78, 88), font=label_font)
-    draw.text((width // 2 - 54, height - 32), "Visual token idx", fill=(70, 78, 88), font=label_font)
+    legend_y = height - 46
+    draw.rectangle((margin, legend_y - 8, margin + 24, legend_y + 8), fill=(53, 106, 138))
+    draw.text((margin + 32, legend_y - 10), "kept / not removed by that row's pruning rule", fill=(70, 78, 88), font=label_font)
+    draw.rectangle((margin + 380, legend_y - 8, margin + 404, legend_y + 8), fill=removed_color, outline=removed_outline)
+    draw.text((margin + 412, legend_y - 10), "removed token", fill=(70, 78, 88), font=label_font)
+    draw.text((width // 2 - 54, height - 24), "Visual token idx", fill=(70, 78, 88), font=label_font)
     image.save(output_path)
 
 
@@ -1319,6 +1357,9 @@ def _save_score_bars(
     positions: np.ndarray,
     gae_scores: np.ndarray,
     quant_scores: np.ndarray,
+    channel_range: np.ndarray,
+    gae_removed: np.ndarray,
+    quant_removed: np.ndarray,
 ) -> Path | None:
     c_quant = _score_array(sample, "c_quant", positions.size, required=False)
     if c_quant is None:
@@ -1333,6 +1374,9 @@ def _save_score_bars(
             gae_scores=gae_scores,
             c_quant=c_quant,
             joint_scores=quant_scores,
+            channel_range=channel_range,
+            gae_removed=gae_removed,
+            quant_removed=quant_removed,
         )
     except RuntimeError:
         _save_score_bars_pillow(
@@ -1342,6 +1386,9 @@ def _save_score_bars(
             gae_scores=gae_scores,
             c_quant=c_quant,
             joint_scores=quant_scores,
+            channel_range=channel_range,
+            gae_removed=gae_removed,
+            quant_removed=quant_removed,
         )
     print(f"Wrote {output_path}")
     return output_path
@@ -1410,6 +1457,7 @@ def _render_sample(
     visual_positions = np.arange(visual_indices.size, dtype=np.int64)
     gae_scores = _as_numpy(sample.get(gae_key), name=gae_key).astype(np.float32).reshape(-1)
     quant_scores = _as_numpy(sample.get(quant_key), name=quant_key).astype(np.float32).reshape(-1)
+    channel_range = embeds.max(axis=1) - embeds.min(axis=1)
 
     gae_removed = _select_removed(
         gae_scores,
@@ -1468,6 +1516,9 @@ def _render_sample(
                 positions=visual_positions,
                 gae_scores=gae_scores,
                 quant_scores=quant_scores,
+                channel_range=channel_range,
+                gae_removed=gae_removed,
+                quant_removed=quant_removed,
             )
         return output_path
 
@@ -1539,6 +1590,9 @@ def _render_sample(
             positions=visual_positions,
             gae_scores=gae_scores,
             quant_scores=quant_scores,
+            channel_range=channel_range,
+            gae_removed=gae_removed,
+            quant_removed=quant_removed,
         )
     return output_path
 
