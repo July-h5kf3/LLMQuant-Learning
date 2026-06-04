@@ -118,6 +118,8 @@ bash scripts/build_qwen2vl_trtllm_engines.sh
 
 Switch to W4A8 by changing both `REAL_CHECKPOINT` and `TRTLLM_ENGINE_DIR`. Build time is separate from throughput measurements.
 
+For Qwen2-VL TensorRT-LLM evaluation, keep lmms-eval `BATCH_SIZE=1` and increase `TRTLLM_CONCURRENCY` for throughput. The adapter preprocesses each request as a valid single-sample multimodal input, then submits a concurrent/IFB window to TensorRT-LLM. Raising lmms-eval `BATCH_SIZE` directly can corrupt Qwen2-VL mRoPE/prompt-table alignment and produce invalid zero-metric outputs.
+
 ## W3A16 Fallback
 
 W3A16 is exported through AutoRound because TensorRT-LLM does not currently advertise W3A16/INT3 engine support:
@@ -168,6 +170,7 @@ Useful script knobs:
 
 - `MODEL=qwen2_vl` selects the lmms-eval model adapter name. The script defaults to `qwen2_vl`.
 - `TRTLLM_ENGINE_DIR=/path/to/qwen2vl-engine` points to a prebuilt multimodal engine directory containing `vision/` and `llm/`.
+- `TRTLLM_CONCURRENCY=8` increases Qwen2-VL TensorRT-LLM throughput while keeping lmms-eval `BATCH_SIZE=1`.
 - `TRTLLM_WORKSPACE=/path/to/workspace` controls TensorRT-LLM temporary build files.
 - `TRTLLM_ENABLE_BUILD_CACHE=1` and `TRTLLM_FAST_BUILD=1` are only relevant to the old generic LLM API path, not the Qwen2-VL multimodal engine runner.
 - `DRY_RUN=1` prints the command without touching conda, checkpoint paths, or output folders.
