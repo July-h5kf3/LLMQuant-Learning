@@ -105,17 +105,21 @@ def _make_demo_sample(num_visual: int, num_text: int, dim: int, seed: int) -> di
         + 0.45 * np.exp(-((token_axis - 0.78) ** 2) / 0.012)
         + 0.05 * rng.random(num_visual)
     )
-    quant_joint_scores = (
-        0.6 * np.exp(-((token_axis - 0.18) ** 2) / 0.018)
-        + 0.8 * np.exp(-((token_axis - 0.62) ** 2) / 0.02)
-        + 0.05 * rng.random(num_visual)
+    c_quant = (
+        0.55 * np.exp(-((token_axis - 0.62) ** 2) / 0.02)
+        + 0.25 * np.exp(-((token_axis - 0.18) ** 2) / 0.018)
+        + 0.03 * rng.random(num_visual)
     )
+    c_drop = gae_scores.copy()
+    quant_joint_scores = c_quant - c_drop
     return {
         "id": np.asarray("demo_sample"),
         "inputs_embeds": inputs_embeds,
         "visual_indices": np.arange(num_visual, dtype=np.int64),
         "text_indices": np.arange(num_visual, num_visual + num_text, dtype=np.int64),
         "gae_scores": gae_scores.astype(np.float32),
+        "c_quant": c_quant.astype(np.float32),
+        "c_drop": c_drop.astype(np.float32),
         "quant_joint_scores": quant_joint_scores.astype(np.float32),
     }
 
@@ -421,6 +425,7 @@ def _build_sample_artifact(
     meta: Any,
     gae_scores: Any,
     quant_joint_scores: Any,
+    quant_components: dict[str, Any] | None = None,
     answer: str | None = None,
 ) -> dict[str, Any]:
     import torch
@@ -428,7 +433,7 @@ def _build_sample_artifact(
     with torch.no_grad():
         inputs_embeds = adapter.build_inputs_embeds(model, inputs)
     boundary = int(meta.visual_indices.max().item()) + 1
-    return {
+    artifact = {
         "id": sample.get("id", "sample"),
         "inputs_embeds": inputs_embeds.detach().float().cpu(),
         "visual_indices": meta.visual_indices.detach().cpu(),
@@ -449,6 +454,12 @@ def _build_sample_artifact(
         "gae_scores": gae_scores.detach().float().cpu(),
         "quant_joint_scores": quant_joint_scores.detach().float().cpu(),
     }
+    if quant_components:
+        for src_key, dst_key in (("c_quant", "c_quant"), ("c_drop", "c_drop"), ("joint", "quant_joint_scores")):
+            value = quant_components.get(src_key)
+            if value is not None:
+                artifact[dst_key] = value.detach().float().cpu()
+    return artifact
 
 
 def _sample_answer(
@@ -580,7 +591,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             answer=answer,
             per_token=_bool_value(scoring_cfg.get("per_token", True)),
         )
-        quant_scores = _score_gae_quant_joint(
+        quant_components = _score_gae_quant_joint(
             model=model,
             processor=processor,
             adapter=adapter,
@@ -591,7 +602,9 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             quant_method=str(quant_cfg.get("quant_method", pruning_cfg.get("quant_method", "rtn"))),
             rtn_bits=int(quant_cfg.get("rtn_bits", pruning_cfg.get("rtn_bits", 4))),
             rtn_group_size=int(quant_cfg.get("rtn_group_size", pruning_cfg.get("rtn_group_size", 0))),
+            return_components=True,
         )
+        quant_scores = quant_components["joint"]
         artifact = _build_sample_artifact(
             model=model,
             processor=processor,
@@ -601,6 +614,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             meta=meta,
             gae_scores=gae_scores,
             quant_joint_scores=quant_scores,
+            quant_components=quant_components,
             answer=answer,
         )
         yield artifact, {
@@ -610,6 +624,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             "output_name": vis_cfg.get("output_name"),
             "save_sample_artifacts": _bool_value(vis_cfg.get("save_sample_artifacts", False)),
             "image_overlay": _bool_value(vis_cfg.get("image_overlay", True)),
+            "score_bars": _bool_value(vis_cfg.get("score_bars", True)),
             "sample_artifact_dir": _resolve_path(vis_cfg.get("sample_artifact_dir"), base_dir)
             or Path(__file__).resolve().parent / "samples",
             "row_idx": row_idx,
@@ -1172,6 +1187,166 @@ def _save_with_pillow(
     image.save(output_path)
 
 
+def _score_array(sample: dict[str, Any], key: str, expected_size: int, *, required: bool = True) -> np.ndarray | None:
+    value = sample.get(key)
+    if value is None:
+        if required:
+            raise ValueError(f"Missing required field: {key}")
+        return None
+    scores = _as_numpy(value, name=key).astype(np.float32).reshape(-1)
+    if scores.size != expected_size:
+        raise ValueError(f"{key} count {scores.size} does not match visual token count {expected_size}.")
+    return scores
+
+
+def _nice_score_limit(values: list[np.ndarray]) -> tuple[float, float]:
+    finite_values = np.concatenate([value[np.isfinite(value)] for value in values if value.size])
+    if finite_values.size == 0:
+        return 0.0, 1.0
+    vmin = float(finite_values.min())
+    vmax = float(finite_values.max())
+    if vmin == vmax:
+        pad = max(0.05, abs(vmax) * 0.1)
+        return vmin - pad, vmax + pad
+    pad = (vmax - vmin) * 0.08
+    return vmin - pad, vmax + pad
+
+
+def _save_score_bars_matplotlib(
+    output_path: Path,
+    *,
+    sample_id: str,
+    positions: np.ndarray,
+    gae_scores: np.ndarray,
+    c_quant: np.ndarray,
+    joint_scores: np.ndarray,
+) -> None:
+    plt, _ = _load_matplotlib()
+    if plt is None:
+        raise RuntimeError("matplotlib is not available.")
+
+    fig, axes = plt.subplots(3, 1, figsize=(18, 10), sharex=True, constrained_layout=True)
+    series = [
+        ("GAE score", gae_scores, "#356A8A"),
+        (r"$C_i^{quant}$", c_quant, "#7A5C00"),
+        (r"$D_i = \lambda C_i^{quant} - C_i^{drop}$", joint_scores, "#8E3B46"),
+    ]
+    x = np.arange(positions.size, dtype=np.int64)
+    for ax, (label, values, color) in zip(axes, series):
+        ax.bar(x, values, color=color, width=0.86, alpha=0.88)
+        ax.axhline(0.0, color="#24292F", linewidth=0.8, alpha=0.75)
+        ax.set_ylabel(label)
+        ax.grid(axis="y", color="#D0D7DE", linewidth=0.7, alpha=0.65)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    tick_count = min(18, max(2, positions.size))
+    tick_idx = np.linspace(0, positions.size - 1, num=tick_count, dtype=np.int64)
+    axes[-1].set_xticks(tick_idx)
+    axes[-1].set_xticklabels([str(int(positions[i])) for i in tick_idx], rotation=0)
+    axes[-1].set_xlabel("Visual token idx")
+    fig.suptitle(f"Per-token pruning score statistics: {sample_id}", fontsize=15, fontweight="bold")
+    fig.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _save_score_bars_pillow(
+    output_path: Path,
+    *,
+    sample_id: str,
+    positions: np.ndarray,
+    gae_scores: np.ndarray,
+    c_quant: np.ndarray,
+    joint_scores: np.ndarray,
+) -> None:
+    from PIL import Image, ImageDraw
+
+    width, height = 1800, 1080
+    margin = 52
+    header = 70
+    gutter = 36
+    panel_h = (height - header - margin - gutter * 2 - 48) // 3
+    panel_w = width - 2 * margin
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    title_font = _load_overlay_font(16)
+    label_font = _load_overlay_font(14)
+    draw.text((margin, 24), f"Per-token pruning score statistics: {sample_id}", fill=(10, 20, 30), font=title_font)
+
+    series = [
+        ("GAE score", gae_scores, (53, 106, 138)),
+        ("C_i^quant", c_quant, (122, 92, 0)),
+        ("D_i = lambda*C_i^quant - C_i^drop", joint_scores, (142, 59, 70)),
+    ]
+    value_min, value_max = _nice_score_limit([gae_scores, c_quant, joint_scores])
+    x_count = max(1, positions.size)
+    for panel_idx, (label, values, color) in enumerate(series):
+        left = margin
+        top = header + panel_idx * (panel_h + gutter)
+        right = left + panel_w
+        bottom = top + panel_h
+        plot_left = left + 72
+        plot_top = top + 28
+        plot_right = right - 24
+        plot_bottom = bottom - 34
+        draw.text((left + 8, top + 4), label, fill=(25, 34, 44), font=label_font)
+        for frac in np.linspace(0.0, 1.0, 5):
+            y = int(plot_top + frac * (plot_bottom - plot_top))
+            draw.line((plot_left, y, plot_right, y), fill=(224, 229, 235), width=1)
+        zero_y = int(_scale_values(np.asarray([0.0], dtype=np.float32), value_min, value_max, plot_top, plot_bottom)[0])
+        draw.line((plot_left, zero_y, plot_right, zero_y), fill=(45, 52, 61), width=2)
+        draw.rectangle((plot_left, plot_top, plot_right, plot_bottom), outline=(170, 178, 188), width=1)
+        plot_w = max(1, plot_right - plot_left)
+        bar_w = max(1, int(plot_w / x_count * 0.78))
+        scaled = _scale_values(values, value_min, value_max, plot_top, plot_bottom)
+        for idx, y_value in enumerate(scaled):
+            center_x = int(plot_left + (idx + 0.5) / x_count * plot_w)
+            x0 = center_x - bar_w // 2
+            x1 = center_x + max(1, bar_w // 2)
+            y0 = int(min(zero_y, y_value))
+            y1 = int(max(zero_y, y_value))
+            draw.rectangle((x0, y0, x1, y1), fill=color)
+        draw.text((plot_left, bottom - 22), f"min={float(values.min()):.4g}", fill=(70, 78, 88), font=label_font)
+        draw.text((plot_left + 150, bottom - 22), f"max={float(values.max()):.4g}", fill=(70, 78, 88), font=label_font)
+    draw.text((width // 2 - 54, height - 32), "Visual token idx", fill=(70, 78, 88), font=label_font)
+    image.save(output_path)
+
+
+def _save_score_bars(
+    *,
+    sample: dict[str, Any],
+    sample_id: str,
+    output_path: Path,
+    positions: np.ndarray,
+    gae_scores: np.ndarray,
+    quant_scores: np.ndarray,
+) -> Path | None:
+    c_quant = _score_array(sample, "c_quant", positions.size, required=False)
+    if c_quant is None:
+        print("[visualize] skipped score bars: sample has no c_quant field.")
+        return None
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _save_score_bars_matplotlib(
+            output_path,
+            sample_id=sample_id,
+            positions=positions,
+            gae_scores=gae_scores,
+            c_quant=c_quant,
+            joint_scores=quant_scores,
+        )
+    except RuntimeError:
+        _save_score_bars_pillow(
+            output_path,
+            sample_id=sample_id,
+            positions=positions,
+            gae_scores=gae_scores,
+            c_quant=c_quant,
+            joint_scores=quant_scores,
+        )
+    print(f"Wrote {output_path}")
+    return output_path
+
+
 def _scalar_id(sample: dict[str, Any], fallback: str) -> str:
     value = sample.get("id", fallback)
     if isinstance(value, np.ndarray):
@@ -1191,6 +1366,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-name", help="Optional output PNG filename.")
     parser.add_argument("--limit", type=int, help="Override visualization.limit when using --config.")
     parser.add_argument("--image-overlay", action="store_true", help="Also project removed visual tokens back to the source image when available.")
+    parser.add_argument(
+        "--score-bars",
+        dest="score_bars",
+        action="store_true",
+        default=True,
+        help="Also draw per-token GAE, C_i^quant, and D_i score bar charts.",
+    )
+    parser.add_argument("--no-score-bars", dest="score_bars", action="store_false", help="Disable score bar charts.")
     parser.add_argument("--retention-ratio", type=float, default=0.5)
     parser.add_argument("--min-keep", type=int, default=1)
     parser.add_argument("--visual-count", type=int, help="Use first N tokens as visual tokens if the sample has no indices.")
@@ -1216,6 +1399,7 @@ def _render_sample(
     gae_key: str,
     quant_key: str,
     image_overlay: bool = False,
+    score_bars: bool = True,
     visual_count: int | None = None,
     boundary_override: int | None = None,
 ) -> Path:
@@ -1250,6 +1434,7 @@ def _render_sample(
     resolved_output_name = output_name or f"{sample_id}_token_pruning.png"
     output_path = output_dir / resolved_output_name
     overlay_path = output_path.with_name(f"{output_path.stem}_image_overlay.png")
+    score_bars_path = output_path.with_name(f"{output_path.stem}_score_bars.png")
 
     plt, Line2D = _load_matplotlib()
     if plt is None:
@@ -1274,6 +1459,15 @@ def _render_sample(
                 output_path=overlay_path,
                 gae_removed=gae_removed,
                 quant_removed=quant_removed,
+            )
+        if score_bars:
+            _save_score_bars(
+                sample=sample,
+                sample_id=sample_id,
+                output_path=score_bars_path,
+                positions=visual_positions,
+                gae_scores=gae_scores,
+                quant_scores=quant_scores,
             )
         return output_path
 
@@ -1337,6 +1531,15 @@ def _render_sample(
             gae_removed=gae_removed,
             quant_removed=quant_removed,
         )
+    if score_bars:
+        _save_score_bars(
+            sample=sample,
+            sample_id=sample_id,
+            output_path=score_bars_path,
+            positions=visual_positions,
+            gae_scores=gae_scores,
+            quant_scores=quant_scores,
+        )
     return output_path
 
 
@@ -1366,6 +1569,7 @@ def main() -> None:
                 gae_key="gae_scores",
                 quant_key="quant_joint_scores",
                 image_overlay=bool(render_cfg["image_overlay"]),
+                score_bars=bool(render_cfg["score_bars"]),
             )
             if render_cfg["save_sample_artifacts"]:
                 sample_id = _scalar_id(artifact, f"sample_{int(render_cfg['row_idx']):04d}")
@@ -1389,6 +1593,7 @@ def main() -> None:
         gae_key=args.gae_key,
         quant_key=args.quant_key,
         image_overlay=args.image_overlay,
+        score_bars=args.score_bars,
         visual_count=args.visual_count,
         boundary_override=args.boundary,
     )

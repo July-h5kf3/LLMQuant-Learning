@@ -34,6 +34,7 @@ visualization:
   random_sample: true
   seed:
   image_overlay: true
+  score_bars: true
   output_dir: outputs
   save_sample_artifacts: true
   sample_artifact_dir: samples

@@ -562,6 +562,7 @@ def _score_gae_quant_joint(
     quant_method: str = "rtn",
     rtn_bits: int = 4,
     rtn_group_size: int = 0,
+    return_components: bool = False,
 ) -> Any:
     import torch
 
@@ -642,6 +643,11 @@ def _score_gae_quant_joint(
             torch.stack([item["c_quant"] for item in token_components], dim=0).mean(dim=0)
         )
         scores = pruner.quant_lambda * c_quant - c_drop
+        components = {
+            "c_drop": c_drop,
+            "c_quant": c_quant,
+            "joint": scores,
+        }
     else:
         outputs = forward_original_with_retained_attentions()
         target, query_indices = compute_answer_logprob_target(
@@ -650,13 +656,16 @@ def _score_gae_quant_joint(
             answer_start=answer_start,
         )
         target.backward()
-        scores = pruner.score(
+        components = pruner.score_components(
             attentions=outputs.attentions,
             quantized_attentions=quantized_attentions,
             meta=teacher_meta,
             query_indices=query_indices,
         )
+        scores = components["joint"]
     model.zero_grad(set_to_none=True)
+    if return_components:
+        return {key: value.detach() for key, value in components.items()}
     return scores.detach()
 
 
