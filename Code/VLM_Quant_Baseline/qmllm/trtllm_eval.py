@@ -714,7 +714,7 @@ class TRTLLMRealQuantModel(lmms):
 
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="TRT-LLM Real-Quant Responding")
         re_ords = utils.Collator([reg.args for reg in requests], _collate, grouping=True)
-        chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
+        chunks = list(re_ords.get_batched(n=self.batch_size, batch_fn=None))
         res = []
 
         if self._qwen2vl_runner is not None:
