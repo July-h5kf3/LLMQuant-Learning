@@ -25,6 +25,9 @@ test = [
   "pytest>=8.0",
 ]
 
+[project.entry-points."lmms_eval.models"]
+prune_quant_baseline = "prune_quant_baseline.lmms_eval:lmms_eval_model_manifests"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

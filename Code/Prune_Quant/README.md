@@ -92,7 +92,7 @@ pip install -e ".[quant,test]"
 pip install accelerate datasets huggingface_hub qwen-vl-utils sentencepiece protobuf
 ```
 
-Install VLMEvalKit and register this repository's pruned Qwen2-VL model wrapper. VLMEvalKit uses `run.py` for standard inference and evaluation, and model names are resolved through `supported_VLM` in `vlmeval/config.py`.
+Install the evaluation toolkits. VLMEvalKit remains the default path for MME/MMStar/MMVet-style runs, and `lmms-eval` is now tracked as this repository's `third_party/lmms-eval` submodule for OCRBench, VizWiz, ScienceQA, and TextVQA metrics.
 
 ```bash
 export EXT_ROOT=/path/to/external
@@ -105,6 +105,12 @@ pip install -e .
 cd "$PROJECT_ROOT"
 python remote/install_vlmeval_pruned_gae.py --vlmeval-root "$VLMEVALKIT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
+
+git submodule update --init --recursive third_party/lmms-eval
+cd "$PROJECT_ROOT/third_party/lmms-eval"
+pip install -e ".[qwen]"
+cd "$PROJECT_ROOT"
+pip install -e .
 ```
 
 Re-run `remote/install_vlmeval_pruned_gae.py` after editing files under `src/prune_quant_baseline/vlmeval/`, because the installer copies the wrapper into the VLMEvalKit checkout.
@@ -222,7 +228,7 @@ head -n 16 "$CALIB_JSONL" > "$DATA_ROOT/calib_smoke_16.jsonl"
 
 ### Test Datasets
 
-VLMEvalKit is the default benchmark path. It handles dataset loading, prediction files, and metric computation. Put its dataset cache under `DATA_ROOT`:
+VLMEvalKit handles dataset loading, prediction files, and metric computation for the existing MME/MMStar/MMVet path. Put its dataset cache under `DATA_ROOT`:
 
 ```bash
 export LMUData="$DATA_ROOT/vlmeval"
@@ -247,6 +253,40 @@ python run.py --data MME MMStar MMVet --model Qwen2VL_PrunedGAE \
   --work-dir "$WORK_ROOT/vlmeval_qwen2vl_gae50" \
   --verbose
 ```
+
+The lmms-eval task set used by this repository is:
+
+| Capability | Benchmark | lmms-eval task |
+| --- | --- | --- |
+| OCR | OCRBench | `ocrbench` |
+| Viz | VizWiz | `vizwiz_vqa_val` |
+| S-QA | ScienceQA | `scienceqa_img` |
+| T-VQA | TextVQA | `textvqa_val` |
+
+Run the default lmms-eval suite through this repository's `prune_quant_qwen2vl` wrapper:
+
+```bash
+cd "$PROJECT_ROOT"
+export QWEN2VL_MODEL="$MODEL_ROOT/Qwen2-VL-7B-Instruct"
+export PQ_MODEL_TYPE=qwen2vl
+export PQ_RETENTION_RATIO=0.5
+export PQ_GAE_ANSWER_SOURCE=generated
+export PQ_GAE_PER_TOKEN=false
+export PQ_ATTN_IMPLEMENTATION=eager
+export PQ_MIN_VISUAL_TOKENS=1500
+export PQ_MAX_VISUAL_TOKENS=1500
+
+python remote/run_lmms_eval_smart.py \
+  --lmms-eval-root "$PROJECT_ROOT/third_party/lmms-eval" \
+  --tasks ocrbench vizwiz_vqa_val scienceqa_img textvqa_val \
+  --model prune_quant_qwen2vl \
+  --model-path "$QWEN2VL_MODEL" \
+  --output-path "$WORK_ROOT/lmms_eval_qwen2vl_gae50" \
+  --cache "$WORK_ROOT/lmms_eval_cache" \
+  --log-samples
+```
+
+For a quick plumbing check, add `--limit 8`. Use `PQ_RETENTION_RATIO=1.0` for the no-pruning lmms-eval baseline while keeping model and image-resolution settings fixed.
 
 You can still create or download a custom evaluation JSONL for low-level script debugging:
 
@@ -375,7 +415,6 @@ export MASQUANT_ROOT="$EXT_ROOT/EfficientAI/masquant"
 
 cd "$MASQUANT_ROOT"
 pip install -e .
-pip install lmms-eval
 ```
 
 `flash-attn` is optional for this baseline. GAE needs eager attention, and the prune-then-MASQuant script can patch MASQuant's Qwen2.5 loader to honor `--attn-implementation eager`.

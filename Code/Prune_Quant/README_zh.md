@@ -92,7 +92,7 @@ pip install -e ".[quant,test]"
 pip install accelerate datasets huggingface_hub qwen-vl-utils sentencepiece protobuf
 ```
 
-安装 VLMEvalKit，并注册本仓库的 pruned Qwen2-VL 模型 wrapper。VLMEvalKit 使用 `run.py` 做标准推理和评测，模型名通过 `vlmeval/config.py` 中的 `supported_VLM` 解析。
+安装评测工具。VLMEvalKit 仍然用于现有的 MME/MMStar/MMVet 评测路径；`lmms-eval` 现在作为本仓库的 `third_party/lmms-eval` submodule，用于 OCRBench、VizWiz、ScienceQA 和 TextVQA 指标。
 
 ```bash
 export EXT_ROOT=/path/to/external
@@ -105,6 +105,12 @@ pip install -e .
 cd "$PROJECT_ROOT"
 python remote/install_vlmeval_pruned_gae.py --vlmeval-root "$VLMEVALKIT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
+
+git submodule update --init --recursive third_party/lmms-eval
+cd "$PROJECT_ROOT/third_party/lmms-eval"
+pip install -e ".[qwen]"
+cd "$PROJECT_ROOT"
+pip install -e .
 ```
 
 如果修改了 `src/prune_quant_baseline/vlmeval/` 下的 wrapper 文件，需要重新运行 `remote/install_vlmeval_pruned_gae.py`，因为安装脚本会把 wrapper 复制到 VLMEvalKit checkout 中。
@@ -222,7 +228,7 @@ head -n 16 "$CALIB_JSONL" > "$DATA_ROOT/calib_smoke_16.jsonl"
 
 ### 测试数据集
 
-VLMEvalKit 是默认 benchmark 路径。它负责数据集加载、预测文件生成和指标计算。把 VLMEvalKit 的数据缓存放到 `DATA_ROOT` 下：
+VLMEvalKit 负责现有 MME/MMStar/MMVet 路径的数据集加载、预测文件生成和指标计算。把 VLMEvalKit 的数据缓存放到 `DATA_ROOT` 下：
 
 ```bash
 export LMUData="$DATA_ROOT/vlmeval"
@@ -247,6 +253,40 @@ python run.py --data MME MMStar MMVet --model Qwen2VL_PrunedGAE \
   --work-dir "$WORK_ROOT/vlmeval_qwen2vl_gae50" \
   --verbose
 ```
+
+本仓库使用的 lmms-eval 任务集合如下：
+
+| 能力 | Benchmark | lmms-eval task |
+| --- | --- | --- |
+| OCR | OCRBench | `ocrbench` |
+| Viz | VizWiz | `vizwiz_vqa_val` |
+| S-QA | ScienceQA | `scienceqa_img` |
+| T-VQA | TextVQA | `textvqa_val` |
+
+通过本仓库的 `prune_quant_qwen2vl` wrapper 运行默认 lmms-eval suite：
+
+```bash
+cd "$PROJECT_ROOT"
+export QWEN2VL_MODEL="$MODEL_ROOT/Qwen2-VL-7B-Instruct"
+export PQ_MODEL_TYPE=qwen2vl
+export PQ_RETENTION_RATIO=0.5
+export PQ_GAE_ANSWER_SOURCE=generated
+export PQ_GAE_PER_TOKEN=false
+export PQ_ATTN_IMPLEMENTATION=eager
+export PQ_MIN_VISUAL_TOKENS=1500
+export PQ_MAX_VISUAL_TOKENS=1500
+
+python remote/run_lmms_eval_smart.py \
+  --lmms-eval-root "$PROJECT_ROOT/third_party/lmms-eval" \
+  --tasks ocrbench vizwiz_vqa_val scienceqa_img textvqa_val \
+  --model prune_quant_qwen2vl \
+  --model-path "$QWEN2VL_MODEL" \
+  --output-path "$WORK_ROOT/lmms_eval_qwen2vl_gae50" \
+  --cache "$WORK_ROOT/lmms_eval_cache" \
+  --log-samples
+```
+
+快速检查流程时可以加 `--limit 8`。如果要跑不剪枝的 lmms-eval baseline，保持模型和图像分辨率设置不变，只把 `PQ_RETENTION_RATIO` 设为 `1.0`。
 
 如果只是调试低层脚本，也可以创建或下载自定义评测 JSONL：
 
@@ -375,7 +415,6 @@ export MASQUANT_ROOT="$EXT_ROOT/EfficientAI/masquant"
 
 cd "$MASQUANT_ROOT"
 pip install -e .
-pip install lmms-eval
 ```
 
 `flash-attn` 对这个 baseline 是可选的。GAE 需要 eager attention，prune-then-MASQuant 脚本可以 patch MASQuant 的 Qwen2.5 loader，让它遵循 `--attn-implementation eager`。

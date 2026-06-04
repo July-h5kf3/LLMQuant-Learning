@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+import importlib.util
+from argparse import Namespace
+from pathlib import Path
+
+
+def _load_runner_module():
+    path = Path(__file__).resolve().parents[1] / "remote" / "run_lmms_eval_smart.py"
+    spec = importlib.util.spec_from_file_location("run_lmms_eval_smart", path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_lmms_eval_default_tasks_match_metric_plan() -> None:
+    module = _load_runner_module()
+
+    assert module.DEFAULT_TASKS == ("ocrbench", "vizwiz_vqa_val", "scienceqa_img", "textvqa_val")
+
+
+def test_lmms_eval_model_args_from_environment(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.setenv("QWEN2VL_MODEL", "/models/qwen2vl")
+    monkeypatch.setenv("PQ_RETENTION_RATIO", "1.0")
+    monkeypatch.setenv("PQ_MAX_VISUAL_TOKENS", "1500")
+    monkeypatch.delenv("PQ_MIN_VISUAL_TOKENS", raising=False)
+
+    args = Namespace(model_args="", model_path="")
+    model_args = module._build_default_model_args(args)
+
+    assert "pretrained=/models/qwen2vl" in model_args
+    assert "retention_ratio=1.0" in model_args
+    assert "max_visual_tokens=1500" in model_args
+    assert "min_visual_tokens=" not in model_args
+
+
+def test_lmms_eval_explicit_model_args_win() -> None:
+    module = _load_runner_module()
+    args = Namespace(model_args="pretrained=/custom,retention_ratio=0.25", model_path="/ignored")
+
+    assert module._build_default_model_args(args) == "pretrained=/custom,retention_ratio=0.25"
