@@ -39,7 +39,13 @@ def _as_numpy(value: Any, *, name: str) -> np.ndarray:
     if value is None:
         raise ValueError(f"Missing required field: {name}")
     if hasattr(value, "detach"):
-        value = value.detach().cpu().numpy()
+        value = value.detach().cpu()
+        if getattr(value, "dtype", None) is not None and str(value.dtype) in {
+            "torch.bfloat16",
+            "torch.float16",
+        }:
+            value = value.float()
+        value = value.numpy()
     return np.asarray(value)
 
 
@@ -199,7 +205,7 @@ def _build_sample_artifact(
     boundary = int(meta.visual_indices.max().item()) + 1
     return {
         "id": sample.get("id", "sample"),
-        "inputs_embeds": inputs_embeds.detach().cpu(),
+        "inputs_embeds": inputs_embeds.detach().float().cpu(),
         "visual_indices": meta.visual_indices.detach().cpu(),
         "text_indices": None if meta.text_indices is None else meta.text_indices.detach().cpu(),
         "vision_text_boundary": boundary,
