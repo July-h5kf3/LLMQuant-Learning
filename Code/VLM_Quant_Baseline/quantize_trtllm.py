@@ -93,6 +93,12 @@ def _load_json(path: Path):
         return json.load(f)
 
 
+def _save_json(path: Path, payload):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
 def _looks_like_plain_qwen_export(config):
     return (
         config.get("architecture") == "Qwen2ForCausalLM"
@@ -101,6 +107,24 @@ def _looks_like_plain_qwen_export(config):
         or config.get("qwen_type") == "qwen2"
         or config.get("decoder") in {"llama", "qwen2"}
     )
+
+
+def _is_qwen2vl_text_wrapper_export(config):
+    architectures = config.get("architectures") or [config.get("architecture")]
+    return (
+        "Qwen2VLTextModel" in architectures
+        and config.get("model_type") == "qwen2_vl"
+        and config.get("qwen_type") == "qwen2_vl"
+        and config.get("position_embedding_type") == "mrope"
+        and config.get("decoder") == "qwen2_vl"
+    )
+
+
+def _normalize_qwen2vl_text_wrapper_config(config):
+    config["architecture"] = "Qwen2VLForConditionalGeneration"
+    config["architectures"] = ["Qwen2VLForConditionalGeneration"]
+    config.pop("decoder", None)
+    return config
 
 
 def _require_qwen2_vl_trtllm_config(output_dir: Path):
@@ -146,12 +170,14 @@ def _require_qwen2_vl_trtllm_config(output_dir: Path):
 
 
 def normalize_qwen2_vl_trtllm_config(output_dir: Path):
-    """Deprecated guard kept to reject legacy unsafe exports.
+    """Normalize only Qwen2-VL-native text-wrapper exports.
 
     Earlier experiments rewrote plain qwen2/Qwen2ForCausalLM TensorRT-LLM
     configs into qwen2_vl/mRoPE configs. Those checkpoints can build engines
-    but produce garbage generations. New exports must be Qwen2-VL-native before
-    this function is reached.
+    but produce garbage generations. This function only accepts exports that
+    already carry qwen2_vl/mRoPE semantics and merely replace the temporary
+    Qwen2VLTextModel wrapper architecture with TensorRT-LLM's multimodal Qwen2-VL
+    architecture name.
     """
     config_path = output_dir / "config.json"
     if not config_path.exists():
@@ -163,6 +189,10 @@ def normalize_qwen2_vl_trtllm_config(output_dir: Path):
             "Refusing to rewrite a plain qwen2/llama TensorRT-LLM export into "
             "Qwen2-VL. Re-export with the patched Qwen2-VL ModelOpt path instead."
         )
+    if _is_qwen2vl_text_wrapper_export(config):
+        _save_json(config_path, _normalize_qwen2vl_text_wrapper_config(config))
+        _require_qwen2_vl_trtllm_config(output_dir)
+        return True
     _require_qwen2_vl_trtllm_config(output_dir)
     return False
 
