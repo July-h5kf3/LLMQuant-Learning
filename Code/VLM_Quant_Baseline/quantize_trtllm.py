@@ -180,6 +180,7 @@ def _copy_qwen2vl_text_fields(full_config):
         "hidden_size",
         "initializer_range",
         "intermediate_size",
+        "layer_types",
         "max_position_embeddings",
         "num_attention_heads",
         "num_hidden_layers",
