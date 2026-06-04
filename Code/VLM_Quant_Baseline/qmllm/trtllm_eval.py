@@ -1,7 +1,9 @@
 import inspect
 import json
 import os
+import queue
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +27,18 @@ def _coerce_batch_size(batch_size: Optional[Union[int, str]]) -> int:
     if value.startswith("auto"):
         return 1
     return max(1, int(value))
+
+
+def _coerce_positive_int(value: Optional[Union[int, str]], *, name: str) -> int:
+    if value is None:
+        return 1
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}.") from exc
+    if coerced < 1:
+        raise ValueError(f"{name} must be a positive integer, got {coerced}.")
+    return coerced
 
 
 def _load_model_type(path: str, override: Optional[str] = None) -> str:
@@ -146,6 +160,7 @@ class TRTLLMRealQuantModel(lmms):
         fast_build: bool = False,
         scheduler_context_chunking_policy: Optional[str] = None,
         batch_size: Optional[Union[int, str]] = 1,
+        concurrency: Optional[Union[int, str]] = 1,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -199,6 +214,7 @@ class TRTLLMRealQuantModel(lmms):
         self.backend = backend
         self.image_data_format = image_data_format
         self.batch_size_per_gpu = _coerce_batch_size(batch_size)
+        self.trtllm_concurrency = _coerce_positive_int(concurrency, name="trtllm_concurrency")
         self._rank = 0
         self._world_size = 1
         self._speed_stats = {
@@ -207,6 +223,8 @@ class TRTLLMRealQuantModel(lmms):
             "generate_sec": 0.0,
         }
         self._qwen2vl_runner = None
+        self._qwen2vl_runners = []
+        self._qwen2vl_runner_pool = None
         self._qwen2vl_image_size = 504
 
         self._processor = AutoProcessor.from_pretrained(
@@ -262,14 +280,29 @@ class TRTLLMRealQuantModel(lmms):
             raise ValueError("--trtllm_backend must be 'engine' or 'pytorch'")
 
         if backend == "engine" and self.model_type == "qwen2_vl":
-            self._qwen2vl_runner = self._init_qwen2vl_multimodal_runner(
-                MultimodalModelRunner,
-                engine_dir=engine_dir,
-                max_batch_size=max_batch_size,
-                kv_cache_free_gpu_memory_fraction=kv_cache_free_gpu_memory_fraction,
-                trust_remote_code=trust_remote_code,
-                scheduler_context_chunking_policy=scheduler_context_chunking_policy,
-            )
+            if self.batch_size_per_gpu != 1:
+                raise ValueError(
+                    "Qwen2-VL TensorRT-LLM engine eval must keep lmms-eval "
+                    "batch_size=1. The upstream multimodal runner can return empty "
+                    "outputs for batch>1; use --trtllm_concurrency instead to "
+                    "increase throughput with multiple single-sample runners."
+                )
+            runner_count = self.trtllm_concurrency
+            self._qwen2vl_runners = [
+                self._init_qwen2vl_multimodal_runner(
+                    MultimodalModelRunner,
+                    engine_dir=engine_dir,
+                    max_batch_size=max_batch_size,
+                    kv_cache_free_gpu_memory_fraction=kv_cache_free_gpu_memory_fraction,
+                    trust_remote_code=trust_remote_code,
+                    scheduler_context_chunking_policy=scheduler_context_chunking_policy,
+                )
+                for _ in range(runner_count)
+            ]
+            self._qwen2vl_runner = self._qwen2vl_runners[0]
+            self._qwen2vl_runner_pool = queue.Queue()
+            for runner in self._qwen2vl_runners:
+                self._qwen2vl_runner_pool.put(runner)
             return
 
         kv_cache_config = KvCacheConfig(
@@ -365,11 +398,13 @@ class TRTLLMRealQuantModel(lmms):
         if not list((engine_path / "llm").glob("rank*.engine")):
             raise FileNotFoundError(f"Missing Qwen2-VL LLM rank engine under {engine_path / 'llm'}")
 
-        self.batch_size_per_gpu = max(1, min(self.batch_size_per_gpu, max_batch_size))
+        if max_batch_size < 1:
+            raise ValueError(f"--trtllm_max_batch_size must be >= 1, got {max_batch_size}.")
+        self.batch_size_per_gpu = 1
         args = SimpleNamespace(
             engine_dir=str(engine_path),
             hf_model_dir=self.tokenizer_path,
-            batch_size=self.batch_size_per_gpu,
+            batch_size=1,
             session="cpp_llm_only",
             visual_engine_name="model.engine",
             image_path=None,
@@ -550,13 +585,20 @@ class TRTLLMRealQuantModel(lmms):
         temperature,
         top_p,
         top_k,
+        runner=None,
     ) -> List[str]:
-        runner = self._qwen2vl_runner
+        runner = runner or self._qwen2vl_runner
         if runner is None:
             raise RuntimeError("Qwen2-VL TensorRT multimodal runner was not initialized.")
+        if len(prompts) != 1 or len(images) != 1:
+            raise ValueError(
+                "Qwen2-VL TensorRT runner generation is intentionally limited to "
+                "one sample per runner call. Use --trtllm_concurrency for parallel "
+                "single-sample requests instead of batch>1."
+            )
 
         sampling = self._normalize_runner_sampling(temperature, top_p, top_k)
-        runner.args.batch_size = len(prompts)
+        runner.args.batch_size = 1
         runner.args.temperature = sampling["temperature"]
         runner.args.top_p = sampling["top_p"]
         runner.args.top_k = sampling["top_k"]
@@ -586,6 +628,56 @@ class TRTLLMRealQuantModel(lmms):
             return [""] * len(prompts)
         return [beam_outputs[0].strip() if beam_outputs else "" for beam_outputs in outputs]
 
+    def _extract_generation_args(self, gen_kwargs: Dict[str, Any]):
+        gen_kwargs = dict(gen_kwargs)
+        until = [self.tokenizer.decode(self.eot_token_id)]
+        if "until" in gen_kwargs:
+            until = gen_kwargs.pop("until")
+            if isinstance(until, str):
+                until = [until]
+            elif not isinstance(until, list):
+                raise ValueError(f"Expected until to be str or list, got {type(until)}")
+
+        max_new_tokens = gen_kwargs.pop("max_new_tokens", 128)
+        temperature = gen_kwargs.pop("temperature", 0)
+        top_p = gen_kwargs.pop("top_p", None)
+        top_k = gen_kwargs.pop("top_k", None)
+
+        return until, max_new_tokens, temperature, top_p, top_k
+
+    def _strip_until_terms(self, ans: str, until: List[str]) -> str:
+        if ans.lower().startswith("assistant"):
+            ans = ans[len("assistant"):].lstrip(":： \n\t")
+        for term in until:
+            if term:
+                ans = ans.split(term)[0]
+        return ans
+
+    def _generate_qwen2vl_chunk(self, chunk):
+        (context, gen_kwargs, doc_to_visual, doc_id, task, split) = chunk[0]
+        until, max_new_tokens, temperature, top_p, top_k = self._extract_generation_args(gen_kwargs)
+        prompt, image = self._build_qwen2vl_runner_request(context, doc_to_visual, doc_id, task, split)
+
+        if self._qwen2vl_runner_pool is None:
+            raise RuntimeError("Qwen2-VL TensorRT runner pool was not initialized.")
+        runner = self._qwen2vl_runner_pool.get()
+        try:
+            output = self._generate_qwen2vl_runner(
+                [prompt],
+                [image],
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                runner=runner,
+            )[0]
+        finally:
+            self._qwen2vl_runner_pool.put(runner)
+
+        ans = self._strip_until_terms(output, until)
+        token_count = len(self.tokenizer.encode(ans, add_special_tokens=False))
+        return ans, context, gen_kwargs, token_count
+
     def _count_generated_tokens(self, output, text: str) -> int:
         if output.outputs:
             token_ids = getattr(output.outputs[0], "token_ids", None)
@@ -611,7 +703,8 @@ class TRTLLMRealQuantModel(lmms):
             f"samples_per_sec={samples_per_sec:.6f} "
             f"output_tokens_per_sec={output_tokens_per_sec:.6f} "
             f"avg_output_tokens={avg_output_tokens:.6f} "
-            f"batch_size={self.batch_size}"
+            f"batch_size={self.batch_size} "
+            f"concurrency={self.trtllm_concurrency}"
         )
 
     def generate_until(self, requests: List[Instance]) -> List[str]:
@@ -624,22 +717,37 @@ class TRTLLMRealQuantModel(lmms):
         chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
         res = []
 
+        if self._qwen2vl_runner is not None:
+            ordered_res = [None] * len(chunks)
+            max_workers = min(self.trtllm_concurrency, max(1, len(chunks)))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for window_start in range(0, len(chunks), max_workers):
+                    window = list(enumerate(chunks[window_start:window_start + max_workers], start=window_start))
+                    start = time.perf_counter()
+                    futures = {
+                        executor.submit(self._generate_qwen2vl_chunk, chunk): index
+                        for index, chunk in window
+                    }
+                    for future in as_completed(futures):
+                        index = futures[future]
+                        ans, context, gen_kwargs, token_count = future.result()
+                        ordered_res[index] = ans
+                        self._speed_stats["requests"] += 1
+                        self._speed_stats["generated_tokens"] += token_count
+                        self.cache_hook.add_partial("generate_until", (context, gen_kwargs), ans)
+                        pbar.update(1)
+                    self._speed_stats["generate_sec"] += time.perf_counter() - start
+
+            pbar.close()
+            if self.rank == 0:
+                self._print_speed_summary()
+            return re_ords.get_original(ordered_res)
+
         for chunk in chunks:
             contexts, all_gen_kwargs, doc_to_visuals, doc_ids, tasks, splits = zip(*chunk)
             gen_kwargs = dict(all_gen_kwargs[0])
 
-            until = [self.tokenizer.decode(self.eot_token_id)]
-            if "until" in gen_kwargs:
-                until = gen_kwargs.pop("until")
-                if isinstance(until, str):
-                    until = [until]
-                elif not isinstance(until, list):
-                    raise ValueError(f"Expected until to be str or list, got {type(until)}")
-
-            max_new_tokens = gen_kwargs.pop("max_new_tokens", 128)
-            temperature = gen_kwargs.pop("temperature", 0)
-            top_p = gen_kwargs.pop("top_p", None)
-            top_k = gen_kwargs.pop("top_k", None)
+            until, max_new_tokens, temperature, top_p, top_k = self._extract_generation_args(gen_kwargs)
 
             sampling_kwargs: Dict[str, Any] = {
                 "temperature": temperature,
@@ -653,36 +761,17 @@ class TRTLLMRealQuantModel(lmms):
                 sampling_kwargs["stop"] = until
 
             start = time.perf_counter()
-            if self._qwen2vl_runner is not None:
-                runner_requests = [
-                    self._build_qwen2vl_runner_request(context, doc_to_visual, doc_id, task, split)
-                    for context, doc_to_visual, doc_id, task, split in zip(contexts, doc_to_visuals, doc_ids, tasks, splits)
-                ]
-                prompts, images = zip(*runner_requests)
-                outputs = self._generate_qwen2vl_runner(
-                    list(prompts),
-                    list(images),
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                )
-            else:
-                sampling_params = self.SamplingParams(**sampling_kwargs)
-                trtllm_requests = [
-                    self._build_request(context, doc_to_visual, doc_id, task, split)
-                    for context, doc_to_visual, doc_id, task, split in zip(contexts, doc_to_visuals, doc_ids, tasks, splits)
-                ]
-                outputs = self._generate(trtllm_requests, sampling_params)
+            sampling_params = self.SamplingParams(**sampling_kwargs)
+            trtllm_requests = [
+                self._build_request(context, doc_to_visual, doc_id, task, split)
+                for context, doc_to_visual, doc_id, task, split in zip(contexts, doc_to_visuals, doc_ids, tasks, splits)
+            ]
+            outputs = self._generate(trtllm_requests, sampling_params)
             self._speed_stats["generate_sec"] += time.perf_counter() - start
 
             for output, context in zip(outputs, contexts):
                 ans = output if isinstance(output, str) else (output.outputs[0].text.strip() if output.outputs else "")
-                if ans.lower().startswith("assistant"):
-                    ans = ans[len("assistant"):].lstrip(":： \n\t")
-                for term in until:
-                    if term:
-                        ans = ans.split(term)[0]
+                ans = self._strip_until_terms(ans, until)
                 self._speed_stats["requests"] += 1
                 if isinstance(output, str):
                     self._speed_stats["generated_tokens"] += len(self.tokenizer.encode(ans, add_special_tokens=False))

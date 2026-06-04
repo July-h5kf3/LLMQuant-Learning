@@ -374,6 +374,16 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument("--trtllm_enable_build_cache", action="store_true")
     parser.add_argument("--trtllm_fast_build", action="store_true")
     parser.add_argument("--trtllm_scheduler_context_chunking_policy", default=None, type=str)
+    parser.add_argument(
+        "--trtllm_concurrency",
+        default=1,
+        type=int,
+        help=(
+            "Number of concurrent single-sample TensorRT-LLM runner calls. "
+            "For Qwen2-VL engine eval, keep --batch_size 1 and increase this "
+            "instead of using batch>1."
+        ),
+    )
     # for GPTQ
     parser.add_argument("--percdamp", default=0.01, type=float)
 
@@ -612,6 +622,7 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
             fast_build=args.trtllm_fast_build,
             scheduler_context_chunking_policy=args.trtllm_scheduler_context_chunking_policy,
             batch_size=args.batch_size,
+            concurrency=args.trtllm_concurrency,
         )
     elif args.real_quant and args.inference_engine == "vllm":
         if args.model != "qwen2_vl":

@@ -38,6 +38,7 @@ TRTLLM_WORKSPACE="${TRTLLM_WORKSPACE:-}"
 TRTLLM_ENABLE_BUILD_CACHE="${TRTLLM_ENABLE_BUILD_CACHE:-0}"
 TRTLLM_FAST_BUILD="${TRTLLM_FAST_BUILD:-0}"
 TRTLLM_CONTEXT_CHUNKING_POLICY="${TRTLLM_CONTEXT_CHUNKING_POLICY:-}"
+TRTLLM_CONCURRENCY="${TRTLLM_CONCURRENCY:-1}"
 TRTLLM_USE_SINGLE_RANK_MPI_STUB="${TRTLLM_USE_SINGLE_RANK_MPI_STUB:-1}"
 TRTLLM_MPI_STUB_DIR="${TRTLLM_MPI_STUB_DIR:-/tmp/mpi_stub}"
 
@@ -199,6 +200,10 @@ setup_env() {
       require_path "${TRTLLM_ENGINE_DIR}/llm/config.json"
     fi
   fi
+  if [[ "$TRTLLM_BACKEND" == "engine" && "$MODEL" == "qwen2_vl" && "$BATCH_SIZE" != "1" ]]; then
+    echo "Qwen2-VL TensorRT engine eval must use BATCH_SIZE=1; set TRTLLM_CONCURRENCY to increase throughput." >&2
+    exit 1
+  fi
 
   if [[ "$DRY_RUN" != "1" ]]; then
     # shellcheck disable=SC1090
@@ -272,6 +277,7 @@ main() {
     --trtllm_max_multimodal_len "$TRTLLM_MAX_MULTIMODAL_LEN"
     --trtllm_kv_cache_free_gpu_memory_fraction "$TRTLLM_KV_CACHE_FRACTION"
     --trtllm_trust_remote_code
+    --trtllm_concurrency "$TRTLLM_CONCURRENCY"
     --w_bit "$W_BIT"
     --a_bit "$A_BIT"
     --gen_kwargs "$GEN_KWARGS"
