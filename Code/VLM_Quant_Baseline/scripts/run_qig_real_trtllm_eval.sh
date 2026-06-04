@@ -201,7 +201,7 @@ setup_env() {
     fi
   fi
   if [[ "$TRTLLM_BACKEND" == "engine" && "$MODEL" == "qwen2_vl" && "$BATCH_SIZE" != "1" ]]; then
-    echo "Qwen2-VL TensorRT engine eval must use BATCH_SIZE=1; set TRTLLM_CONCURRENCY to increase throughput." >&2
+    echo "Qwen2-VL TensorRT engine eval must use BATCH_SIZE=1; set TRTLLM_CONCURRENCY for single-runner IFB throughput." >&2
     exit 1
   fi
 

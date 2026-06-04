@@ -1,9 +1,7 @@
 import inspect
 import json
 import os
-import queue
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -223,8 +221,6 @@ class TRTLLMRealQuantModel(lmms):
             "generate_sec": 0.0,
         }
         self._qwen2vl_runner = None
-        self._qwen2vl_runners = []
-        self._qwen2vl_runner_pool = None
         self._qwen2vl_image_size = 504
 
         self._processor = AutoProcessor.from_pretrained(
@@ -285,24 +281,22 @@ class TRTLLMRealQuantModel(lmms):
                     "Qwen2-VL TensorRT-LLM engine eval must keep lmms-eval "
                     "batch_size=1. The upstream multimodal runner can return empty "
                     "outputs for batch>1; use --trtllm_concurrency instead to "
-                    "increase throughput with multiple single-sample runners."
+                    "increase throughput with single-sample IFB requests."
                 )
-            runner_count = self.trtllm_concurrency
-            self._qwen2vl_runners = [
-                self._init_qwen2vl_multimodal_runner(
-                    MultimodalModelRunner,
-                    engine_dir=engine_dir,
-                    max_batch_size=max_batch_size,
-                    kv_cache_free_gpu_memory_fraction=kv_cache_free_gpu_memory_fraction,
-                    trust_remote_code=trust_remote_code,
-                    scheduler_context_chunking_policy=scheduler_context_chunking_policy,
+            if self.trtllm_concurrency > max_batch_size:
+                raise ValueError(
+                    "--trtllm_concurrency cannot exceed --trtllm_max_batch_size "
+                    f"for the Qwen2-VL TensorRT engine path: "
+                    f"{self.trtllm_concurrency} > {max_batch_size}."
                 )
-                for _ in range(runner_count)
-            ]
-            self._qwen2vl_runner = self._qwen2vl_runners[0]
-            self._qwen2vl_runner_pool = queue.Queue()
-            for runner in self._qwen2vl_runners:
-                self._qwen2vl_runner_pool.put(runner)
+            self._qwen2vl_runner = self._init_qwen2vl_multimodal_runner(
+                MultimodalModelRunner,
+                engine_dir=engine_dir,
+                max_batch_size=max_batch_size,
+                kv_cache_free_gpu_memory_fraction=kv_cache_free_gpu_memory_fraction,
+                trust_remote_code=trust_remote_code,
+                scheduler_context_chunking_policy=scheduler_context_chunking_policy,
+            )
             return
 
         kv_cache_config = KvCacheConfig(
@@ -590,12 +584,10 @@ class TRTLLMRealQuantModel(lmms):
         runner = runner or self._qwen2vl_runner
         if runner is None:
             raise RuntimeError("Qwen2-VL TensorRT multimodal runner was not initialized.")
-        if len(prompts) != 1 or len(images) != 1:
-            raise ValueError(
-                "Qwen2-VL TensorRT runner generation is intentionally limited to "
-                "one sample per runner call. Use --trtllm_concurrency for parallel "
-                "single-sample requests instead of batch>1."
-            )
+        if len(prompts) != len(images):
+            raise ValueError(f"Expected equal prompts/images, got {len(prompts)} and {len(images)}.")
+        if not prompts:
+            return []
 
         sampling = self._normalize_runner_sampling(temperature, top_p, top_k)
         runner.args.batch_size = 1
@@ -603,30 +595,80 @@ class TRTLLMRealQuantModel(lmms):
         runner.args.top_p = sampling["top_p"]
         runner.args.top_k = sampling["top_k"]
 
+        prepared = [
+            self._prepare_single_qwen2vl_runner_input(runner, prompt, image)
+            for prompt, image in zip(prompts, images)
+        ]
+        input_ids = [item["input_ids"] for item in prepared]
+        input_lengths = [item["input_length"] for item in prepared]
+        import torch
+
+        prompt_table = torch.stack([item["prompt_table"] for item in prepared])
+        mrope_rotary_cos_sin = torch.stack([item["mrope_rotary_cos_sin"] for item in prepared])
+        mrope_position_deltas = torch.stack([item["mrope_position_deltas"] for item in prepared])
+        prompt_tasks = ",".join(str(idx) for idx in range(len(prepared)))
+
+        from tensorrt_llm.layers import MropeParams
+
+        output_ids = runner.model.generate(
+            input_ids,
+            mrope_params=MropeParams(
+                mrope_rotary_cos_sin=mrope_rotary_cos_sin,
+                mrope_position_deltas=mrope_position_deltas,
+            ),
+            sampling_config=None,
+            prompt_table=prompt_table,
+            prompt_tasks=prompt_tasks,
+            max_new_tokens=max_new_tokens,
+            end_id=runner.tokenizer.eos_token_id,
+            pad_id=runner.tokenizer.pad_token_id
+            if runner.tokenizer.pad_token_id is not None
+            else runner.tokenizer.all_special_ids[0],
+            top_k=sampling["top_k"],
+            top_p=sampling["top_p"],
+            temperature=sampling["temperature"],
+            repetition_penalty=runner.args.repetition_penalty,
+            num_beams=runner.args.num_beams,
+            lora_uids=runner.args.lora_task_uids,
+            output_sequence_lengths=False,
+            return_dict=False,
+            mm_embedding_offloading=runner.args.mm_embedding_offloading,
+        )
+        if output_ids is None:
+            return [""] * len(prompts)
+        return [
+            runner.tokenizer.batch_decode(
+                output_ids[batch_idx, :, input_lengths[batch_idx]:],
+                skip_special_tokens=True,
+            )[0].strip()
+            for batch_idx in range(len(prepared))
+        ]
+
+    def _prepare_single_qwen2vl_runner_input(self, runner, prompt: str, image: Image.Image) -> Dict[str, Any]:
         (
             _input_text,
             pre_prompt,
             post_prompt,
-            image,
-            decoder_input_ids,
+            runner_image,
+            _decoder_input_ids,
             other_vision_inputs,
             other_audio_inputs,
-            other_decoder_inputs,
-        ) = runner.setup_inputs(prompts, images)
-
-        outputs = runner.generate(
+            _other_decoder_inputs,
+        ) = runner.setup_inputs([prompt], [image])
+        input_ids, input_lengths, ptuning_args, _visual_features, mrope_args = runner.preprocess(
             pre_prompt,
             post_prompt,
-            image,
-            decoder_input_ids,
-            max_new_tokens,
-            other_vision_inputs=other_vision_inputs,
-            other_audio_inputs=other_audio_inputs,
-            other_decoder_inputs=other_decoder_inputs,
+            runner_image,
+            other_vision_inputs,
+            other_audio_inputs,
         )
-        if outputs is None:
-            return [""] * len(prompts)
-        return [beam_outputs[0].strip() if beam_outputs else "" for beam_outputs in outputs]
+        return {
+            "input_ids": input_ids[0].contiguous(),
+            "input_length": int(input_lengths[0]),
+            "prompt_table": ptuning_args[0],
+            "mrope_rotary_cos_sin": mrope_args[0][0],
+            "mrope_position_deltas": mrope_args[1][0],
+        }
 
     def _extract_generation_args(self, gen_kwargs: Dict[str, Any]):
         gen_kwargs = dict(gen_kwargs)
@@ -653,30 +695,35 @@ class TRTLLMRealQuantModel(lmms):
                 ans = ans.split(term)[0]
         return ans
 
-    def _generate_qwen2vl_chunk(self, chunk):
-        (context, gen_kwargs, doc_to_visual, doc_id, task, split) = chunk[0]
-        until, max_new_tokens, temperature, top_p, top_k = self._extract_generation_args(gen_kwargs)
-        prompt, image = self._build_qwen2vl_runner_request(context, doc_to_visual, doc_id, task, split)
+    def _generate_qwen2vl_window(self, window):
+        requests = [chunk[0] for _index, chunk in window]
+        gen_arg_tuples = [self._extract_generation_args(req[1]) for req in requests]
+        max_new_tokens, temperature, top_p, top_k = gen_arg_tuples[0][1:]
+        if any(args[1:] != gen_arg_tuples[0][1:] for args in gen_arg_tuples):
+            raise ValueError("Qwen2-VL TensorRT concurrency window received mixed generation kwargs.")
 
-        if self._qwen2vl_runner_pool is None:
-            raise RuntimeError("Qwen2-VL TensorRT runner pool was not initialized.")
-        runner = self._qwen2vl_runner_pool.get()
-        try:
-            output = self._generate_qwen2vl_runner(
-                [prompt],
-                [image],
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                runner=runner,
-            )[0]
-        finally:
-            self._qwen2vl_runner_pool.put(runner)
+        runner_requests = [
+            self._build_qwen2vl_runner_request(context, doc_to_visual, doc_id, task, split)
+            for context, _gen_kwargs, doc_to_visual, doc_id, task, split in requests
+        ]
+        prompts, images = zip(*runner_requests)
+        outputs = self._generate_qwen2vl_runner(
+            list(prompts),
+            list(images),
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
 
-        ans = self._strip_until_terms(output, until)
-        token_count = len(self.tokenizer.encode(ans, add_special_tokens=False))
-        return ans, context, gen_kwargs, token_count
+        results = []
+        for (index, _chunk), req, gen_args, output in zip(window, requests, gen_arg_tuples, outputs):
+            context, gen_kwargs, _doc_to_visual, _doc_id, _task, _split = req
+            until = gen_args[0]
+            ans = self._strip_until_terms(output, until)
+            token_count = len(self.tokenizer.encode(ans, add_special_tokens=False))
+            results.append((index, ans, context, gen_kwargs, token_count))
+        return results
 
     def _count_generated_tokens(self, output, text: str) -> int:
         if output.outputs:
@@ -719,24 +766,17 @@ class TRTLLMRealQuantModel(lmms):
 
         if self._qwen2vl_runner is not None:
             ordered_res = [None] * len(chunks)
-            max_workers = min(self.trtllm_concurrency, max(1, len(chunks)))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                for window_start in range(0, len(chunks), max_workers):
-                    window = list(enumerate(chunks[window_start:window_start + max_workers], start=window_start))
-                    start = time.perf_counter()
-                    futures = {
-                        executor.submit(self._generate_qwen2vl_chunk, chunk): index
-                        for index, chunk in window
-                    }
-                    for future in as_completed(futures):
-                        index = futures[future]
-                        ans, context, gen_kwargs, token_count = future.result()
-                        ordered_res[index] = ans
-                        self._speed_stats["requests"] += 1
-                        self._speed_stats["generated_tokens"] += token_count
-                        self.cache_hook.add_partial("generate_until", (context, gen_kwargs), ans)
-                        pbar.update(1)
-                    self._speed_stats["generate_sec"] += time.perf_counter() - start
+            window_size = min(self.trtllm_concurrency, max(1, len(chunks)))
+            for window_start in range(0, len(chunks), window_size):
+                window = list(enumerate(chunks[window_start:window_start + window_size], start=window_start))
+                start = time.perf_counter()
+                for index, ans, context, gen_kwargs, token_count in self._generate_qwen2vl_window(window):
+                    ordered_res[index] = ans
+                    self._speed_stats["requests"] += 1
+                    self._speed_stats["generated_tokens"] += token_count
+                    self.cache_hook.add_partial("generate_until", (context, gen_kwargs), ans)
+                    pbar.update(1)
+                self._speed_stats["generate_sec"] += time.perf_counter() - start
 
             pbar.close()
             if self.rank == 0:
