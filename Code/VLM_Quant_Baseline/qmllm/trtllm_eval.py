@@ -83,6 +83,14 @@ def _load_trtllm_checkpoint_config(path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _load_legacy_qwen2vl_normalize_backup(path: str) -> Dict[str, Any]:
+    config_path = Path(path) / "config.json.bak_qwen2vl_normalize"
+    if not config_path.exists():
+        return {}
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def _require_file(path: Path, description: str) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"Missing {description}: {path}")
@@ -155,6 +163,7 @@ class TRTLLMRealQuantModel(lmms):
         self._checkpoint_config = _load_trtllm_checkpoint_config(pretrained)
         self._checkpoint_model_type = self._checkpoint_config.get("model_type")
         self._checkpoint_architectures = self._checkpoint_config.get("architectures") or []
+        self._legacy_normalize_backup = _load_legacy_qwen2vl_normalize_backup(pretrained)
         if (
             self.model_type == "qwen2_vl"
             and self._checkpoint_model_type == "qwen2"
@@ -165,6 +174,21 @@ class TRTLLMRealQuantModel(lmms):
                 "but the tokenizer_path is Qwen2-VL. That combination silently produces "
                 "garbage because Qwen2-VL requires mRoPE and multimodal prompt-tuning inputs. "
                 "Re-export the checkpoint with qwen2_vl/mRoPE config using quantize_trtllm.py."
+            )
+        backup_architectures = self._legacy_normalize_backup.get("architectures") or []
+        if (
+            self.model_type == "qwen2_vl"
+            and self._legacy_normalize_backup.get("model_type") == "qwen2"
+            and "Qwen2ForCausalLM" in backup_architectures
+        ):
+            raise ValueError(
+                "This TensorRT-LLM checkpoint was normalized from a plain "
+                "qwen2/Qwen2ForCausalLM export into qwen2_vl. That legacy "
+                "config rewrite can build and run an engine, but it produces "
+                "invalid Qwen2-VL logits because the checkpoint was not exported "
+                "with Qwen2-VL/mRoPE semantics. Re-export the checkpoint from a "
+                "real Qwen2-VL-aware TensorRT-LLM/ModelOpt path instead of using "
+                "config.json.bak_qwen2vl_normalize."
             )
         if not _model_type_supports_default_loader(self.model_type):
             raise ValueError(

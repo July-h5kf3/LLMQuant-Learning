@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import os
 import shlex
@@ -87,57 +88,189 @@ def write_manifest(args, backend: str, extra=None):
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
 
-def normalize_qwen2_vl_trtllm_config(output_dir: Path):
-    config_path = output_dir / "config.json"
-    if not config_path.exists():
-        return False
+def _load_json(path: Path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
 
-    is_qwen2_vl_text_export = (
-        config.get("architecture") == "Qwen2VLTextModel"
-        or config.get("model_type") == "llama"
-        or config.get("decoder") == "llama"
-    )
-    is_legacy_wrong_qwen2_export = (
+def _looks_like_plain_qwen_export(config):
+    return (
         config.get("architecture") == "Qwen2ForCausalLM"
         or "Qwen2ForCausalLM" in (config.get("architectures") or [])
         or config.get("model_type") == "qwen2"
         or config.get("qwen_type") == "qwen2"
+        or config.get("decoder") in {"llama", "qwen2"}
     )
-    if not (is_qwen2_vl_text_export or is_legacy_wrong_qwen2_export):
+
+
+def _require_qwen2_vl_trtllm_config(output_dir: Path):
+    config_path = output_dir / "config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Missing TensorRT-LLM config: {config_path}")
+
+    config = _load_json(config_path)
+    if (output_dir / "config.json.bak_qwen2vl_normalize").exists():
+        raise RuntimeError(
+            f"{output_dir} contains config.json.bak_qwen2vl_normalize, which means "
+            "it was produced by the old unsafe qwen2->qwen2_vl config rewrite. "
+            "Delete the directory and re-export with the patched Qwen2-VL path."
+        )
+    if _looks_like_plain_qwen_export(config):
+        raise RuntimeError(
+            "TensorRT-LLM exported a plain qwen2/llama checkpoint instead of a "
+            "Qwen2-VL/mRoPE checkpoint. Do not normalize this config after the fact; "
+            "that builds an engine that runs quickly but generates invalid logits. "
+            "Use a TensorRT-LLM/ModelOpt version or monkey patch that exports "
+            "Qwen2-VL with qwen_type=qwen2_vl and position_embedding_type=mrope."
+        )
+
+    expected = {
+        "model_type": "qwen2_vl",
+        "qwen_type": "qwen2_vl",
+        "position_embedding_type": "mrope",
+    }
+    mismatches = {
+        key: (expected_value, config.get(key))
+        for key, expected_value in expected.items()
+        if config.get(key) != expected_value
+    }
+    architectures = config.get("architectures") or [config.get("architecture")]
+    if "Qwen2VLForConditionalGeneration" not in architectures:
+        mismatches["architectures"] = ("Qwen2VLForConditionalGeneration", architectures)
+    if mismatches:
+        details = ", ".join(
+            f"{key}: expected {expected_value!r}, got {actual_value!r}"
+            for key, (expected_value, actual_value) in mismatches.items()
+        )
+        raise RuntimeError(f"Invalid Qwen2-VL TensorRT-LLM export config: {details}")
+
+
+def normalize_qwen2_vl_trtllm_config(output_dir: Path):
+    """Deprecated guard kept to reject legacy unsafe exports.
+
+    Earlier experiments rewrote plain qwen2/Qwen2ForCausalLM TensorRT-LLM
+    configs into qwen2_vl/mRoPE configs. Those checkpoints can build engines
+    but produce garbage generations. New exports must be Qwen2-VL-native before
+    this function is reached.
+    """
+    config_path = output_dir / "config.json"
+    if not config_path.exists():
         return False
 
-    backup_path = output_dir / "config.json.bak_qwen2vl_normalize"
-    if not backup_path.exists():
-        shutil.copy2(config_path, backup_path)
+    config = _load_json(config_path)
+    if _looks_like_plain_qwen_export(config):
+        raise RuntimeError(
+            "Refusing to rewrite a plain qwen2/llama TensorRT-LLM export into "
+            "Qwen2-VL. Re-export with the patched Qwen2-VL ModelOpt path instead."
+        )
+    _require_qwen2_vl_trtllm_config(output_dir)
+    return False
 
-    config["architecture"] = "Qwen2VLForConditionalGeneration"
-    config["architectures"] = ["Qwen2VLForConditionalGeneration"]
-    config["model_type"] = "qwen2_vl"
-    config["qwen_type"] = "qwen2_vl"
-    config["position_embedding_type"] = "mrope"
-    config["rotary_base"] = config.get("rotary_base", 1000000.0)
-    config["rotary_embedding_dim"] = config.get(
-        "rotary_embedding_dim",
-        config.get("hidden_size", 3584) // config.get("num_attention_heads", 28),
-    )
-    config["rotary_scaling"] = {
-        "type": "mrope",
-        "mrope_section": config.get("rotary_scaling", {}).get(
-            "mrope_section", [16, 24, 24]
-        ),
-        "rope_theta": config["rotary_base"],
-        "rope_type": "default",
-    }
-    config.setdefault("seq_length", config.get("max_position_embeddings", 32768))
-    config.pop("decoder", None)
-    config.pop("text_config", None)
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+def _copy_qwen2vl_text_fields(full_config):
+    text_config = getattr(full_config, "text_config", None)
+    if text_config is None:
+        return full_config
+
+    for name in (
+        "attention_dropout",
+        "bos_token_id",
+        "eos_token_id",
+        "hidden_act",
+        "hidden_size",
+        "initializer_range",
+        "intermediate_size",
+        "max_position_embeddings",
+        "num_attention_heads",
+        "num_hidden_layers",
+        "num_key_value_heads",
+        "pad_token_id",
+        "rms_norm_eps",
+        "sliding_window",
+        "tie_word_embeddings",
+        "use_cache",
+        "vocab_size",
+    ):
+        if hasattr(text_config, name):
+            setattr(full_config, name, getattr(text_config, name))
+
+    rope_parameters = getattr(text_config, "rope_parameters", None)
+    if rope_parameters is None:
+        rope_parameters = getattr(text_config, "rope_scaling", None)
+    if rope_parameters is None:
+        rope_parameters = {
+            "type": "mrope",
+            "rope_type": "default",
+            "rope_theta": getattr(text_config, "rope_theta", 1000000.0),
+            "mrope_section": [16, 24, 24],
+        }
+    else:
+        rope_parameters = copy.deepcopy(rope_parameters)
+    rope_parameters.setdefault("type", "mrope")
+    rope_parameters.setdefault("rope_type", "default")
+    rope_parameters.setdefault("rope_theta", 1000000.0)
+    rope_parameters.setdefault("mrope_section", [16, 24, 24])
+    full_config.rope_scaling = rope_parameters
+    full_config.rope_parameters = rope_parameters
+    full_config.rope_theta = rope_parameters["rope_theta"]
+    full_config.architectures = ["Qwen2VLForConditionalGeneration"]
+    full_config.model_type = "qwen2_vl"
+    full_config.qwen_type = "qwen2_vl"
+    return full_config
+
+
+def _patch_qwen2_vl_modelopt_export(quantize_and_export, model_dir: str):
+    """Keep ModelOpt's exported LLM config Qwen2-VL-aware.
+
+    TensorRT-LLM 1.3's ModelOpt helper loads Qwen2-VL and then strips it down
+    to the language model. Some builds then classify that text module as
+    llama/qwen2, which silently drops mRoPE. We still export only the language
+    model weights, but we attach a full Qwen2-VL config so ModelOpt emits a
+    Qwen2VLForConditionalGeneration/qwen2_vl checkpoint.
+    """
+    qglobals = quantize_and_export.__globals__
+    original_get_model = qglobals.get("get_model")
+    original_get_model_type = qglobals.get("get_model_type")
+    if original_get_model is None or original_get_model_type is None:
+        return False
+
+    def patched_get_model(ckpt_path: str, dtype: str = "bfloat16", device: str = "cuda", device_map: str = "auto"):
+        if Path(ckpt_path).resolve() != Path(model_dir).resolve():
+            return original_get_model(ckpt_path, dtype=dtype, device=device, device_map=device_map)
+
+        from tensorrt_llm._utils import str_dtype_to_torch
+        from transformers import AutoConfig, Qwen2VLForConditionalGeneration
+
+        full_config = _copy_qwen2vl_text_fields(
+            AutoConfig.from_pretrained(ckpt_path, trust_remote_code=True)
+        )
+        torch_dtype = str_dtype_to_torch(dtype)
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            ckpt_path,
+            device_map=device_map if device != "cpu" else "cpu",
+            dtype="auto" if dtype == "auto" else torch_dtype,
+            trust_remote_code=True,
+        )
+        lm_head = model.lm_head
+        language_model = model.model.language_model
+        language_model.lm_head = lm_head
+        language_model.config = full_config
+        language_model.eval()
+        return language_model
+
+    def patched_get_model_type(model):
+        if (
+            type(model).__name__ == "Qwen2VLTextModel"
+            and getattr(getattr(model, "config", None), "model_type", None) == "qwen2_vl"
+        ):
+            return "qwen2_vl"
+        return original_get_model_type(model)
+
+    qglobals["get_model"] = patched_get_model
+    qglobals["get_model_type"] = patched_get_model_type
+    model_name_map = qglobals.get("MODEL_NAME_PATTERN_MAP")
+    if isinstance(model_name_map, dict):
+        model_name_map["Qwen2VLTextModel"] = "qwen2_vl"
     return True
 
 
@@ -163,6 +296,15 @@ def export_trtllm_modelopt(args):
             "in the target NVIDIA environment."
         ) from exc
 
+    patched_qwen2_vl_export = False
+    if args.model == "qwen2_vl":
+        patched_qwen2_vl_export = _patch_qwen2_vl_modelopt_export(
+            quantize_and_export,
+            args.model_dir,
+        )
+        if not patched_qwen2_vl_export:
+            raise RuntimeError("Failed to patch TensorRT-LLM ModelOpt Qwen2-VL export path.")
+
     qformat = SUPPORTED_TRTLLM_FORMATS[args.quant_format]
     quantize_and_export(
         model_dir=args.model_dir,
@@ -187,12 +329,14 @@ def export_trtllm_modelopt(args):
     normalized_config = False
     if args.model == "qwen2_vl":
         normalized_config = normalize_qwen2_vl_trtllm_config(Path(args.output_dir))
+        _require_qwen2_vl_trtllm_config(Path(args.output_dir))
     write_manifest(args, "trtllm-modelopt", {
         "trtllm_qformat": qformat,
         "block_size": args.awq_block_size,
         "awq_block_size": args.awq_block_size,
         "calib_dataset": args.calib_dataset,
         "calib_size": args.calib_size,
+        "patched_qwen2_vl_modelopt_export": patched_qwen2_vl_export,
         "normalized_qwen2_vl_config": normalized_config,
     })
 
