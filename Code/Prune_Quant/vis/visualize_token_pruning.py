@@ -11,6 +11,9 @@ The script expects one sample per run. A sample contains token embeddings
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
+import io
 import math
 import random
 import sys
@@ -60,8 +63,24 @@ def _load_sample(path: Path) -> dict[str, Any]:
             import torch
         except ImportError as exc:
             raise SystemExit("torch is required to load .pt/.pth samples.") from exc
-        return torch.load(path, map_location="cpu")
+        try:
+            return torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError:
+            return torch.load(path, map_location="cpu")
     raise ValueError(f"Unsupported sample file suffix {suffix!r}; use .pt, .pth, or .npz.")
+
+
+def _read_jsonl_file(path: str | Path):
+    text = Path(path).read_text(encoding="utf-8").strip()
+    if not text:
+        return
+    if text.startswith("["):
+        for item in __import__("json").loads(text):
+            yield item
+        return
+    for line in text.splitlines():
+        if line.strip():
+            yield __import__("json").loads(line)
 
 
 def _resolve_path(value: str | Path | None, base_dir: Path) -> Path | None:
@@ -116,6 +135,7 @@ def _load_visualization_config(path: Path) -> dict[str, Any]:
             "attn_implementation": "eager",
         },
         "calibration": {},
+        "questions": {},
         "quant_joint": {
             "quant_lambda": 1.0,
             "quant_method": "rtn",
@@ -157,6 +177,187 @@ def _bool_value(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y"}
     return bool(value)
+
+
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return True
+    except (ImportError, TypeError, ValueError):
+        pass
+    return isinstance(value, str) and not value.strip()
+
+
+def _first_nonempty(row: dict[str, Any], *keys: str, default: str = "") -> str:
+    for key in keys:
+        if key in row and not _is_missing(row[key]):
+            return str(row[key])
+    return default
+
+
+def _decode_base64_image(value: Any, cache_key: str, image_cache: dict[str, Any]) -> Any:
+    from PIL import Image
+
+    if isinstance(value, Image.Image):
+        image = value.convert("RGB")
+        image_cache[cache_key] = image
+        return image.copy()
+    if _is_missing(value):
+        if cache_key in image_cache:
+            return image_cache[cache_key].copy()
+        raise ValueError(f"Missing image data for {cache_key!r}; this question source requires an image per sample.")
+    raw = str(value).strip()
+    if len(raw) > 16:
+        try:
+            image = Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGB")
+        except Exception as exc:
+            raise ValueError(f"Failed to decode image data for {cache_key!r}.") from exc
+        image_cache[cache_key] = image
+        return image.copy()
+    if cache_key in image_cache:
+        return image_cache[cache_key].copy()
+    raise ValueError(f"Image data for {cache_key!r} is too short to be a valid base64 image.")
+
+
+def _format_question(dataset: str, row: dict[str, Any], *, mme_prompt_style: str = "default") -> str:
+    question = str(row["question"])
+    if dataset == "MMStar":
+        option_values = []
+        for opt in ["A", "B", "C", "D"]:
+            if opt not in row or _is_missing(row[opt]):
+                option_values = []
+                break
+            option_values.append(f"{opt}. {row[opt]}")
+        options = "\n".join(option_values)
+        if not options:
+            return f"{question}\nAnswer with the option letter only, one of A, B, C, or D."
+        return f"{question}\n{options}\nAnswer with the option letter only, one of A, B, C, or D."
+    if dataset == "MME":
+        if mme_prompt_style == "original":
+            return question
+        question = question.replace(" Please answer yes or no.", "")
+        if mme_prompt_style == "qwen_vl":
+            return f"{question} Answer:"
+        if mme_prompt_style == "gpt4v":
+            return f"{question}\nAnswer the question with Yes or No."
+        return f"{question}\nAnswer the question using a single word or phrase."
+    return question
+
+
+def _sample_from_question_row(
+    row: dict[str, Any],
+    *,
+    row_idx: int,
+    dataset: str,
+    image_cache: dict[str, Any],
+    mme_prompt_style: str,
+    image_root: Path | None,
+) -> dict[str, Any]:
+    question_id = _first_nonempty(row, "question_id")
+    index = _first_nonempty(row, "index", "id", default=f"{question_id or 'row'}::{row_idx}")
+    image_path = _first_nonempty(row, "image_path", "image_file", "path")
+    image_key = _first_nonempty(row, "question_id", "image_path", "image_file", "path", default=index)
+    image_value = row.get("image")
+
+    sample: dict[str, Any] = {
+        "id": index,
+        "prompt": _format_question(dataset, row, mme_prompt_style=mme_prompt_style),
+        "answer": _first_nonempty(row, "answer"),
+        "question": _first_nonempty(row, "question"),
+        "category": _first_nonempty(row, "category"),
+        "question_id": question_id,
+    }
+    if not _is_missing(image_value):
+        sample["image"] = _decode_base64_image(image_value, image_key, image_cache)
+        if image_path:
+            sample["image_path"] = str((image_root / image_path).resolve()) if image_root and not Path(image_path).is_absolute() else image_path
+    elif image_path:
+        path = Path(image_path).expanduser()
+        if image_root is not None and not path.is_absolute():
+            path = image_root / path
+        sample["image"] = str(path)
+        sample["image_path"] = str(path)
+    else:
+        raise ValueError(f"Question row {index!r} does not contain image or image_path.")
+    return sample
+
+
+def _load_question_samples(
+    *,
+    source_cfg: dict[str, Any],
+    base_dir: Path,
+    fallback_image_root: Path | None,
+) -> list[dict[str, Any]]:
+    source = str(source_cfg.get("source", "jsonl"))
+    dataset = str(source_cfg.get("dataset", "MME"))
+    image_root = _resolve_path(source_cfg.get("image_root"), base_dir) or fallback_image_root
+    image_cache: dict[str, Any] = {}
+    if source == "jsonl":
+        path = _resolve_path(source_cfg.get("path") or source_cfg.get("input_jsonl"), base_dir)
+        if path is None:
+            raise ValueError("questions.path is required when questions.source=jsonl.")
+        return [_prepare_sample_paths(dict(item), image_root) for item in _read_jsonl_file(path)]
+    if source == "tsv":
+        try:
+            import pandas as pd
+        except ImportError:
+            pd = None
+        path = _resolve_path(source_cfg.get("path") or source_cfg.get("tsv"), base_dir)
+        if path is None:
+            raise ValueError("questions.path or questions.tsv is required when questions.source=tsv.")
+        mme_prompt_style = str(source_cfg.get("mme_prompt_style", "default"))
+        if pd is None:
+            with path.open("r", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f, delimiter="\t"))
+            return [
+                _sample_from_question_row(
+                    row,
+                    row_idx=row_idx,
+                    dataset=dataset,
+                    image_cache=image_cache,
+                    mme_prompt_style=mme_prompt_style,
+                    image_root=image_root,
+                )
+                for row_idx, row in enumerate(rows)
+            ]
+        df = pd.read_csv(path, sep="\t")
+        return [
+            _sample_from_question_row(
+                row.to_dict(),
+                row_idx=int(row_idx),
+                dataset=dataset,
+                image_cache=image_cache,
+                mme_prompt_style=mme_prompt_style,
+                image_root=image_root,
+            )
+            for row_idx, row in df.iterrows()
+        ]
+    if source == "hf":
+        try:
+            from datasets import load_dataset
+        except ImportError as exc:
+            raise SystemExit("datasets is required to read questions.source=hf.") from exc
+        hf_dataset = str(source_cfg.get("hf_dataset", "lmms-lab/MME"))
+        hf_split = str(source_cfg.get("hf_split", "test"))
+        hf_cache_dir = source_cfg.get("hf_cache_dir")
+        ds = load_dataset(hf_dataset, split=hf_split, cache_dir=hf_cache_dir)
+        mme_prompt_style = str(source_cfg.get("mme_prompt_style", "default"))
+        return [
+            _sample_from_question_row(
+                dict(row),
+                row_idx=row_idx,
+                dataset=dataset,
+                image_cache=image_cache,
+                mme_prompt_style=mme_prompt_style,
+                image_root=image_root,
+            )
+            for row_idx, row in enumerate(ds)
+        ]
+    raise ValueError("questions.source must be one of: jsonl, tsv, hf.")
 
 
 def _resolve_processor_pixels(config: dict[str, Any], name: str) -> int | None:
@@ -220,6 +421,7 @@ def _build_sample_artifact(
     meta: Any,
     gae_scores: Any,
     quant_joint_scores: Any,
+    answer: str | None = None,
 ) -> dict[str, Any]:
     import torch
 
@@ -234,6 +436,13 @@ def _build_sample_artifact(
         "vision_text_boundary": boundary,
         "image_grid_thw": None if meta.image_grid_thw is None else meta.image_grid_thw.detach().cpu(),
         "image_path": _sample_image_path(sample),
+        "image": sample.get("image"),
+        "prompt": sample.get("prompt"),
+        "question": sample.get("question") or sample.get("prompt") or sample.get("text"),
+        "answer": answer if answer is not None else sample.get("answer"),
+        "reference_answer": sample.get("answer"),
+        "category": sample.get("category"),
+        "question_id": sample.get("question_id"),
         "spatial_merge_size": _spatial_merge_size(model),
         "num_visual_tokens": int(meta.visual_indices.numel()),
         "seq_len": int(inputs["input_ids"].shape[-1]) if "input_ids" in inputs else int(inputs_embeds.shape[1]),
@@ -276,26 +485,36 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
     base_dir = config_path.parent
     model_cfg = config["model"]
     calibration_cfg = config["calibration"]
+    questions_cfg = config.get("questions") or {}
     data_cfg = config.get("data", {})
     scoring_cfg = config["scoring"]
     quant_cfg = config["quant_joint"]
     pruning_cfg = config["pruning"]
     vis_cfg = config["visualization"]
 
-    calib_path = _resolve_path(
-        calibration_cfg.get("path")
-        or calibration_cfg.get("calib_jsonl")
-        or calibration_cfg.get("input_jsonl")
-        or data_cfg.get("calib_jsonl")
-        or data_cfg.get("input_jsonl"),
-        base_dir,
-    )
-    if calib_path is None:
-        raise ValueError("Missing required config field: calibration.path")
     image_root = _resolve_path(calibration_cfg.get("image_root") or data_cfg.get("image_root"), base_dir)
     limit = cli_limit if cli_limit is not None else int(vis_cfg.get("limit", 1))
     sample_offset = int(vis_cfg.get("sample_offset", 0))
-    raw_samples = list(_read_jsonl(calib_path))
+    if questions_cfg:
+        raw_samples = _load_question_samples(
+            source_cfg=questions_cfg,
+            base_dir=base_dir,
+            fallback_image_root=image_root,
+        )
+        sample_source_name = f"questions.{questions_cfg.get('source', 'jsonl')}"
+    else:
+        calib_path = _resolve_path(
+            calibration_cfg.get("path")
+            or calibration_cfg.get("calib_jsonl")
+            or calibration_cfg.get("input_jsonl")
+            or data_cfg.get("calib_jsonl")
+            or data_cfg.get("input_jsonl"),
+            base_dir,
+        )
+        if calib_path is None:
+            raise ValueError("Missing required config field: questions.path or calibration.path")
+        raw_samples = [_prepare_sample_paths(dict(item), image_root) for item in _read_jsonl(calib_path)]
+        sample_source_name = "calibration"
     candidate_indices = list(range(sample_offset, len(raw_samples)))
     if not candidate_indices:
         raise ValueError(f"No calibration samples available after sample_offset={sample_offset}.")
@@ -338,7 +557,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
         seq_len = int(inputs["input_ids"].shape[-1]) if "input_ids" in inputs else None
         print(
             "[visualize] "
-            f"row={row_idx} id={sample.get('id', row_idx)} "
+            f"source={sample_source_name} row={row_idx} id={sample.get('id', row_idx)} "
             f"seq_len={seq_len} visual_tokens={int(meta.visual_indices.numel())} "
             f"image_grid_thw={image_grid} "
             f"processor_min_pixels={_resolve_processor_pixels(config, 'min')} "
@@ -382,6 +601,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             meta=meta,
             gae_scores=gae_scores,
             quant_joint_scores=quant_scores,
+            answer=answer,
         )
         yield artifact, {
             "retention_ratio": float(pruning_cfg.get("retention_ratio", 0.5)),
@@ -539,6 +759,139 @@ def _draw_image_overlay_panel(
     return composed, title
 
 
+def _load_overlay_font(size: int) -> Any:
+    from PIL import ImageFont
+
+    candidates = [
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return ImageFont.truetype(candidate, size=size)
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size=size)
+    except OSError:
+        return ImageFont.load_default()
+
+
+def _metadata_string(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, np.ndarray):
+        if value.shape == ():
+            value = value.item()
+        else:
+            value = value.tolist()
+    if hasattr(value, "detach"):
+        value = _as_numpy(value, name="metadata")
+        if value.shape == ():
+            value = value.item()
+        else:
+            value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        value = " ".join(_metadata_string(item) for item in value)
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
+def _text_width(draw: Any, text: str, font: Any) -> int:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return int(bbox[2] - bbox[0])
+
+
+def _line_height(font: Any) -> int:
+    try:
+        bbox = font.getbbox("Ag")
+        return int(bbox[3] - bbox[1]) + 6
+    except AttributeError:
+        return 18
+
+
+def _split_to_width(draw: Any, text: str, font: Any, max_width: int) -> list[str]:
+    if not text:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for char in text:
+        candidate = f"{current}{char}"
+        if current and _text_width(draw, candidate, font) > max_width:
+            lines.append(current)
+            current = char
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _wrap_text(draw: Any, text: str, font: Any, max_width: int) -> list[str]:
+    wrapped: list[str] = []
+    for paragraph in text.splitlines() or [""]:
+        paragraph = " ".join(paragraph.split())
+        if not paragraph:
+            wrapped.append("")
+            continue
+        if _text_width(draw, paragraph, font) <= max_width:
+            wrapped.append(paragraph)
+            continue
+        words = paragraph.split(" ")
+        if len(words) == 1:
+            wrapped.extend(_split_to_width(draw, paragraph, font, max_width))
+            continue
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if _text_width(draw, candidate, font) <= max_width:
+                current = candidate
+                continue
+            if current:
+                wrapped.append(current)
+            if _text_width(draw, word, font) <= max_width:
+                current = word
+            else:
+                pieces = _split_to_width(draw, word, font, max_width)
+                wrapped.extend(pieces[:-1])
+                current = pieces[-1]
+        if current:
+            wrapped.append(current)
+    return wrapped
+
+
+def _overlay_text_lines(sample: dict[str, Any], draw: Any, font: Any, max_width: int, max_lines: int = 14) -> list[str]:
+    question = (
+        _metadata_string(sample.get("question"))
+        or _metadata_string(sample.get("prompt"))
+        or _metadata_string(sample.get("text"))
+    )
+    answer = _metadata_string(sample.get("answer")) or _metadata_string(sample.get("reference_answer"))
+    entries = []
+    if question:
+        entries.append(f"Question: {question}")
+    if answer:
+        entries.append(f"Answer: {answer}")
+    if not entries:
+        return []
+
+    lines: list[str] = []
+    for entry in entries:
+        if lines:
+            lines.append("")
+        lines.extend(_wrap_text(draw, entry, font, max_width))
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        suffix = " ..."
+        while lines[-1] and _text_width(draw, f"{lines[-1]}{suffix}", font) > max_width:
+            lines[-1] = lines[-1][:-1]
+        lines[-1] = f"{lines[-1]}{suffix}".strip()
+    return lines
+
+
 def _save_image_overlay(
     *,
     sample: dict[str, Any],
@@ -547,16 +900,21 @@ def _save_image_overlay(
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
 ) -> Path | None:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
 
+    image_value = sample.get("image")
     image_path = sample.get("image_path")
-    if not image_path:
-        print("[visualize] skipped image overlay: sample has no image_path.")
-        return None
-    image_path = Path(str(image_path)).expanduser()
-    if not image_path.exists():
-        print(f"[visualize] skipped image overlay: image_path does not exist: {image_path}")
-        return None
+    if isinstance(image_value, Image.Image):
+        image = image_value.convert("RGB")
+    else:
+        if not image_path:
+            print("[visualize] skipped image overlay: sample has no image or image_path.")
+            return None
+        image_path = Path(str(image_path)).expanduser()
+        if not image_path.exists():
+            print(f"[visualize] skipped image overlay: image_path does not exist: {image_path}")
+            return None
+        image = Image.open(image_path).convert("RGB")
     grid = _first_image_grid(sample)
     if grid is None:
         print("[visualize] skipped image overlay: missing image_grid_thw.")
@@ -566,7 +924,6 @@ def _save_image_overlay(
         spatial_merge_size = int(_as_numpy(spatial_merge_size_value, name="spatial_merge_size").item())
     else:
         spatial_merge_size = int(np.asarray(spatial_merge_size_value).item())
-    image = Image.open(image_path).convert("RGB")
     gae_mask = _removed_mask_for_image(
         gae_removed,
         image_grid_thw=grid,
@@ -592,17 +949,33 @@ def _save_image_overlay(
     margin = 24
     gutter = 20
     canvas_w = sum(panel.width for panel, _ in resized) + gutter * (len(resized) - 1) + margin * 2
-    canvas_h = max(panel.height for panel, _ in resized) + title_h + margin * 2 + 28
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1), "white"))
+    font = _load_overlay_font(14)
+    header_font = _load_overlay_font(16)
+    text_font = _load_overlay_font(15)
+    overlay_lines = _overlay_text_lines(sample, measure, text_font, canvas_w - 2 * margin)
+    text_line_h = _line_height(text_font)
+    text_h = 0 if not overlay_lines else 20 + len(overlay_lines) * text_line_h
+    canvas_h = max(panel.height for panel, _ in resized) + title_h + margin * 2 + 28 + text_h
     canvas = Image.new("RGB", (canvas_w, canvas_h), "white")
     draw = ImageDraw.Draw(canvas)
-    font = ImageFont.load_default()
-    draw.text((margin, 12), f"Pruned visual tokens projected to image: {sample_id}", fill=(10, 20, 30), font=font)
+    draw.text(
+        (margin, 12),
+        f"Pruned visual tokens projected to image: {sample_id}",
+        fill=(10, 20, 30),
+        font=header_font,
+    )
     x = margin
     y = margin + title_h
     for panel, title in resized:
         draw.text((x, y - 18), title, fill=(35, 45, 55), font=font)
         canvas.paste(panel, (x, y))
         x += panel.width + gutter
+    if overlay_lines:
+        text_y = y + max(panel.height for panel, _ in resized) + 22
+        for line in overlay_lines:
+            draw.text((margin, text_y), line, fill=(20, 30, 42), font=text_font)
+            text_y += text_line_h
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path)
     print(f"Wrote {output_path}")

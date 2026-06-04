@@ -58,7 +58,7 @@ vis/outputs/demo_sample_token_pruning.png
 
 ## 运行真实样本
 
-推荐方式是直接传入 YAML，让脚本按仓库现有运行逻辑从校准集样本生成可视化所需的 `inputs_embeds`、原始 GAE 分数和量化-剪枝协同分数：
+推荐方式是直接传入 YAML，让脚本按仓库现有运行逻辑从题目集合生成可视化所需的 `inputs_embeds`、原始 GAE 分数和量化-剪枝协同分数：
 
 ```bash
 python3 vis/visualize_token_pruning.py --config vis/example_visualization_config.yaml
@@ -80,9 +80,12 @@ model:
   # 实际 token 数仍会受原图尺寸和 processor resize 规则影响。
   processor_max_visual_tokens: 1500
 
-calibration:
-  path: ${CALIB_JSONL}
+questions:
+  source: tsv        # tsv / jsonl / hf
+  dataset: MME
+  path: ${MME_TSV}
   image_root: ${IMAGE_ROOT}
+  mme_prompt_style: default
 
 quant_joint:
   quant_lambda: 1.0
@@ -116,9 +119,11 @@ visualization:
 
 说明：
 
-- `calibration.path` 指向校准集 JSONL；其中每一行就是一个可视化样本。
-- 也兼容 `calibration.calib_jsonl`、`calibration.input_jsonl`、`data.calib_jsonl`、`data.input_jsonl`。
-- 校准样本沿用仓库 adapter 逻辑，需要包含 `prompt` / `question` / `text` 之一，以及 `image` / `image_path` / `images` 之一。
+- `questions.source: tsv` 支持 VLMEvalKit 风格的 MME TSV；每一行题目都会转换成一个可视化样本。
+- MME TSV 通常包含 base64 `image`、`question`、`answer`，以及可选 `category`、`question_id`、`image_path`。
+- `questions.source: jsonl` 仍要求每行包含 `prompt` / `question` / `text` 之一，以及 `image` / `image_path` / `images` 之一。
+- `questions.source: hf` 可从 Hugging Face dataset 抽题，例如 `hf_dataset: lmms-lab/MME`、`hf_split: test`。
+- 旧入口仍兼容：如果没有 `questions`，脚本会读取 `calibration.path`、`calibration.calib_jsonl`、`calibration.input_jsonl`、`data.calib_jsonl` 或 `data.input_jsonl`。
 - `answer_source: sample` 时优先使用样本里的 `answer`；没有 answer 会自动生成 replay answer。
 - 量化-剪枝协同分数通过仓库里的 `_score_gae_quant_joint` 计算，目前对应 RTN scoring forward。
 - 协同剪枝参数优先读取 `quant_joint.*`，也兼容已有配置中的 `pruning.quant_lambda`、`pruning.quant_method`、`pruning.rtn_bits`、`pruning.rtn_group_size`。
@@ -127,7 +132,8 @@ visualization:
 - YAML 内的相对路径按 YAML 文件所在目录解析；`vis/example_visualization_config.yaml` 里的 `outputs` 会解析到 `vis/outputs`。
 - YAML 模式运行时会打印 `seq_len`、`visual_tokens`、`image_grid_thw` 和 processor pixel budget；如果 visual token 数不是预期的约 1500，先看这行诊断。
 - Qwen2-VL/Qwen2.5-VL 的 visual token 数由 processor resize 后的 `image_grid_thw` 决定，不是固定 1500。若没有设置 `model.processor_max_visual_tokens` / `model.processor_max_pixels`，或者原图本身较小，实际 visual tokens 可能明显少于 1500。
-- `visualization.random_sample: true` 时，每次运行会从校准集中随机抽样；设置 `seed` 可以固定抽到同一批样本。
+- `visualization.random_sample: true` 时，每次运行会从当前样本源中随机抽样；设置 `seed` 可以固定抽到同一批样本。
+- 当使用 `questions` 时，随机抽样单位就是题目，例如 MME TSV 中的一行问题。
 
 也可以对已经保存好的样本包重画：
 
