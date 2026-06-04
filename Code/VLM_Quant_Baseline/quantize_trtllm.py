@@ -220,6 +220,24 @@ def _copy_qwen2vl_text_fields(full_config):
     return full_config
 
 
+def _patch_qwen2vl_autoconfig_fields(quantize_and_export):
+    qglobals = quantize_and_export.__globals__
+    auto_config_cls = qglobals.get("AutoConfig")
+    if auto_config_cls is None:
+        return False
+
+    original_from_pretrained = auto_config_cls.from_pretrained
+
+    def patched_from_pretrained(*args, **kwargs):
+        config = original_from_pretrained(*args, **kwargs)
+        if getattr(config, "model_type", None) == "qwen2_vl":
+            return _copy_qwen2vl_text_fields(config)
+        return config
+
+    auto_config_cls.from_pretrained = patched_from_pretrained
+    return True
+
+
 def _patch_qwen2_vl_modelopt_export(quantize_and_export, model_dir: str):
     """Keep ModelOpt's exported LLM config Qwen2-VL-aware.
 
@@ -234,6 +252,7 @@ def _patch_qwen2_vl_modelopt_export(quantize_and_export, model_dir: str):
     original_get_model_type = qglobals.get("get_model_type")
     if original_get_model is None or original_get_model_type is None:
         return False
+    _patch_qwen2vl_autoconfig_fields(quantize_and_export)
 
     def patched_get_model(ckpt_path: str, dtype: str = "bfloat16", device: str = "cuda", device_map: str = "auto"):
         if Path(ckpt_path).resolve() != Path(model_dir).resolve():
