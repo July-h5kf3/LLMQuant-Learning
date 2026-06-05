@@ -108,11 +108,11 @@ class QuantJointGAEPruner(GAEOraclePruner):
         query_indices: Any,
         normalize: bool | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Return C_drop, C_quant, and D = lambda * C_quant - C_drop."""
+        """Return raw C_drop/C_quant and normalized D = lambda * C_quant - C_drop."""
 
         if quantized_attentions is None:
             raise ValueError("QuantJointGAEPruner requires quantized_attentions from an RTN scoring forward.")
-        normalize_components = self.normalize if normalize is None else bool(normalize)
+        normalize_joint = self.normalize if normalize is None else bool(normalize)
         if attentions is None:
             raise ValueError("QuantJointGAEPruner requires differentiable attentions.")
         if len(attentions) != len(quantized_attentions):
@@ -123,16 +123,18 @@ class QuantJointGAEPruner(GAEOraclePruner):
             source_attentions=None,
             meta=meta,
             query_indices=query_indices,
-            normalize=normalize_components,
+            normalize=False,
         )
         c_quant = self._rollout_delta_score(
             attentions=attentions,
             quantized_attentions=quantized_attentions,
             meta=meta,
             query_indices=query_indices,
-            normalize=normalize_components,
+            normalize=False,
         )
-        joint = self.quant_lambda * c_quant - c_drop
+        joint = normalize_joint_scores(self.quant_lambda * c_quant - c_drop) if normalize_joint else (
+            self.quant_lambda * c_quant - c_drop
+        )
         return {
             "c_drop": c_drop,
             "c_quant": c_quant,
@@ -216,6 +218,11 @@ class QuantJointGAEPruner(GAEOraclePruner):
 
 def normalize_relevance_scores(scores: torch.Tensor) -> torch.Tensor:
     denom = scores.sum().clamp_min(torch.finfo(scores.dtype).eps)
+    return scores / denom
+
+
+def normalize_joint_scores(scores: torch.Tensor) -> torch.Tensor:
+    denom = scores.abs().sum().clamp_min(torch.finfo(scores.dtype).eps)
     return scores / denom
 
 

@@ -13,6 +13,7 @@ from prune_quant_baseline.pruners.gae_oracle import (
     QuantJointGAEPruner,
     compute_answer_logprob_target,
     compute_answer_token_logprobs,
+    normalize_joint_scores,
     normalize_relevance_scores,
 )
 from prune_quant_baseline.pruners.attention_proxy import AttentionProxyPruner
@@ -638,11 +639,9 @@ def _score_gae_quant_joint(
                     normalize=False,
                 )
             )
-        c_drop = normalize_relevance_scores(torch.stack([item["c_drop"] for item in token_components], dim=0).mean(dim=0))
-        c_quant = normalize_relevance_scores(
-            torch.stack([item["c_quant"] for item in token_components], dim=0).mean(dim=0)
-        )
-        scores = pruner.quant_lambda * c_quant - c_drop
+        c_drop = torch.stack([item["c_drop"] for item in token_components], dim=0).mean(dim=0)
+        c_quant = torch.stack([item["c_quant"] for item in token_components], dim=0).mean(dim=0)
+        scores = normalize_joint_scores(pruner.quant_lambda * c_quant - c_drop)
         components = {
             "c_drop": c_drop,
             "c_quant": c_quant,

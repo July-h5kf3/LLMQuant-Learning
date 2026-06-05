@@ -70,6 +70,32 @@ def test_quant_joint_gae_uses_attention_delta_and_drop_score() -> None:
     assert torch.allclose(components["joint"], torch.tensor([0.0, -1.0]))
 
 
+def test_quant_joint_gae_normalizes_after_subtracting_components() -> None:
+    attn_data = torch.zeros(1, 1, 4, 4)
+    attn_data[0, 0, 3, 0] = 1.0
+    attn_data[0, 0, 3, 1] = 3.0
+    attn_data[0, 0, 3, 2] = 6.0
+    quant_attn = attn_data.clone()
+    quant_attn[0, 0, 3, 0] = 0.0
+    quant_attn[0, 0, 3, 1] = 2.0
+    quant_attn[0, 0, 3, 2] = 3.0
+    attn = _attention_with_grad(attn_data, torch.ones_like(attn_data))
+    meta = VisualTokenMeta(visual_indices=torch.tensor([0, 1, 2]), text_indices=torch.tensor([3]))
+
+    components = QuantJointGAEPruner(quant_lambda=2.0).score_components(
+        attentions=[attn],
+        quantized_attentions=[quant_attn],
+        meta=meta,
+        query_indices=torch.tensor([3]),
+    )
+
+    raw_joint = torch.tensor([1.0, -1.0, 0.0])
+    expected = raw_joint / raw_joint.abs().sum()
+    assert torch.allclose(components["c_drop"], torch.tensor([1.0, 3.0, 6.0]))
+    assert torch.allclose(components["c_quant"], torch.tensor([1.0, 1.0, 3.0]))
+    assert torch.allclose(components["joint"], expected)
+
+
 def test_quant_joint_gae_score_matches_joint_component() -> None:
     attn_data = torch.zeros(1, 1, 3, 3)
     attn_data[0, 0, 2, 0] = 1.0
