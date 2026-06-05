@@ -563,6 +563,8 @@ def _score_gae_quant_joint(
     quant_method: str = "rtn",
     rtn_bits: int = 4,
     rtn_group_size: int = 0,
+    quant_bits: int = 8,
+    quant_symmetric: bool = True,
     return_components: bool = False,
 ) -> Any:
     import torch
@@ -578,6 +580,10 @@ def _score_gae_quant_joint(
     with torch.no_grad():
         base_inputs_embeds = adapter.build_inputs_embeds(model, teacher_inputs)
         position_ids = adapter.build_position_ids(model, teacher_inputs)
+        visual_activations = base_inputs_embeds[0].index_select(
+            dim=0,
+            index=teacher_meta.visual_indices.to(base_inputs_embeds.device, dtype=torch.long),
+        )
 
     def forward_original_with_retained_attentions():
         inputs_embeds = base_inputs_embeds.detach().requires_grad_(True)
@@ -634,9 +640,12 @@ def _score_gae_quant_joint(
                 pruner.score_components(
                     attentions=outputs.attentions,
                     quantized_attentions=quantized_attentions,
+                    visual_activations=visual_activations,
                     meta=teacher_meta,
                     query_indices=query_idx.view(1),
                     normalize=False,
+                    quant_bits=quant_bits,
+                    quant_symmetric=quant_symmetric,
                 )
             )
         c_drop = torch.stack([item["c_drop"] for item in token_components], dim=0).mean(dim=0)
@@ -658,8 +667,11 @@ def _score_gae_quant_joint(
         components = pruner.score_components(
             attentions=outputs.attentions,
             quantized_attentions=quantized_attentions,
+            visual_activations=visual_activations,
             meta=teacher_meta,
             query_indices=query_indices,
+            quant_bits=quant_bits,
+            quant_symmetric=quant_symmetric,
         )
         scores = components["joint"]
     model.zero_grad(set_to_none=True)
@@ -766,6 +778,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                         quant_method=str(cfg["gae_quant_method"]),
                         rtn_bits=int(cfg["rtn_bits"]),
                         rtn_group_size=int(cfg["rtn_group_size"]),
+                        quant_bits=int(cfg["masquant_abits"]),
+                        quant_symmetric=bool(cfg["masquant_symmetric"]),
                     )
                 elif isinstance(pruner, GAEOraclePruner):
                     answer = str(sample.get("answer") or "").strip()

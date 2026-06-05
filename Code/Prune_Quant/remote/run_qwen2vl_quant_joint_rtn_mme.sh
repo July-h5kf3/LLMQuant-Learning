@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Qwen2-VL + quantization-aware GAE pruning:
 #   D_i = lambda * C_i^quant - C_i^drop
-# where C_i^quant uses Attention - Attention_RTN as the attention source.
+# where C_i^drop uses rollout(grad_Attention * Attention_RTN) and
+# C_i^quant uses input-token activation quantization difficulty.
 
 # ---- Paths ----
 export PROJECT_ROOT=/home/aistudio/LLMQuant-Learning/Code/Prune_Quant

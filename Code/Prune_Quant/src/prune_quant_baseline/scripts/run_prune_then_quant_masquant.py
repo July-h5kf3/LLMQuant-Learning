@@ -375,6 +375,8 @@ def prepare_pruned_calibration_artifacts(args: argparse.Namespace, config: MASQu
                             quant_method=args.gae_quant_method,
                             rtn_bits=args.rtn_bits,
                             rtn_group_size=args.rtn_group_size,
+                            quant_bits=args.abits,
+                            quant_symmetric=config.symmetric,
                         )
                     else:
                         scores = _score_gae_oracle(

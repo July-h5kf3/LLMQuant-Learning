@@ -7,6 +7,14 @@ from prune_quant_baseline.core.datatypes import VisualTokenMeta
 from prune_quant_baseline.pruners.base import VisualTokenPruner
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 class GAEOraclePruner(VisualTokenPruner):
     """Skeleton for gradient-attention explanation oracle pruning."""
 
@@ -104,14 +112,20 @@ class QuantJointGAEPruner(GAEOraclePruner):
         *,
         attentions: Optional[Any] = None,
         quantized_attentions: Optional[Any] = None,
+        visual_activations: Optional[torch.Tensor] = None,
         meta: VisualTokenMeta,
         query_indices: Any,
         normalize: bool | None = None,
+        quant_bits: int = 8,
+        quant_symmetric: bool = True,
+        eps: float = 1e-12,
     ) -> dict[str, torch.Tensor]:
         """Return raw C_drop/C_quant and normalized D = lambda * C_quant - C_drop."""
 
         if quantized_attentions is None:
             raise ValueError("QuantJointGAEPruner requires quantized_attentions from an RTN scoring forward.")
+        if visual_activations is None:
+            raise ValueError("QuantJointGAEPruner requires visual_activations for quant difficulty scoring.")
         normalize_joint = self.normalize if normalize is None else bool(normalize)
         if attentions is None:
             raise ValueError("QuantJointGAEPruner requires differentiable attentions.")
@@ -120,18 +134,21 @@ class QuantJointGAEPruner(GAEOraclePruner):
 
         c_drop = self._rollout_score(
             attentions=attentions,
-            source_attentions=None,
+            source_attentions=quantized_attentions,
             meta=meta,
             query_indices=query_indices,
             normalize=False,
         )
-        c_quant = self._rollout_delta_score(
-            attentions=attentions,
-            quantized_attentions=quantized_attentions,
-            meta=meta,
-            query_indices=query_indices,
-            normalize=False,
+        c_quant = self.compute_quant_difficulty(
+            visual_activations,
+            quant_bits=quant_bits,
+            quant_symmetric=quant_symmetric,
+            eps=eps,
         )
+        if c_quant.numel() != c_drop.numel():
+            raise ValueError(
+                f"Quant difficulty count {c_quant.numel()} does not match visual score count {c_drop.numel()}."
+            )
         joint = normalize_joint_scores(self.quant_lambda * c_quant - c_drop) if normalize_joint else (
             self.quant_lambda * c_quant - c_drop
         )
@@ -141,55 +158,31 @@ class QuantJointGAEPruner(GAEOraclePruner):
             "joint": joint.detach().to(meta.visual_indices.device),
         }
 
-    def _rollout_delta_score(
-        self,
+    @staticmethod
+    def compute_quant_difficulty(
+        visual_activations: torch.Tensor,
         *,
-        attentions: Any,
-        quantized_attentions: Any,
-        meta: VisualTokenMeta,
-        query_indices: Any,
-        normalize: bool,
+        quant_bits: int = 8,
+        quant_symmetric: bool = True,
+        eps: float = 1e-12,
     ) -> torch.Tensor:
-        if query_indices is None:
-            raise ValueError("QuantJointGAEPruner requires query_indices for answer-token positions.")
-        if meta.visual_indices.numel() == 0:
-            raise ValueError("visual_indices is empty; cannot compute GAE scores.")
-        query_indices = query_indices.to(dtype=torch.long)
-        rollout: torch.Tensor | None = None
-        for layer_idx, (attn, quant_attn) in enumerate(zip(attentions, quantized_attentions)):
-            if attn is None or quant_attn is None:
-                continue
-            if attn.grad is None:
-                raise ValueError(
-                    f"Attention layer {layer_idx} has no gradient. Call retain_grad() before backward()."
-                )
-            if attn.dim() != 4 or attn.shape[0] != 1:
-                raise ValueError(f"Expected attention shape [1, H, S, S], got {tuple(attn.shape)}.")
-            if quant_attn.shape != attn.shape:
-                raise ValueError(
-                    f"Quantized attention layer {layer_idx} shape {tuple(quant_attn.shape)} "
-                    f"does not match attention shape {tuple(attn.shape)}."
-                )
-            quant_attn = quant_attn.to(attn.device, dtype=attn.dtype)
-            source = attn.detach() - quant_attn
-            relevance = (attn.grad.detach() * source).relu().mean(dim=1)[0]
-            if rollout is None:
-                seq_len = relevance.shape[-1]
-                rollout = torch.eye(seq_len, device=attn.device, dtype=relevance.dtype)
-            rollout = rollout + relevance @ rollout
-        if rollout is None:
-            raise ValueError("No usable attention tensors were provided.")
-        visual_idx = meta.visual_indices.to(rollout.device, dtype=torch.long)
-        query_idx = query_indices.to(rollout.device, dtype=torch.long)
-        if query_idx.min() < 0 or query_idx.max() >= rollout.shape[0]:
-            raise ValueError("query_indices contain positions outside the attention sequence length.")
-        if visual_idx.min() < 0 or visual_idx.max() >= rollout.shape[1]:
-            raise ValueError("visual_indices contain positions outside the attention sequence length.")
-        scores = rollout.index_select(dim=0, index=query_idx).index_select(dim=1, index=visual_idx).mean(dim=0)
-        if normalize:
-            denom = scores.sum().clamp_min(torch.finfo(scores.dtype).eps)
-            scores = scores / denom
-        return scores.detach().to(meta.visual_indices.device)
+        if quant_bits < 2:
+            raise ValueError("quant_bits must be >= 2.")
+        if visual_activations.dim() != 2:
+            raise ValueError(
+                f"visual_activations must have shape [num_visual_tokens, hidden_dim], "
+                f"got {tuple(visual_activations.shape)}."
+            )
+        compute = visual_activations.detach().float()
+        hidden_dim = compute.shape[-1]
+        if quant_symmetric:
+            qmax = (1 << (quant_bits - 1)) - 1
+            delta = compute.abs().amax(dim=-1) / qmax
+        else:
+            qlevels = (1 << quant_bits) - 1
+            delta = (compute.amax(dim=-1) - compute.amin(dim=-1)) / qlevels
+        norm_sq = compute.pow(2).sum(dim=-1)
+        return (hidden_dim * delta.pow(2) / (12.0 * (norm_sq + eps))).to(device=visual_activations.device)
 
     def score(
         self,
@@ -207,9 +200,13 @@ class QuantJointGAEPruner(GAEOraclePruner):
             components = self.score_components(
                 attentions=attentions,
                 quantized_attentions=kwargs.get("quantized_attentions"),
+                visual_activations=kwargs.get("visual_activations"),
                 meta=meta,
                 query_indices=kwargs.get("query_indices"),
                 normalize=kwargs.get("normalize", self.normalize),
+                quant_bits=int(kwargs.get("quant_bits", 8)),
+                quant_symmetric=_coerce_bool(kwargs.get("quant_symmetric", True)),
+                eps=float(kwargs.get("eps", 1e-12)),
             )
         finally:
             self.quant_lambda = old_lambda

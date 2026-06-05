@@ -203,6 +203,8 @@ class Qwen2VLPrunedGAE(lmms):
         self.gae_quant_method = gae_quant_method
         self.rtn_bits = int(rtn_bits)
         self.rtn_group_size = int(rtn_group_size)
+        self.quant_bits = int(masquant_abits)
+        self.quant_symmetric = _bool_value(masquant_symmetric)
         self.system_prompt = system_prompt
         self.gae_score_disable_masquant_fake_quant = _bool_value(gae_score_disable_masquant_fake_quant)
         self.allow_vanilla_fallback = _bool_value(allow_vanilla_fallback)
@@ -350,6 +352,8 @@ class Qwen2VLPrunedGAE(lmms):
                             quant_method=self.gae_quant_method,
                             rtn_bits=self.rtn_bits,
                             rtn_group_size=self.rtn_group_size,
+                            quant_bits=self.quant_bits,
+                            quant_symmetric=self.quant_symmetric,
                         )
                     else:
                         scores = _score_gae_oracle(
