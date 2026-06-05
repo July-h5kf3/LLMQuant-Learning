@@ -19,6 +19,23 @@ def test_select_top_percent_uses_ceil_and_stable_descending_order() -> None:
     assert selected.tolist() == [1, 3]
 
 
+def test_absmax_proxy_prefers_largest_absolute_channel() -> None:
+    embeds = np.asarray(
+        [
+            [-3.0, 3.0],
+            [-7.0, 1.0],
+            [-2.0, 2.0],
+        ],
+        dtype=np.float32,
+    )
+
+    proxy = visualize_token_pruning._visual_outlier_proxy(embeds)
+    selected = visualize_token_pruning._select_top_percent(proxy, np.arange(proxy.size), fraction=1 / 3)
+
+    assert proxy.tolist() == [3.0, 7.0, 2.0]
+    assert selected.tolist() == [1]
+
+
 def test_mask_for_image_tokens_projects_local_indices_to_first_frame() -> None:
     selected = np.asarray([0, 3, 4], dtype=np.int64)
 
