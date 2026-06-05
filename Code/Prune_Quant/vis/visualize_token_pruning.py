@@ -716,6 +716,12 @@ def _select_top_percent(values: np.ndarray, positions: np.ndarray, *, fraction: 
     return positions[order[:selected_count]].astype(np.int64, copy=False)
 
 
+def _visual_outlier_proxy(embeds: np.ndarray) -> np.ndarray:
+    if embeds.ndim != 2:
+        raise ValueError(f"embeds must be 2D, got {embeds.shape}.")
+    return np.abs(embeds).max(axis=1)
+
+
 def _remaining_embeddings(embeds: np.ndarray, removed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     keep_mask = np.ones(embeds.shape[0], dtype=bool)
     keep_mask[removed] = False
@@ -1048,7 +1054,7 @@ def _save_image_overlay(
     draw.rectangle((margin, legend_y - 7, margin + 18, legend_y + 7), fill=(220, 22, 22), outline=(150, 0, 0))
     draw.text((margin + 26, legend_y - 11), "removed token", fill=(35, 45, 55), font=font)
     draw.rectangle((margin + 170, legend_y - 7, margin + 188, legend_y + 7), fill=(24, 168, 84), outline=(0, 115, 55))
-    draw.text((margin + 196, legend_y - 11), "top 20% channel-range outlier", fill=(35, 45, 55), font=font)
+    draw.text((margin + 196, legend_y - 11), "top 20% abs-max outlier", fill=(35, 45, 55), font=font)
     draw.rectangle((margin + 442, legend_y - 7, margin + 460, legend_y + 7), fill=(24, 168, 84), outline=(170, 0, 0), width=3)
     draw.line((margin + 442, legend_y - 7, margin + 460, legend_y + 7), fill=(170, 0, 0), width=2)
     draw.text((margin + 468, legend_y - 11), "both", fill=(35, 45, 55), font=font)
@@ -1286,7 +1292,7 @@ def _save_score_bars_matplotlib(
     gae_scores: np.ndarray,
     c_quant: np.ndarray,
     joint_scores: np.ndarray,
-    channel_range: np.ndarray,
+    outlier_proxy: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
     outlier_tokens: np.ndarray,
@@ -1298,7 +1304,7 @@ def _save_score_bars_matplotlib(
 
     fig, axes = plt.subplots(4, 1, figsize=(18, 12), sharex=True, constrained_layout=True)
     series = [
-        ("Channel range proxy | max(channel) - min(channel) | top 20% outliers", channel_range, "#6B7280", outlier_tokens),
+        ("Abs-max proxy | max(abs(channel)) | top 20% outliers", outlier_proxy, "#6B7280", outlier_tokens),
         ("GAE score | removed: lowest top-k", gae_scores, "#356A8A", gae_removed),
         (r"$C_i^{quant}$ | quant-joint removed tokens", c_quant, "#7A5C00", quant_removed),
         (r"$D_i = \lambda C_i^{quant} - C_i^{drop}$ | removed: highest top-k", joint_scores, "#8E3B46", quant_removed),
@@ -1341,7 +1347,7 @@ def _save_score_bars_matplotlib(
         handles=[
             Patch(facecolor="#356A8A", label="kept / not removed by that row's pruning rule"),
             Patch(facecolor=removed_color, edgecolor="#7F0000", label="removed token"),
-            Patch(facecolor=outlier_color, edgecolor="#007337", label="top 20% channel-range outlier"),
+            Patch(facecolor=outlier_color, edgecolor="#007337", label="top 20% abs-max outlier"),
         ],
         loc="lower center",
         ncol=3,
@@ -1359,7 +1365,7 @@ def _save_score_bars_pillow(
     gae_scores: np.ndarray,
     c_quant: np.ndarray,
     joint_scores: np.ndarray,
-    channel_range: np.ndarray,
+    outlier_proxy: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
     outlier_tokens: np.ndarray,
@@ -1380,7 +1386,7 @@ def _save_score_bars_pillow(
     draw.text((margin, 24), f"Per-token pruning score statistics: {sample_id}", fill=(10, 20, 30), font=title_font)
 
     series = [
-        ("Channel range proxy | max(channel) - min(channel) | top 20% outliers", channel_range, (107, 114, 128), outlier_tokens),
+        ("Abs-max proxy | max(abs(channel)) | top 20% outliers", outlier_proxy, (107, 114, 128), outlier_tokens),
         ("GAE score | removed: lowest top-k", gae_scores, (53, 106, 138), gae_removed),
         ("C_i^quant | quant-joint removed tokens", c_quant, (122, 92, 0), quant_removed),
         ("D_i = lambda*C_i^quant - C_i^drop | removed: highest top-k", joint_scores, (142, 59, 70), quant_removed),
@@ -1435,7 +1441,7 @@ def _save_score_bars_pillow(
     draw.rectangle((margin + 380, legend_y - 8, margin + 404, legend_y + 8), fill=removed_color, outline=removed_outline)
     draw.text((margin + 412, legend_y - 10), "removed token", fill=(70, 78, 88), font=label_font)
     draw.rectangle((margin + 550, legend_y - 8, margin + 574, legend_y + 8), fill=outlier_color, outline=outlier_outline)
-    draw.text((margin + 582, legend_y - 10), "top 20% channel-range outlier", fill=(70, 78, 88), font=label_font)
+    draw.text((margin + 582, legend_y - 10), "top 20% abs-max outlier", fill=(70, 78, 88), font=label_font)
     draw.text((width // 2 - 54, height - 24), "Visual token idx", fill=(70, 78, 88), font=label_font)
     image.save(output_path)
 
@@ -1448,7 +1454,7 @@ def _save_score_bars(
     positions: np.ndarray,
     gae_scores: np.ndarray,
     quant_scores: np.ndarray,
-    channel_range: np.ndarray,
+    outlier_proxy: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
     outlier_tokens: np.ndarray,
@@ -1466,7 +1472,7 @@ def _save_score_bars(
             gae_scores=gae_scores,
             c_quant=c_quant,
             joint_scores=quant_scores,
-            channel_range=channel_range,
+            outlier_proxy=outlier_proxy,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
             outlier_tokens=outlier_tokens,
@@ -1479,7 +1485,7 @@ def _save_score_bars(
             gae_scores=gae_scores,
             c_quant=c_quant,
             joint_scores=quant_scores,
-            channel_range=channel_range,
+            outlier_proxy=outlier_proxy,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
             outlier_tokens=outlier_tokens,
@@ -1551,8 +1557,8 @@ def _render_sample(
     visual_positions = np.arange(visual_indices.size, dtype=np.int64)
     gae_scores = _as_numpy(sample.get(gae_key), name=gae_key).astype(np.float32).reshape(-1)
     quant_scores = _as_numpy(sample.get(quant_key), name=quant_key).astype(np.float32).reshape(-1)
-    channel_range = embeds.max(axis=1) - embeds.min(axis=1)
-    outlier_tokens = _select_top_percent(channel_range, visual_positions, fraction=0.2)
+    outlier_proxy = _visual_outlier_proxy(embeds)
+    outlier_tokens = _select_top_percent(outlier_proxy, visual_positions, fraction=0.2)
 
     gae_removed = _select_removed(
         gae_scores,
@@ -1612,7 +1618,7 @@ def _render_sample(
                 positions=visual_positions,
                 gae_scores=gae_scores,
                 quant_scores=quant_scores,
-                channel_range=channel_range,
+                outlier_proxy=outlier_proxy,
                 gae_removed=gae_removed,
                 quant_removed=quant_removed,
                 outlier_tokens=outlier_tokens,
@@ -1688,7 +1694,7 @@ def _render_sample(
             positions=visual_positions,
             gae_scores=gae_scores,
             quant_scores=quant_scores,
-            channel_range=channel_range,
+            outlier_proxy=outlier_proxy,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
             outlier_tokens=outlier_tokens,
