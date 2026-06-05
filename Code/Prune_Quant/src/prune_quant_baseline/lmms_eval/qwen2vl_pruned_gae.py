@@ -154,7 +154,7 @@ class Qwen2VLPrunedGAE(lmms):
         pruner: str = "gae_oracle",
         gae_answer_source: str = "generated",
         gae_per_token: bool = False,
-        gae_quant_lambda: float = 1.0,
+        gae_quant_lambda: float = 0.5,
         gae_quant_method: str = "rtn",
         rtn_bits: int = 4,
         rtn_group_size: int = 0,

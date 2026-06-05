@@ -37,6 +37,16 @@ def test_lmms_eval_model_args_from_environment(monkeypatch) -> None:
     assert "min_visual_tokens=" not in model_args
 
 
+def test_lmms_eval_model_args_default_quant_lambda_is_half(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.delenv("PQ_GAE_QUANT_LAMBDA", raising=False)
+
+    args = Namespace(model_args="", model_path="")
+    model_args = module._build_default_model_args(args)
+
+    assert "gae_quant_lambda=0.5" in model_args
+
+
 def test_lmms_eval_explicit_model_args_win() -> None:
     module = _load_runner_module()
     args = Namespace(model_args="pretrained=/custom,retention_ratio=0.25", model_path="/ignored")

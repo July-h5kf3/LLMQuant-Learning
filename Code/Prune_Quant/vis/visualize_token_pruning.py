@@ -148,7 +148,7 @@ def _load_visualization_config(path: Path) -> dict[str, Any]:
         "calibration": {},
         "questions": {},
         "quant_joint": {
-            "quant_lambda": 1.0,
+            "quant_lambda": 0.5,
             "quant_method": "rtn",
             "rtn_bits": 4,
             "rtn_group_size": 0,
@@ -160,7 +160,7 @@ def _load_visualization_config(path: Path) -> dict[str, Any]:
         "scoring": {
             "answer_source": "sample",
             "per_token": True,
-            "gae_normalizer": "sum",
+            "gae_normalizer": "none",
             "max_new_tokens": 16,
         },
         "visualization": {
@@ -570,7 +570,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
     model.eval()
     adapter = _make_adapter(str(model_cfg["model_type"]))
     gae_pruner = GAEOraclePruner()
-    quant_lambda = float(quant_cfg.get("quant_lambda", pruning_cfg.get("quant_lambda", 1.0)))
+    quant_lambda = float(quant_cfg.get("quant_lambda", pruning_cfg.get("quant_lambda", 0.5)))
     quant_pruner = QuantJointGAEPruner(quant_lambda=quant_lambda)
 
     for row_idx in selected_indices:
@@ -608,7 +608,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
         )
         gae_scores = _normalize_gae_scores(
             _as_numpy(gae_scores, name="gae_scores"),
-            str(scoring_cfg.get("gae_normalizer", "sum")),
+            str(scoring_cfg.get("gae_normalizer", "none")),
         )
         quant_components = _score_gae_quant_joint(
             model=model,

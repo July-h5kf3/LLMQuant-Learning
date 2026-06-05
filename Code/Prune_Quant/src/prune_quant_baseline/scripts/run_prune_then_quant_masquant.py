@@ -77,7 +77,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pruner", choices=["gae_oracle", "gae_quant_joint"], default="gae_oracle")
     parser.add_argument("--gae-answer-source", choices=["sample", "generated"], default="sample")
     parser.add_argument("--gae-per-token", choices=["true", "false"], default="true")
-    parser.add_argument("--gae-quant-lambda", type=float, default=1.0)
+    parser.add_argument("--gae-quant-lambda", type=float, default=0.5)
     parser.add_argument("--gae-quant-method", choices=["rtn"], default="rtn")
     parser.add_argument("--rtn-bits", type=int, default=4)
     parser.add_argument("--rtn-group-size", type=int, default=0)

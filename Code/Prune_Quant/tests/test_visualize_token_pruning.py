@@ -115,6 +115,16 @@ def test_normalize_gae_scores_supports_sum_rank_and_none() -> None:
     assert np.allclose(raw_scores, scores)
 
 
+def test_config_defaults_use_half_lambda_and_no_gae_normalizer(tmp_path) -> None:
+    cfg_path = tmp_path / "visualization.yaml"
+    cfg_path.write_text("visualization:\n  limit: 1\n", encoding="utf-8")
+
+    cfg = visualize_token_pruning._load_visualization_config(cfg_path)
+
+    assert cfg["quant_joint"]["quant_lambda"] == 0.5
+    assert cfg["scoring"]["gae_normalizer"] == "none"
+
+
 def test_mask_for_image_tokens_projects_local_indices_to_first_frame() -> None:
     selected = np.asarray([0, 3, 4], dtype=np.int64)
 

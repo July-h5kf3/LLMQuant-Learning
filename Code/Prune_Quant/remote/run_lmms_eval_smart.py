@@ -41,7 +41,7 @@ def _build_default_model_args(args: argparse.Namespace) -> str:
     _append_model_arg(items, "gae_answer_source", env.get("PQ_GAE_ANSWER_SOURCE", "generated"))
     _append_model_arg(items, "gae_per_token", env.get("PQ_GAE_PER_TOKEN", "false"))
     _append_model_arg(items, "pruner", env.get("PQ_PRUNER", "gae_oracle"))
-    _append_model_arg(items, "gae_quant_lambda", env.get("PQ_GAE_QUANT_LAMBDA", "1.0"))
+    _append_model_arg(items, "gae_quant_lambda", env.get("PQ_GAE_QUANT_LAMBDA", "0.5"))
     _append_model_arg(items, "gae_quant_method", env.get("PQ_GAE_QUANT_METHOD", "rtn"))
     _append_model_arg(items, "rtn_bits", env.get("PQ_RTN_BITS", "4"))
     _append_model_arg(items, "rtn_group_size", env.get("PQ_RTN_GROUP_SIZE", "0"))

@@ -94,7 +94,7 @@ questions:
   mme_prompt_style: default
 
 quant_joint:
-  quant_lambda: 1.0
+  quant_lambda: 0.5
   quant_method: rtn
   rtn_bits: 4
   rtn_group_size: 0
@@ -110,7 +110,7 @@ pruning:
 scoring:
   answer_source: sample   # sample 或 generated
   per_token: true
-  gae_normalizer: sum      # sum / RN / none
+  gae_normalizer: none     # sum / RN / none
   max_new_tokens: 16
 
 visualization:

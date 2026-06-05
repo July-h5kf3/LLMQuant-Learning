@@ -143,7 +143,7 @@ def _merge_args_with_config(args: argparse.Namespace) -> dict[str, Any]:
         "processor_max_pixels": processor_max_pixels,
         "gae_answer_source": args.gae_answer_source,
         "gae_per_token": args.gae_per_token == "true",
-        "gae_quant_lambda": args.gae_quant_lambda if args.gae_quant_lambda is not None else pruning.get("quant_lambda", 1.0),
+        "gae_quant_lambda": args.gae_quant_lambda if args.gae_quant_lambda is not None else pruning.get("quant_lambda", 0.5),
         "gae_quant_method": args.gae_quant_method or pruning.get("quant_method", "rtn"),
         "rtn_bits": args.rtn_bits if args.rtn_bits is not None else pruning.get("rtn_bits", 4),
         "rtn_group_size": args.rtn_group_size if args.rtn_group_size is not None else pruning.get("rtn_group_size", 0),
@@ -163,7 +163,7 @@ def _make_adapter(model_type: str):
     raise ValueError("model_type must be one of: llava_onevision, qwen2vl, qwen2_5_vl.")
 
 
-def _make_pruner(name: str, *, checkpoint_path: str | None = None, quant_lambda: float = 1.0):
+def _make_pruner(name: str, *, checkpoint_path: str | None = None, quant_lambda: float = 0.5):
     if name == "attention_proxy":
         return AttentionProxyPruner()
     if name == "gae_oracle":

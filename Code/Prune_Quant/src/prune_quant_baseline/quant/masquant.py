@@ -481,13 +481,6 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
             1,
         )
         patched = patched.replace(
-            "                    if 'Qwen2.5-Omni' in args.model or 'Qwen2.5-VL' in args.model:\n",
-            (
-                "                    if 'Qwen2.5-Omni' in args.model or "
-                "'Qwen2.5-VL' in args.model or 'Qwen2-VL' in args.model:\n"
-            ),
-        )
-        patched = patched.replace(
             "            elif 'Qwen2.5-VL' in args.model:\n"
             "                qlayer = DecoderLayer(lm.model.config, layer, args, layer_idx=i)\n",
             "            elif 'Qwen2.5-VL' in args.model or 'Qwen2-VL' in args.model:\n"
@@ -598,22 +591,29 @@ def patch_masquant_qwen2_vl_quant_support(masquant_root: str | Path) -> tuple[Pa
         else:
             patched = text.replace(old, new, 1)
 
-        old = (
-            "                    if 'Qwen2.5-Omni' in args.model or 'Qwen2.5-VL' in args.model "
-            "or 'Qwen2-VL' in args.model:\n"
-            "                        inputs = {k: v.to(dev) for k, v in batch.items()}\n"
-            "                        model(**inputs)\n"
+        forward_block = re.compile(
+            r"(?P<indent>[ \t]+)if 'Qwen2\.5-Omni' in args\.model or 'Qwen2\.5-VL' in args\.model"
+            r"(?: or 'Qwen2-VL' in args\.model)?:\n"
+            r"(?P<inputs_line>[ \t]+inputs = \{k: v\.to\(dev\) for k, v in batch\.items\(\)\}\n)?"
+            r"(?P<child_indent>[ \t]+)model\(\*\*inputs\)\n"
         )
-        new = (
-            "                    if 'Qwen2.5-Omni' in args.model or 'Qwen2.5-VL' in args.model "
-            "or 'Qwen2-VL' in args.model:\n"
-            "                        inputs = {k: v.to(dev) for k, v in batch.items()}\n"
-            "                        if 'Qwen2-VL' in args.model and 'Qwen2.5' not in args.model:\n"
-            "                            cache[\"qwen2_vl_input_ids\"] = inputs.get(\"input_ids\")\n"
-            "                        model(**inputs)\n"
-        )
-        if old in patched:
-            patched = patched.replace(old, new, 1)
+
+        def _cache_input_ids(match: re.Match[str]) -> str:
+            indent = match.group("indent")
+            child_indent = match.group("child_indent")
+            inputs_line = match.group("inputs_line") or ""
+            return (
+                f"{indent}if 'Qwen2.5-Omni' in args.model or "
+                f"'Qwen2.5-VL' in args.model or 'Qwen2-VL' in args.model:\n"
+                f"{inputs_line}"
+                f"{child_indent}if 'Qwen2-VL' in args.model and 'Qwen2.5' not in args.model:\n"
+                f"{child_indent}    cache[\"qwen2_vl_input_ids\"] = inputs.get(\"input_ids\")\n"
+                f"{child_indent}model(**inputs)\n"
+            )
+
+        patched, replacements = forward_block.subn(_cache_input_ids, patched, count=1)
+        if replacements:
+            pass
         elif "cache[\"qwen2_vl_input_ids\"] = inputs.get(\"input_ids\")" not in patched:
             raise RuntimeError(f"Could not patch {target}; expected Qwen2-VL calibration forward block was not found.")
 
