@@ -14,17 +14,17 @@
 
 每个 visual token 的纵向线段由该 token 的 `D_model` 通道最小值和最大值构成。
 
-脚本还会额外生成一张 `_image_overlay.png`，把被删除的 visual tokens 和 outlier visual tokens 投回原始图片：
+脚本还会额外生成一张 `_image_overlay.png`，把被删除的 visual tokens 和可选绿色高亮 token 投回原始图片：
 
 - 左列：原图。
-- 中列：GAE 删除位置，并叠加 top 20% outlier 位置。
-- 右列：量化-剪枝协同指标删除位置，并叠加 top 20% outlier 位置。
+- 中列：GAE 删除位置，并叠加绿色高亮位置。
+- 右列：量化-剪枝协同指标删除位置，并叠加绿色高亮位置。
 
 颜色含义：
 
 - 红色：对应剪枝策略删去的 visual token。
-- 绿色：绝对值最大代理值 `max(abs(channel))` 排名前 20% 的 visual token。
-- 绿色填充加红色边框/斜线：同一个 token 既是 outlier，也被对应策略删去。
+- 绿色：由 `green_highlight` 指定的 top 20% visual token；可选 `none`、`proxy`、`c_quant`。
+- 绿色填充加红色边框/斜线：同一个 token 既属于绿色高亮集合，也被对应策略删去。
 
 这个映射基于 Qwen 的 `image_grid_thw` 和 `spatial_merge_size`，适用于单图样本；多图样本会先使用第一张图并打印提示。
 
@@ -110,6 +110,7 @@ pruning:
 scoring:
   answer_source: sample   # sample 或 generated
   per_token: true
+  gae_normalizer: sum      # sum / RN / none
   max_new_tokens: 16
 
 visualization:
@@ -118,6 +119,7 @@ visualization:
   random_sample: true
   seed: null           # 需要复现同一张样本时设置整数
   image_overlay: true
+  green_highlight: proxy  # none / proxy / c_quant
   score_bars: true
   output_dir: outputs
   save_sample_artifacts: true
@@ -135,7 +137,9 @@ visualization:
 - 量化-剪枝协同分数通过仓库里的 `_score_gae_quant_joint` 计算，目前对应 RTN scoring forward。
 - 协同剪枝参数优先读取 `quant_joint.*`，也兼容已有配置中的 `pruning.quant_lambda`、`pruning.quant_method`、`pruning.rtn_bits`、`pruning.rtn_group_size`。
 - 原始 GAE 分数通过 `_score_gae_oracle` 计算。
-- `score_bars: true` 会额外生成 `_score_bars.png`，用柱状图展示每个 visual token 的绝对值最大代理值 `max(abs(channel))`、GAE score、`C_i^{quant}` 和 `D_i = lambda * C_i^{quant} - C_i^{drop}`；abs-max 行中绿色 bar 表示 top 20% outlier token；其他行中红色 bar 表示该行对应策略删除的 token，绿色描边表示该 token 也属于 top 20% outlier，其中 GAE 行删除低分 top-k，`D_i` 行删除高分 top-k。
+- `scoring.gae_normalizer` 控制配置模式下导出的 GAE 分数归一化：`sum` 为按和归一化，`RN` 为 rank norm，`none` 保留原始分数。
+- `visualization.green_highlight` 控制绿色方块/描边对象：`none` 不展示绿色高亮，`proxy` 使用绝对值最大代理值 `max(abs(channel))`，`c_quant` 使用 top `C_i^{quant}`。
+- `score_bars: true` 会额外生成 `_score_bars.png`，用柱状图展示每个 visual token 的绝对值最大代理值 `max(abs(channel))`、GAE score、`C_i^{quant}` 和 `D_i = lambda * C_i^{quant} - C_i^{drop}`；红色 bar 表示该行对应策略删除的 token，绿色填充/描边表示该 token 属于 `green_highlight` 选中的集合，其中 GAE 行删除低分 top-k，`D_i` 行删除高分 top-k。
 - `save_sample_artifacts: true` 会额外保存 `.pt` 样本包，后续可以不加载模型直接重画。
 - YAML 内的相对路径按 YAML 文件所在目录解析；`vis/example_visualization_config.yaml` 里的 `outputs` 会解析到 `vis/outputs`。
 - YAML 模式运行时会打印 `seq_len`、`visual_tokens`、`image_grid_thw` 和 processor pixel budget；如果 visual token 数不是预期的约 1500，先看这行诊断。
@@ -150,6 +154,7 @@ python vis/visualize_token_pruning.py \
   --sample /path/to/sample.pt \
   --retention-ratio 0.5 \
   --image-overlay \
+  --green-highlight c_quant \
   --output-name sample_0001_pruning.png
 ```
 

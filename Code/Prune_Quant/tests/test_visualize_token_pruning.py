@@ -36,6 +36,85 @@ def test_absmax_proxy_prefers_largest_absolute_channel() -> None:
     assert selected.tolist() == [1]
 
 
+def test_green_highlight_none_selects_no_tokens() -> None:
+    embeds = np.asarray([[1.0, 0.0], [0.0, 2.0]], dtype=np.float32)
+    sample = {"c_quant": np.asarray([0.8, 0.1], dtype=np.float32)}
+    positions = np.arange(embeds.shape[0])
+
+    spec = visualize_token_pruning._green_highlight_spec(
+        "none",
+        embeds=embeds,
+        sample=sample,
+        positions=positions,
+    )
+
+    assert spec.values is None
+    assert spec.tokens.size == 0
+    assert spec.label == "None"
+
+
+def test_green_highlight_proxy_uses_absmax_proxy() -> None:
+    embeds = np.asarray(
+        [
+            [1.0, 0.0],
+            [0.0, -4.0],
+            [3.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    sample = {"c_quant": np.asarray([0.9, 0.1, 0.8], dtype=np.float32)}
+    positions = np.arange(embeds.shape[0])
+
+    spec = visualize_token_pruning._green_highlight_spec(
+        "proxy",
+        embeds=embeds,
+        sample=sample,
+        positions=positions,
+        fraction=1 / 3,
+    )
+
+    assert spec.values.tolist() == [1.0, 4.0, 3.0]
+    assert spec.tokens.tolist() == [1]
+    assert spec.label == "Abs-max proxy"
+
+
+def test_green_highlight_c_quant_selects_top_quant_difficulty() -> None:
+    embeds = np.asarray(
+        [
+            [10.0, 0.0],
+            [1.0, 0.0],
+            [2.0, 0.0],
+            [3.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    sample = {"c_quant": np.asarray([0.1, 0.9, 0.2, 0.8], dtype=np.float32)}
+    positions = np.arange(embeds.shape[0])
+
+    spec = visualize_token_pruning._green_highlight_spec(
+        "c_quant",
+        embeds=embeds,
+        sample=sample,
+        positions=positions,
+    )
+
+    assert np.allclose(spec.values, np.asarray([0.1, 0.9, 0.2, 0.8], dtype=np.float32))
+    assert spec.tokens.tolist() == [1]
+    assert "C_i^quant" in spec.label
+
+
+def test_normalize_gae_scores_supports_sum_rank_and_none() -> None:
+    scores = np.asarray([2.0, 6.0, 2.0], dtype=np.float32)
+
+    sum_scores = visualize_token_pruning._normalize_gae_scores(scores, "sum")
+    rank_scores = visualize_token_pruning._normalize_gae_scores(scores, "rn")
+    raw_scores = visualize_token_pruning._normalize_gae_scores(scores, "none")
+
+    assert np.allclose(sum_scores, np.asarray([0.2, 0.6, 0.2], dtype=np.float32))
+    assert np.allclose(rank_scores, np.asarray([0.25, 1.0, 0.25], dtype=np.float32))
+    assert np.allclose(raw_scores, scores)
+
+
 def test_mask_for_image_tokens_projects_local_indices_to_first_frame() -> None:
     selected = np.asarray([0, 3, 4], dtype=np.int64)
 

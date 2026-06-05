@@ -27,6 +27,7 @@ pruning:
 scoring:
   answer_source: sample
   per_token: true
+  gae_normalizer: sum
   max_new_tokens: 16
 
 visualization:
@@ -34,6 +35,7 @@ visualization:
   random_sample: true
   seed:
   image_overlay: true
+  green_highlight: proxy
   score_bars: true
   output_dir: outputs
   save_sample_artifacts: true

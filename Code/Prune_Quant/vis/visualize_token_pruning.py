@@ -18,7 +18,7 @@ import math
 import random
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -27,6 +27,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+
+
+class GreenHighlightSpec(NamedTuple):
+    mode: str
+    label: str
+    values: np.ndarray | None
+    tokens: np.ndarray
 
 
 def _load_matplotlib():
@@ -153,6 +160,7 @@ def _load_visualization_config(path: Path) -> dict[str, Any]:
         "scoring": {
             "answer_source": "sample",
             "per_token": True,
+            "gae_normalizer": "sum",
             "max_new_tokens": 16,
         },
         "visualization": {
@@ -160,6 +168,7 @@ def _load_visualization_config(path: Path) -> dict[str, Any]:
             "random_sample": True,
             "seed": None,
             "image_overlay": True,
+            "green_highlight": "proxy",
             "output_dir": str(Path(__file__).resolve().parent / "outputs"),
             "save_sample_artifacts": False,
             "sample_artifact_dir": str(Path(__file__).resolve().parent / "samples"),
@@ -433,6 +442,12 @@ def _build_sample_artifact(
     with torch.no_grad():
         inputs_embeds = adapter.build_inputs_embeds(model, inputs)
     boundary = int(meta.visual_indices.max().item()) + 1
+
+    def to_cpu_tensor(value: Any, name: str) -> Any:
+        if hasattr(value, "detach"):
+            return value.detach().float().cpu()
+        return torch.as_tensor(_as_numpy(value, name=name), dtype=torch.float32).cpu()
+
     artifact = {
         "id": sample.get("id", "sample"),
         "inputs_embeds": inputs_embeds.detach().float().cpu(),
@@ -451,8 +466,8 @@ def _build_sample_artifact(
         "spatial_merge_size": _spatial_merge_size(model),
         "num_visual_tokens": int(meta.visual_indices.numel()),
         "seq_len": int(inputs["input_ids"].shape[-1]) if "input_ids" in inputs else int(inputs_embeds.shape[1]),
-        "gae_scores": gae_scores.detach().float().cpu(),
-        "quant_joint_scores": quant_joint_scores.detach().float().cpu(),
+        "gae_scores": to_cpu_tensor(gae_scores, "gae_scores"),
+        "quant_joint_scores": to_cpu_tensor(quant_joint_scores, "quant_joint_scores"),
     }
     if quant_components:
         for src_key, dst_key in (("c_quant", "c_quant"), ("c_drop", "c_drop"), ("joint", "quant_joint_scores")):
@@ -591,6 +606,10 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             answer=answer,
             per_token=_bool_value(scoring_cfg.get("per_token", True)),
         )
+        gae_scores = _normalize_gae_scores(
+            _as_numpy(gae_scores, name="gae_scores"),
+            str(scoring_cfg.get("gae_normalizer", "sum")),
+        )
         quant_components = _score_gae_quant_joint(
             model=model,
             processor=processor,
@@ -624,6 +643,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             "output_name": vis_cfg.get("output_name"),
             "save_sample_artifacts": _bool_value(vis_cfg.get("save_sample_artifacts", False)),
             "image_overlay": _bool_value(vis_cfg.get("image_overlay", True)),
+            "green_highlight": str(vis_cfg.get("green_highlight", "proxy")),
             "score_bars": _bool_value(vis_cfg.get("score_bars", True)),
             "sample_artifact_dir": _resolve_path(vis_cfg.get("sample_artifact_dir"), base_dir)
             or Path(__file__).resolve().parent / "samples",
@@ -714,6 +734,76 @@ def _select_top_percent(values: np.ndarray, positions: np.ndarray, *, fraction: 
     selected_count = max(1, math.ceil(values.size * fraction))
     order = np.argsort(-values, kind="stable")
     return positions[order[:selected_count]].astype(np.int64, copy=False)
+
+
+def _rank_normalize_np(values: np.ndarray) -> np.ndarray:
+    if values.ndim != 1:
+        raise ValueError(f"values must be 1D for rank normalization, got {values.shape}.")
+    if values.size == 0:
+        raise ValueError("values must be non-empty for rank normalization.")
+    if values.size == 1:
+        return np.ones_like(values, dtype=np.float32)
+    order = np.argsort(values, kind="stable")
+    sorted_values = values[order].astype(np.float32, copy=False)
+    sorted_ranks = np.empty(sorted_values.shape, dtype=np.float32)
+    start = 0
+    while start < sorted_values.size:
+        end = start + 1
+        while end < sorted_values.size and sorted_values[end] == sorted_values[start]:
+            end += 1
+        sorted_ranks[start:end] = (start + end - 1) / 2.0
+        start = end
+    ranks = np.empty_like(sorted_ranks)
+    ranks[order] = sorted_ranks
+    return ranks / float(values.size - 1)
+
+
+def _normalize_gae_scores(scores: np.ndarray, normalizer: str) -> np.ndarray:
+    mode = str(normalizer).strip().lower()
+    scores = np.asarray(scores, dtype=np.float32).reshape(-1)
+    if mode in {"none", "raw"}:
+        return scores.copy()
+    if mode == "sum":
+        denom = max(float(scores.sum()), np.finfo(np.float32).eps)
+        return scores / denom
+    if mode in {"rn", "rank", "rank_norm", "rank-normalize"}:
+        return _rank_normalize_np(scores)
+    raise ValueError("GAE normalizer must be one of: sum, RN, none.")
+
+
+def _green_highlight_spec(
+    mode: str,
+    *,
+    embeds: np.ndarray,
+    sample: dict[str, Any],
+    positions: np.ndarray,
+    fraction: float = 0.2,
+) -> GreenHighlightSpec:
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode in {"none", "null", "off"}:
+        return GreenHighlightSpec(
+            mode="none",
+            label="None",
+            values=None,
+            tokens=np.empty((0,), dtype=np.int64),
+        )
+    if normalized_mode == "proxy":
+        values = _visual_outlier_proxy(embeds)
+        return GreenHighlightSpec(
+            mode="proxy",
+            label="Abs-max proxy",
+            values=values,
+            tokens=_select_top_percent(values, positions, fraction=fraction),
+        )
+    if normalized_mode in {"c_quant", "quant", "top_c_quant", "top-c-quant"}:
+        values = _score_array(sample, "c_quant", positions.size, required=True)
+        return GreenHighlightSpec(
+            mode="c_quant",
+            label="Top C_i^quant",
+            values=values,
+            tokens=_select_top_percent(values, positions, fraction=fraction),
+        )
+    raise ValueError("green highlight mode must be one of: none, proxy, c_quant.")
 
 
 def _visual_outlier_proxy(embeds: np.ndarray) -> np.ndarray:
@@ -961,7 +1051,7 @@ def _save_image_overlay(
     output_path: Path,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
-    outlier_tokens: np.ndarray,
+    green_spec: GreenHighlightSpec,
 ) -> Path | None:
     from PIL import Image, ImageDraw
 
@@ -997,24 +1087,26 @@ def _save_image_overlay(
         image_grid_thw=grid,
         spatial_merge_size=spatial_merge_size,
     )
-    outlier_mask = _mask_for_image_tokens(
-        outlier_tokens,
+    green_mask = _mask_for_image_tokens(
+        green_spec.tokens,
         image_grid_thw=grid,
         spatial_merge_size=spatial_merge_size,
     )
+    green_count = int(green_mask.sum())
+    green_suffix = "" if green_spec.mode == "none" else f" + {green_spec.label} ({green_count})"
     panels = [
         (image, "Original image"),
         _draw_image_overlay_panel(
             image,
             gae_mask,
-            outlier_mask=outlier_mask,
-            title=f"GAE removed ({int(gae_mask.sum())}) + outliers ({int(outlier_mask.sum())})",
+            outlier_mask=green_mask,
+            title=f"GAE removed ({int(gae_mask.sum())}){green_suffix}",
         ),
         _draw_image_overlay_panel(
             image,
             quant_mask,
-            outlier_mask=outlier_mask,
-            title=f"Quant-joint removed ({int(quant_mask.sum())}) + outliers ({int(outlier_mask.sum())})",
+            outlier_mask=green_mask,
+            title=f"Quant-joint removed ({int(quant_mask.sum())}){green_suffix}",
         ),
     ]
     max_panel_w = 560
@@ -1053,11 +1145,12 @@ def _save_image_overlay(
     legend_y = y + max(panel.height for panel, _ in resized) + 18
     draw.rectangle((margin, legend_y - 7, margin + 18, legend_y + 7), fill=(220, 22, 22), outline=(150, 0, 0))
     draw.text((margin + 26, legend_y - 11), "removed token", fill=(35, 45, 55), font=font)
-    draw.rectangle((margin + 170, legend_y - 7, margin + 188, legend_y + 7), fill=(24, 168, 84), outline=(0, 115, 55))
-    draw.text((margin + 196, legend_y - 11), "top 20% abs-max outlier", fill=(35, 45, 55), font=font)
-    draw.rectangle((margin + 442, legend_y - 7, margin + 460, legend_y + 7), fill=(24, 168, 84), outline=(170, 0, 0), width=3)
-    draw.line((margin + 442, legend_y - 7, margin + 460, legend_y + 7), fill=(170, 0, 0), width=2)
-    draw.text((margin + 468, legend_y - 11), "both", fill=(35, 45, 55), font=font)
+    if green_spec.mode != "none":
+        draw.rectangle((margin + 170, legend_y - 7, margin + 188, legend_y + 7), fill=(24, 168, 84), outline=(0, 115, 55))
+        draw.text((margin + 196, legend_y - 11), green_spec.label, fill=(35, 45, 55), font=font)
+        draw.rectangle((margin + 442, legend_y - 7, margin + 460, legend_y + 7), fill=(24, 168, 84), outline=(170, 0, 0), width=3)
+        draw.line((margin + 442, legend_y - 7, margin + 460, legend_y + 7), fill=(170, 0, 0), width=2)
+        draw.text((margin + 468, legend_y - 11), "both", fill=(35, 45, 55), font=font)
     if overlay_lines:
         text_y = legend_y + 22
         for line in overlay_lines:
@@ -1295,7 +1388,7 @@ def _save_score_bars_matplotlib(
     outlier_proxy: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
-    outlier_tokens: np.ndarray,
+    green_spec: GreenHighlightSpec,
 ) -> None:
     plt, _ = _load_matplotlib()
     if plt is None:
@@ -1304,7 +1397,7 @@ def _save_score_bars_matplotlib(
 
     fig, axes = plt.subplots(4, 1, figsize=(18, 12), sharex=True, constrained_layout=True)
     series = [
-        ("Abs-max proxy | max(abs(channel)) | top 20% outliers", outlier_proxy, "#6B7280", outlier_tokens),
+        ("Abs-max proxy | max(abs(channel))", outlier_proxy, "#6B7280", green_spec.tokens),
         ("GAE score | removed: lowest top-k", gae_scores, "#356A8A", gae_removed),
         (r"$C_i^{quant}$ | quant-joint removed tokens", c_quant, "#7A5C00", quant_removed),
         (r"$D_i = \lambda C_i^{quant} - C_i^{drop}$ | removed: highest top-k", joint_scores, "#8E3B46", quant_removed),
@@ -1312,21 +1405,21 @@ def _save_score_bars_matplotlib(
     x = np.arange(positions.size, dtype=np.int64)
     removed_color = "#C81E1E"
     outlier_color = "#18A854"
-    outlier_set = set(int(item) for item in outlier_tokens.tolist())
+    outlier_set = set(int(item) for item in green_spec.tokens.tolist())
     for row_idx, (ax, (label, values, color, highlighted)) in enumerate(zip(axes, series)):
         highlighted_set = set(int(item) for item in highlighted.tolist())
         if row_idx == 0:
-            colors = [outlier_color if int(pos) in highlighted_set else color for pos in positions]
-            edgecolors = ["#007337" if int(pos) in highlighted_set else color for pos in positions]
-            linewidths = [0.85 if int(pos) in highlighted_set else 0.35 for pos in positions]
+            colors = [outlier_color if green_spec.mode != "none" and int(pos) in highlighted_set else color for pos in positions]
+            edgecolors = ["#007337" if green_spec.mode != "none" and int(pos) in highlighted_set else color for pos in positions]
+            linewidths = [0.85 if green_spec.mode != "none" and int(pos) in highlighted_set else 0.35 for pos in positions]
         else:
             colors = [removed_color if int(pos) in highlighted_set else color for pos in positions]
             edgecolors = [
-                "#00A651" if int(pos) in outlier_set else "#7F0000" if int(pos) in highlighted_set else color
+                "#00A651" if green_spec.mode != "none" and int(pos) in outlier_set else "#7F0000" if int(pos) in highlighted_set else color
                 for pos in positions
             ]
             linewidths = [
-                1.15 if int(pos) in outlier_set else 0.55 if int(pos) in highlighted_set else 0.35
+                1.15 if green_spec.mode != "none" and int(pos) in outlier_set else 0.55 if int(pos) in highlighted_set else 0.35
                 for pos in positions
             ]
         ax.bar(x, values, color=colors, edgecolor=edgecolors, linewidth=linewidths, width=0.86, alpha=0.9)
@@ -1343,14 +1436,16 @@ def _save_score_bars_matplotlib(
     axes[-1].set_xticklabels([str(int(positions[i])) for i in tick_idx], rotation=0)
     axes[-1].set_xlabel("Visual token idx")
     fig.suptitle(f"Per-token pruning score statistics: {sample_id}", fontsize=15, fontweight="bold")
+    handles = [
+        Patch(facecolor="#356A8A", label="kept / not removed by that row's pruning rule"),
+        Patch(facecolor=removed_color, edgecolor="#7F0000", label="removed token"),
+    ]
+    if green_spec.mode != "none":
+        handles.append(Patch(facecolor=outlier_color, edgecolor="#007337", label=green_spec.label))
     fig.legend(
-        handles=[
-            Patch(facecolor="#356A8A", label="kept / not removed by that row's pruning rule"),
-            Patch(facecolor=removed_color, edgecolor="#7F0000", label="removed token"),
-            Patch(facecolor=outlier_color, edgecolor="#007337", label="top 20% abs-max outlier"),
-        ],
+        handles=handles,
         loc="lower center",
-        ncol=3,
+        ncol=len(handles),
         frameon=False,
     )
     fig.savefig(output_path, dpi=220, bbox_inches="tight")
@@ -1368,7 +1463,7 @@ def _save_score_bars_pillow(
     outlier_proxy: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
-    outlier_tokens: np.ndarray,
+    green_spec: GreenHighlightSpec,
 ) -> None:
     from PIL import Image, ImageDraw
 
@@ -1386,7 +1481,7 @@ def _save_score_bars_pillow(
     draw.text((margin, 24), f"Per-token pruning score statistics: {sample_id}", fill=(10, 20, 30), font=title_font)
 
     series = [
-        ("Abs-max proxy | max(abs(channel)) | top 20% outliers", outlier_proxy, (107, 114, 128), outlier_tokens),
+        ("Abs-max proxy | max(abs(channel))", outlier_proxy, (107, 114, 128), green_spec.tokens),
         ("GAE score | removed: lowest top-k", gae_scores, (53, 106, 138), gae_removed),
         ("C_i^quant | quant-joint removed tokens", c_quant, (122, 92, 0), quant_removed),
         ("D_i = lambda*C_i^quant - C_i^drop | removed: highest top-k", joint_scores, (142, 59, 70), quant_removed),
@@ -1396,7 +1491,7 @@ def _save_score_bars_pillow(
     removed_outline = (127, 0, 0)
     outlier_color = (24, 168, 84)
     outlier_outline = (0, 115, 55)
-    outlier_set = set(int(item) for item in outlier_tokens.tolist())
+    outlier_set = set(int(item) for item in green_spec.tokens.tolist())
     for panel_idx, (label, values, color, highlighted) in enumerate(series):
         highlighted_set = set(int(item) for item in highlighted.tolist())
         left = margin
@@ -1426,8 +1521,20 @@ def _save_score_bars_pillow(
             y1 = int(max(zero_y, y_value))
             is_highlighted = int(positions[idx]) in highlighted_set
             is_outlier = int(positions[idx]) in outlier_set
-            fill = outlier_color if panel_idx == 0 and is_highlighted else removed_color if panel_idx > 0 and is_highlighted else color
-            outline = outlier_outline if is_outlier else removed_outline if panel_idx > 0 and is_highlighted else None
+            fill = (
+                outlier_color
+                if green_spec.mode != "none" and panel_idx == 0 and is_highlighted
+                else removed_color
+                if panel_idx > 0 and is_highlighted
+                else color
+            )
+            outline = (
+                outlier_outline
+                if green_spec.mode != "none" and is_outlier
+                else removed_outline
+                if panel_idx > 0 and is_highlighted
+                else None
+            )
             draw.rectangle(
                 (x0, y0, x1, y1),
                 fill=fill,
@@ -1440,8 +1547,9 @@ def _save_score_bars_pillow(
     draw.text((margin + 32, legend_y - 10), "kept / not removed by that row's pruning rule", fill=(70, 78, 88), font=label_font)
     draw.rectangle((margin + 380, legend_y - 8, margin + 404, legend_y + 8), fill=removed_color, outline=removed_outline)
     draw.text((margin + 412, legend_y - 10), "removed token", fill=(70, 78, 88), font=label_font)
-    draw.rectangle((margin + 550, legend_y - 8, margin + 574, legend_y + 8), fill=outlier_color, outline=outlier_outline)
-    draw.text((margin + 582, legend_y - 10), "top 20% abs-max outlier", fill=(70, 78, 88), font=label_font)
+    if green_spec.mode != "none":
+        draw.rectangle((margin + 550, legend_y - 8, margin + 574, legend_y + 8), fill=outlier_color, outline=outlier_outline)
+        draw.text((margin + 582, legend_y - 10), green_spec.label, fill=(70, 78, 88), font=label_font)
     draw.text((width // 2 - 54, height - 24), "Visual token idx", fill=(70, 78, 88), font=label_font)
     image.save(output_path)
 
@@ -1457,7 +1565,7 @@ def _save_score_bars(
     outlier_proxy: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
-    outlier_tokens: np.ndarray,
+    green_spec: GreenHighlightSpec,
 ) -> Path | None:
     c_quant = _score_array(sample, "c_quant", positions.size, required=False)
     if c_quant is None:
@@ -1475,7 +1583,7 @@ def _save_score_bars(
             outlier_proxy=outlier_proxy,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
-            outlier_tokens=outlier_tokens,
+            green_spec=green_spec,
         )
     except RuntimeError:
         _save_score_bars_pillow(
@@ -1488,7 +1596,7 @@ def _save_score_bars(
             outlier_proxy=outlier_proxy,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
-            outlier_tokens=outlier_tokens,
+            green_spec=green_spec,
         )
     print(f"Wrote {output_path}")
     return output_path
@@ -1513,6 +1621,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-name", help="Optional output PNG filename.")
     parser.add_argument("--limit", type=int, help="Override visualization.limit when using --config.")
     parser.add_argument("--image-overlay", action="store_true", help="Also project removed visual tokens back to the source image when available.")
+    parser.add_argument(
+        "--green-highlight",
+        choices=["none", "proxy", "c_quant"],
+        default="proxy",
+        help="Green overlay/highlight source: none, proxy, or top C_i^quant.",
+    )
     parser.add_argument(
         "--score-bars",
         dest="score_bars",
@@ -1547,6 +1661,7 @@ def _render_sample(
     quant_key: str,
     image_overlay: bool = False,
     score_bars: bool = True,
+    green_highlight: str = "proxy",
     visual_count: int | None = None,
     boundary_override: int | None = None,
 ) -> Path:
@@ -1558,7 +1673,12 @@ def _render_sample(
     gae_scores = _as_numpy(sample.get(gae_key), name=gae_key).astype(np.float32).reshape(-1)
     quant_scores = _as_numpy(sample.get(quant_key), name=quant_key).astype(np.float32).reshape(-1)
     outlier_proxy = _visual_outlier_proxy(embeds)
-    outlier_tokens = _select_top_percent(outlier_proxy, visual_positions, fraction=0.2)
+    green_spec = _green_highlight_spec(
+        green_highlight,
+        embeds=embeds,
+        sample=sample,
+        positions=visual_positions,
+    )
 
     gae_removed = _select_removed(
         gae_scores,
@@ -1608,7 +1728,7 @@ def _render_sample(
                 output_path=overlay_path,
                 gae_removed=gae_removed,
                 quant_removed=quant_removed,
-                outlier_tokens=outlier_tokens,
+                green_spec=green_spec,
             )
         if score_bars:
             _save_score_bars(
@@ -1621,7 +1741,7 @@ def _render_sample(
                 outlier_proxy=outlier_proxy,
                 gae_removed=gae_removed,
                 quant_removed=quant_removed,
-                outlier_tokens=outlier_tokens,
+                green_spec=green_spec,
             )
         return output_path
 
@@ -1684,7 +1804,7 @@ def _render_sample(
             output_path=overlay_path,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
-            outlier_tokens=outlier_tokens,
+            green_spec=green_spec,
         )
     if score_bars:
         _save_score_bars(
@@ -1697,7 +1817,7 @@ def _render_sample(
             outlier_proxy=outlier_proxy,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
-            outlier_tokens=outlier_tokens,
+            green_spec=green_spec,
         )
     return output_path
 
@@ -1729,6 +1849,7 @@ def main() -> None:
                 quant_key="quant_joint_scores",
                 image_overlay=bool(render_cfg["image_overlay"]),
                 score_bars=bool(render_cfg["score_bars"]),
+                green_highlight=str(render_cfg["green_highlight"]),
             )
             if render_cfg["save_sample_artifacts"]:
                 sample_id = _scalar_id(artifact, f"sample_{int(render_cfg['row_idx']):04d}")
@@ -1753,6 +1874,7 @@ def main() -> None:
         quant_key=args.quant_key,
         image_overlay=args.image_overlay,
         score_bars=args.score_bars,
+        green_highlight=args.green_highlight,
         visual_count=args.visual_count,
         boundary_override=args.boundary,
     )
