@@ -1,7 +1,7 @@
 import torch
 
 from prune_quant_baseline.core.datatypes import VisualTokenMeta
-from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, QuantJointGAEPruner
+from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, QuantJointGAEPruner, rank_normalize_scores
 
 
 def _attention_with_grad(data: torch.Tensor, grad: torch.Tensor) -> torch.Tensor:
@@ -48,6 +48,14 @@ def test_gae_oracle_normalizes_scores() -> None:
     assert torch.allclose(scores, torch.tensor([0.25, 0.75]))
 
 
+def test_rank_normalize_scores_maps_order_to_unit_interval_with_ties() -> None:
+    scores = torch.tensor([4.0, 2.0, 4.0, 8.0])
+
+    normalized = rank_normalize_scores(scores)
+
+    assert torch.allclose(normalized, torch.tensor([0.5, 0.0, 0.5, 1.0]))
+
+
 def test_quant_joint_gae_uses_quantized_attention_drop_and_activation_difficulty() -> None:
     attn_data = torch.zeros(1, 1, 3, 3)
     attn_data[0, 0, 2, 0] = 1.0
@@ -74,9 +82,9 @@ def test_quant_joint_gae_uses_quantized_attention_drop_and_activation_difficulty
         quant_symmetric=True,
     )
 
-    assert torch.allclose(components["c_drop"], torch.tensor([0.2, 0.8]))
-    assert torch.allclose(components["c_quant"], torch.tensor([2.0 / 7.0, 5.0 / 7.0]))
-    assert torch.allclose(components["joint"], torch.tensor([13.0 / 35.0, 22.0 / 35.0]))
+    assert torch.allclose(components["c_drop"], torch.tensor([0.0, 1.0]))
+    assert torch.allclose(components["c_quant"], torch.tensor([0.0, 1.0]))
+    assert torch.allclose(components["joint"], torch.tensor([0.0, 1.0]))
 
 
 def test_quant_joint_gae_normalizes_after_subtracting_components() -> None:
@@ -108,10 +116,10 @@ def test_quant_joint_gae_normalizes_after_subtracting_components() -> None:
         quant_symmetric=True,
     )
 
-    raw_joint = torch.tensor([0.5, 0.6, -0.1])
+    raw_joint = torch.tensor([0.5, 1.5, -0.5])
     expected = raw_joint / raw_joint.abs().sum()
-    assert torch.allclose(components["c_drop"], torch.tensor([0.0, 0.4, 0.6]))
-    assert torch.allclose(components["c_quant"], torch.tensor([0.25, 0.5, 0.25]))
+    assert torch.allclose(components["c_drop"], torch.tensor([0.0, 0.5, 1.0]))
+    assert torch.allclose(components["c_quant"], torch.tensor([0.25, 1.0, 0.25]))
     assert torch.allclose(components["joint"], expected)
 
 

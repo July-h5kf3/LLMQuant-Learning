@@ -149,8 +149,8 @@ class QuantJointGAEPruner(GAEOraclePruner):
             raise ValueError(
                 f"Quant difficulty count {c_quant.numel()} does not match visual score count {c_drop.numel()}."
             )
-        c_drop = normalize_relevance_scores(c_drop)
-        c_quant = normalize_relevance_scores(c_quant)
+        c_drop = rank_normalize_scores(c_drop)
+        c_quant = rank_normalize_scores(c_quant)
         joint = normalize_joint_scores(self.quant_lambda * c_quant - c_drop) if normalize_joint else (
             self.quant_lambda * c_quant - c_drop
         )
@@ -218,6 +218,32 @@ class QuantJointGAEPruner(GAEOraclePruner):
 def normalize_relevance_scores(scores: torch.Tensor) -> torch.Tensor:
     denom = scores.sum().clamp_min(torch.finfo(scores.dtype).eps)
     return scores / denom
+
+
+def rank_normalize_scores(scores: torch.Tensor) -> torch.Tensor:
+    if scores.dim() != 1:
+        raise ValueError(f"scores must be 1D for rank normalization, got shape {tuple(scores.shape)}.")
+    if scores.numel() == 0:
+        raise ValueError("scores must be non-empty for rank normalization.")
+    if scores.numel() == 1:
+        return torch.ones_like(scores, dtype=torch.float32)
+
+    compute = scores.detach().float()
+    order = torch.argsort(compute, stable=True)
+    sorted_scores = compute.index_select(dim=0, index=order)
+    sorted_ranks = torch.empty_like(sorted_scores)
+    start = 0
+    num_scores = int(sorted_scores.numel())
+    while start < num_scores:
+        end = start + 1
+        while end < num_scores and sorted_scores[end] == sorted_scores[start]:
+            end += 1
+        avg_rank = (start + end - 1) / 2.0
+        sorted_ranks[start:end] = avg_rank
+        start = end
+    ranks = torch.empty_like(sorted_ranks)
+    ranks.scatter_(dim=0, index=order, src=sorted_ranks)
+    return (ranks / float(num_scores - 1)).to(device=scores.device)
 
 
 def normalize_joint_scores(scores: torch.Tensor) -> torch.Tensor:
