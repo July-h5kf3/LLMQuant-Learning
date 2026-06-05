@@ -2,6 +2,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "vis" / "visualize_token_pruning.py"
@@ -123,6 +124,70 @@ def test_config_defaults_use_half_lambda_and_no_gae_normalizer(tmp_path) -> None
 
     assert cfg["quant_joint"]["quant_lambda"] == 0.5
     assert cfg["scoring"]["gae_normalizer"] == "none"
+    assert cfg["visualization"]["show_predictions"] is True
+
+
+def test_build_sample_artifact_stores_prediction_variants() -> None:
+    torch = pytest.importorskip("torch")
+
+    class Adapter:
+        def build_inputs_embeds(self, model, inputs):
+            del model, inputs
+            return torch.zeros((1, 3, 2), dtype=torch.float32)
+
+    class Meta:
+        visual_indices = torch.as_tensor([0, 1], dtype=torch.long)
+        text_indices = torch.as_tensor([2], dtype=torch.long)
+        image_grid_thw = None
+
+    artifact = visualize_token_pruning._build_sample_artifact(
+        model=None,
+        processor=None,
+        adapter=Adapter(),
+        sample={"id": "sample-1", "answer": "yes"},
+        inputs={"input_ids": torch.as_tensor([[1, 2, 3]], dtype=torch.long)},
+        meta=Meta(),
+        gae_scores=np.asarray([0.1, 0.2], dtype=np.float32),
+        quant_joint_scores=np.asarray([0.3, 0.4], dtype=np.float32),
+        predictions={
+            "original": "vanilla answer",
+            "gae_pruned": "gae answer",
+            "quant_joint_pruned": "joint answer",
+        },
+    )
+
+    assert artifact["predictions"] == {
+        "original": "vanilla answer",
+        "gae_pruned": "gae answer",
+        "quant_joint_pruned": "joint answer",
+    }
+
+
+def test_overlay_text_lines_include_prediction_variants() -> None:
+    from PIL import Image, ImageDraw, ImageFont
+
+    sample = {
+        "question": "What is shown?",
+        "answer": "cat",
+        "predictions": {
+            "original": "a cat",
+            "gae_pruned": "a dog",
+            "quant_joint_pruned": "a cat on a mat",
+        },
+    }
+    draw = ImageDraw.Draw(Image.new("RGB", (640, 480), "white"))
+    lines = visualize_token_pruning._overlay_text_lines(
+        sample,
+        draw,
+        ImageFont.load_default(),
+        max_width=600,
+        max_lines=12,
+    )
+
+    text = "\n".join(lines)
+    assert "Original prediction: a cat" in text
+    assert "GAE prediction: a dog" in text
+    assert "Quant-joint prediction: a cat on a mat" in text
 
 
 def test_mask_for_image_tokens_projects_local_indices_to_first_frame() -> None:

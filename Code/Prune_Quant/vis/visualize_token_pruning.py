@@ -169,6 +169,7 @@ def _load_visualization_config(path: Path) -> dict[str, Any]:
             "seed": None,
             "image_overlay": True,
             "green_highlight": "proxy",
+            "show_predictions": True,
             "output_dir": str(Path(__file__).resolve().parent / "outputs"),
             "save_sample_artifacts": False,
             "sample_artifact_dir": str(Path(__file__).resolve().parent / "samples"),
@@ -436,6 +437,7 @@ def _build_sample_artifact(
     quant_joint_scores: Any,
     quant_components: dict[str, Any] | None = None,
     answer: str | None = None,
+    predictions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     import torch
 
@@ -461,6 +463,7 @@ def _build_sample_artifact(
         "question": sample.get("question") or sample.get("prompt") or sample.get("text"),
         "answer": answer if answer is not None else sample.get("answer"),
         "reference_answer": sample.get("answer"),
+        "predictions": dict(predictions or sample.get("predictions") or {}),
         "category": sample.get("category"),
         "question_id": sample.get("question_id"),
         "spatial_merge_size": _spatial_merge_size(model),
@@ -496,6 +499,71 @@ def _sample_answer(
     return answer
 
 
+def _prediction_entry(sample: dict[str, Any], key: str) -> str:
+    predictions = sample.get("predictions")
+    if not isinstance(predictions, dict):
+        return ""
+    return _metadata_string(predictions.get(key))
+
+
+def _build_prediction_variants(
+    *,
+    model: Any,
+    processor: Any,
+    adapter: Any,
+    inputs: dict[str, Any],
+    gae_scores: Any,
+    quant_scores: Any,
+    retention_ratio: float,
+    min_keep: int,
+    max_new_tokens: int,
+) -> dict[str, str]:
+    import torch
+    from prune_quant_baseline.scripts.run_infer_pruned import (
+        _build_pruned_generation_inputs,
+        _generate_from_pruned_inputs,
+        _generate_vanilla,
+    )
+
+    device = inputs["input_ids"].device if "input_ids" in inputs else next(model.parameters()).device
+    gae_scores = torch.as_tensor(_as_numpy(gae_scores, name="gae_scores"), dtype=torch.float32, device=device)
+    quant_scores = torch.as_tensor(_as_numpy(quant_scores, name="quant_joint_scores"), dtype=torch.float32, device=device)
+    original = _generate_vanilla(model, processor, inputs, max_new_tokens)
+    gae_inputs, _, _ = _build_pruned_generation_inputs(
+        model=model,
+        adapter=adapter,
+        inputs=inputs,
+        scores=gae_scores,
+        retention_ratio=retention_ratio,
+        min_keep=min_keep,
+        score_mode="keep",
+    )
+    quant_inputs, _, _ = _build_pruned_generation_inputs(
+        model=model,
+        adapter=adapter,
+        inputs=inputs,
+        scores=quant_scores,
+        retention_ratio=retention_ratio,
+        min_keep=min_keep,
+        score_mode="drop",
+    )
+    return {
+        "original": original,
+        "gae_pruned": _generate_from_pruned_inputs(
+            model=model,
+            processor=processor,
+            pruned_inputs=gae_inputs,
+            max_new_tokens=max_new_tokens,
+        ),
+        "quant_joint_pruned": _generate_from_pruned_inputs(
+            model=model,
+            processor=processor,
+            pruned_inputs=quant_inputs,
+            max_new_tokens=max_new_tokens,
+        ),
+    }
+
+
 def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
     from prune_quant_baseline.pruners.gae_oracle import GAEOraclePruner, QuantJointGAEPruner
     from prune_quant_baseline.quant.loaders import load_model_and_processor
@@ -517,6 +585,10 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
     quant_cfg = config["quant_joint"]
     pruning_cfg = config["pruning"]
     vis_cfg = config["visualization"]
+    retention_ratio = float(pruning_cfg.get("retention_ratio", 0.5))
+    min_keep = int(pruning_cfg.get("min_keep", 1))
+    max_new_tokens = int(scoring_cfg.get("max_new_tokens", 16))
+    show_predictions = _bool_value(vis_cfg.get("show_predictions", True))
 
     image_root = _resolve_path(calibration_cfg.get("image_root") or data_cfg.get("image_root"), base_dir)
     limit = cli_limit if cli_limit is not None else int(vis_cfg.get("limit", 1))
@@ -595,7 +667,7 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             inputs=inputs,
             sample=sample,
             answer_source=str(scoring_cfg.get("answer_source", "sample")),
-            max_new_tokens=int(scoring_cfg.get("max_new_tokens", 16)),
+            max_new_tokens=max_new_tokens,
         )
         gae_scores = _score_gae_oracle(
             model=model,
@@ -624,6 +696,19 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             return_components=True,
         )
         quant_scores = quant_components["joint"]
+        predictions = {}
+        if show_predictions:
+            predictions = _build_prediction_variants(
+                model=model,
+                processor=processor,
+                adapter=adapter,
+                inputs=inputs,
+                gae_scores=gae_scores,
+                quant_scores=quant_scores,
+                retention_ratio=retention_ratio,
+                min_keep=min_keep,
+                max_new_tokens=max_new_tokens,
+            )
         artifact = _build_sample_artifact(
             model=model,
             processor=processor,
@@ -635,10 +720,11 @@ def _iter_config_artifacts(config_path: Path, cli_limit: int | None = None):
             quant_joint_scores=quant_scores,
             quant_components=quant_components,
             answer=answer,
+            predictions=predictions,
         )
         yield artifact, {
-            "retention_ratio": float(pruning_cfg.get("retention_ratio", 0.5)),
-            "min_keep": int(pruning_cfg.get("min_keep", 1)),
+            "retention_ratio": retention_ratio,
+            "min_keep": min_keep,
             "output_dir": _resolve_path(vis_cfg.get("output_dir"), base_dir) or Path(__file__).resolve().parent / "outputs",
             "output_name": vis_cfg.get("output_name"),
             "save_sample_artifacts": _bool_value(vis_cfg.get("save_sample_artifacts", False)),
@@ -1022,11 +1108,19 @@ def _overlay_text_lines(sample: dict[str, Any], draw: Any, font: Any, max_width:
         or _metadata_string(sample.get("text"))
     )
     answer = _metadata_string(sample.get("answer")) or _metadata_string(sample.get("reference_answer"))
+    prediction_entries = [
+        ("Original prediction", _prediction_entry(sample, "original")),
+        ("GAE prediction", _prediction_entry(sample, "gae_pruned")),
+        ("Quant-joint prediction", _prediction_entry(sample, "quant_joint_pruned")),
+    ]
     entries = []
     if question:
         entries.append(f"Question: {question}")
     if answer:
         entries.append(f"Answer: {answer}")
+    for label, prediction in prediction_entries:
+        if prediction:
+            entries.append(f"{label}: {prediction}")
     if not entries:
         return []
 
@@ -1261,6 +1355,7 @@ def _save_with_pillow(
     gae_after_positions: np.ndarray,
     quant_after: np.ndarray,
     quant_after_positions: np.ndarray,
+    sample: dict[str, Any] | None = None,
 ) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
@@ -1269,8 +1364,13 @@ def _save_with_pillow(
     gutter = 34
     header = 70
     legend_h = 54
+    text_font = _load_overlay_font(15)
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1), "white"))
+    text_lines = _overlay_text_lines(sample or {}, measure, text_font, width - 2 * margin, max_lines=10)
+    text_line_h = _line_height(text_font)
+    text_h = 0 if not text_lines else 18 + len(text_lines) * text_line_h
     panel_w = (width - 2 * margin - gutter) // 2
-    panel_h = (height - header - legend_h - 2 * margin - gutter) // 2
+    panel_h = max(120, (height - header - legend_h - text_h - 2 * margin - gutter) // 2)
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
     title_font = ImageFont.load_default()
@@ -1349,6 +1449,11 @@ def _save_with_pillow(
     draw.text((margin + 40, legend_y - 7), "kept/original token range", fill=(45, 52, 61), font=title_font)
     draw.line((margin + 310, legend_y, margin + 342, legend_y), fill=(200, 30, 30), width=4)
     draw.text((margin + 350, legend_y - 7), "removed visual token", fill=(45, 52, 61), font=title_font)
+    if text_lines:
+        text_y = legend_y + 22
+        for line in text_lines:
+            draw.text((margin, text_y), line, fill=(20, 30, 42), font=text_font)
+            text_y += text_line_h
     image.save(output_path)
 
 
@@ -1719,6 +1824,7 @@ def _render_sample(
             gae_after_positions=gae_after_positions,
             quant_after=quant_after,
             quant_after_positions=quant_after_positions,
+            sample=sample,
         )
         print(f"Wrote {output_path} (Pillow fallback; install matplotlib for publication-style axes)")
         if image_overlay:
@@ -1795,6 +1901,20 @@ def _render_sample(
         Line2D([0], [0], color="#C81E1E", lw=2.4, label="removed visual token"),
     ]
     fig.legend(handles=legend_handles, loc="lower center", ncol=3, frameon=False)
+    from PIL import Image, ImageDraw
+
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1), "white"))
+    text_lines = _overlay_text_lines(sample, measure, _load_overlay_font(13), 1600, max_lines=8)
+    if text_lines:
+        fig.text(
+            0.01,
+            0.01,
+            "\n".join(text_lines),
+            ha="left",
+            va="bottom",
+            fontsize=8.5,
+            color="#182230",
+        )
     fig.savefig(output_path, dpi=220, bbox_inches="tight")
     print(f"Wrote {output_path}")
     if image_overlay:

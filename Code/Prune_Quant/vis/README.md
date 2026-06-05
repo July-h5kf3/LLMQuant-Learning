@@ -121,6 +121,7 @@ visualization:
   image_overlay: true
   green_highlight: proxy  # none / proxy / c_quant
   score_bars: true
+  show_predictions: true
   output_dir: outputs
   save_sample_artifacts: true
   sample_artifact_dir: samples
@@ -139,6 +140,7 @@ visualization:
 - 原始 GAE 分数通过 `_score_gae_oracle` 计算。
 - `scoring.gae_normalizer` 控制配置模式下导出的 GAE 分数归一化：`sum` 为按和归一化，`RN` 为 rank norm，`none` 保留原始分数。
 - `visualization.green_highlight` 控制绿色方块/描边对象：`none` 不展示绿色高亮，`proxy` 使用绝对值最大代理值 `max(abs(channel))`，`c_quant` 使用 top `C_i^{quant}`。
+- `show_predictions: true` 会额外在 YAML 模式下生成并展示原始输入、GAE 剪枝后、quant-joint 剪枝后的预测文本；保存 sample artifact 时也会写入 `predictions.original`、`predictions.gae_pruned`、`predictions.quant_joint_pruned`。
 - `score_bars: true` 会额外生成 `_score_bars.png`，用柱状图展示每个 visual token 的绝对值最大代理值 `max(abs(channel))`、GAE score、`C_i^{quant}` 和 `D_i = lambda * C_i^{quant} - C_i^{drop}`；红色 bar 表示该行对应策略删除的 token，绿色填充/描边表示该 token 属于 `green_highlight` 选中的集合，其中 GAE 行删除低分 top-k，`D_i` 行删除高分 top-k。
 - `save_sample_artifacts: true` 会额外保存 `.pt` 样本包，后续可以不加载模型直接重画。
 - YAML 内的相对路径按 YAML 文件所在目录解析；`vis/example_visualization_config.yaml` 里的 `outputs` 会解析到 `vis/outputs`。
