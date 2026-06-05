@@ -701,6 +701,21 @@ def _select_removed(
     return np.sort(visual_indices[removed_local])
 
 
+def _select_top_percent(values: np.ndarray, positions: np.ndarray, *, fraction: float) -> np.ndarray:
+    if values.ndim != 1:
+        raise ValueError(f"values must be 1D, got {values.shape}.")
+    if values.size != positions.size:
+        raise ValueError(f"value count {values.size} does not match position count {positions.size}.")
+    if not (0.0 < fraction <= 1.0):
+        raise ValueError("fraction must be in (0, 1].")
+    if values.size == 0:
+        return np.empty((0,), dtype=np.int64)
+
+    selected_count = max(1, math.ceil(values.size * fraction))
+    order = np.argsort(-values, kind="stable")
+    return positions[order[:selected_count]].astype(np.int64, copy=False)
+
+
 def _remaining_embeddings(embeds: np.ndarray, removed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     keep_mask = np.ones(embeds.shape[0], dtype=bool)
     keep_mask[removed] = False
@@ -721,8 +736,8 @@ def _first_image_grid(sample: dict[str, Any]) -> tuple[int, int, int] | None:
     return int(t), int(h), int(w)
 
 
-def _removed_mask_for_image(
-    removed: np.ndarray,
+def _mask_for_image_tokens(
+    tokens: np.ndarray,
     *,
     image_grid_thw: tuple[int, int, int],
     spatial_merge_size: int,
@@ -734,7 +749,7 @@ def _removed_mask_for_image(
     per_frame = grid_h * grid_w
     first_image_tokens = max(1, int(t) * per_frame)
     mask = np.zeros((grid_h, grid_w), dtype=bool)
-    for token_idx in removed.astype(np.int64).tolist():
+    for token_idx in tokens.astype(np.int64).tolist():
         if token_idx < 0 or token_idx >= first_image_tokens:
             continue
         within_frame = token_idx % per_frame
@@ -744,10 +759,24 @@ def _removed_mask_for_image(
     return mask
 
 
+def _removed_mask_for_image(
+    removed: np.ndarray,
+    *,
+    image_grid_thw: tuple[int, int, int],
+    spatial_merge_size: int,
+) -> np.ndarray:
+    return _mask_for_image_tokens(
+        removed,
+        image_grid_thw=image_grid_thw,
+        spatial_merge_size=spatial_merge_size,
+    )
+
+
 def _draw_image_overlay_panel(
     image: Any,
-    mask: np.ndarray,
+    removed_mask: np.ndarray,
     *,
+    outlier_mask: np.ndarray | None = None,
     title: str,
     alpha: int = 118,
 ) -> Any:
@@ -756,12 +785,18 @@ def _draw_image_overlay_panel(
     base = image.convert("RGBA")
     overlay = Image.new("RGBA", base.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
-    h, w = mask.shape
+    if outlier_mask is None:
+        outlier_mask = np.zeros_like(removed_mask, dtype=bool)
+    if outlier_mask.shape != removed_mask.shape:
+        raise ValueError("outlier_mask shape must match removed_mask shape.")
+    h, w = removed_mask.shape
     cell_w = base.width / float(w)
     cell_h = base.height / float(h)
     for y in range(h):
         for x in range(w):
-            if not mask[y, x]:
+            is_removed = bool(removed_mask[y, x])
+            is_outlier = bool(outlier_mask[y, x])
+            if not is_removed and not is_outlier:
                 continue
             box = (
                 int(round(x * cell_w)),
@@ -769,7 +804,13 @@ def _draw_image_overlay_panel(
                 int(round((x + 1) * cell_w)),
                 int(round((y + 1) * cell_h)),
             )
-            draw.rectangle(box, fill=(220, 22, 22, alpha), outline=(150, 0, 0, 180), width=1)
+            if is_outlier:
+                draw.rectangle(box, fill=(24, 168, 84, 104), outline=(0, 115, 55, 190), width=1)
+            if is_removed and not is_outlier:
+                draw.rectangle(box, fill=(220, 22, 22, alpha), outline=(150, 0, 0, 180), width=1)
+            if is_removed and is_outlier:
+                draw.rectangle(box, outline=(170, 0, 0, 230), width=3)
+                draw.line((box[0], box[1], box[2], box[3]), fill=(170, 0, 0, 220), width=2)
     composed = Image.alpha_composite(base, overlay).convert("RGB")
     return composed, title
 
@@ -914,6 +955,7 @@ def _save_image_overlay(
     output_path: Path,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
+    outlier_tokens: np.ndarray,
 ) -> Path | None:
     from PIL import Image, ImageDraw
 
@@ -949,10 +991,25 @@ def _save_image_overlay(
         image_grid_thw=grid,
         spatial_merge_size=spatial_merge_size,
     )
+    outlier_mask = _mask_for_image_tokens(
+        outlier_tokens,
+        image_grid_thw=grid,
+        spatial_merge_size=spatial_merge_size,
+    )
     panels = [
         (image, "Original image"),
-        _draw_image_overlay_panel(image, gae_mask, title=f"GAE removed ({int(gae_mask.sum())} cells)"),
-        _draw_image_overlay_panel(image, quant_mask, title=f"Quant-joint removed ({int(quant_mask.sum())} cells)"),
+        _draw_image_overlay_panel(
+            image,
+            gae_mask,
+            outlier_mask=outlier_mask,
+            title=f"GAE removed ({int(gae_mask.sum())}) + outliers ({int(outlier_mask.sum())})",
+        ),
+        _draw_image_overlay_panel(
+            image,
+            quant_mask,
+            outlier_mask=outlier_mask,
+            title=f"Quant-joint removed ({int(quant_mask.sum())}) + outliers ({int(outlier_mask.sum())})",
+        ),
     ]
     max_panel_w = 560
     resized = []
@@ -971,7 +1028,8 @@ def _save_image_overlay(
     overlay_lines = _overlay_text_lines(sample, measure, text_font, canvas_w - 2 * margin)
     text_line_h = _line_height(text_font)
     text_h = 0 if not overlay_lines else 20 + len(overlay_lines) * text_line_h
-    canvas_h = max(panel.height for panel, _ in resized) + title_h + margin * 2 + 28 + text_h
+    legend_h = 26
+    canvas_h = max(panel.height for panel, _ in resized) + title_h + margin * 2 + 28 + legend_h + text_h
     canvas = Image.new("RGB", (canvas_w, canvas_h), "white")
     draw = ImageDraw.Draw(canvas)
     draw.text(
@@ -986,8 +1044,16 @@ def _save_image_overlay(
         draw.text((x, y - 18), title, fill=(35, 45, 55), font=font)
         canvas.paste(panel, (x, y))
         x += panel.width + gutter
+    legend_y = y + max(panel.height for panel, _ in resized) + 18
+    draw.rectangle((margin, legend_y - 7, margin + 18, legend_y + 7), fill=(220, 22, 22), outline=(150, 0, 0))
+    draw.text((margin + 26, legend_y - 11), "removed token", fill=(35, 45, 55), font=font)
+    draw.rectangle((margin + 170, legend_y - 7, margin + 188, legend_y + 7), fill=(24, 168, 84), outline=(0, 115, 55))
+    draw.text((margin + 196, legend_y - 11), "top 20% channel-range outlier", fill=(35, 45, 55), font=font)
+    draw.rectangle((margin + 442, legend_y - 7, margin + 460, legend_y + 7), fill=(24, 168, 84), outline=(170, 0, 0), width=3)
+    draw.line((margin + 442, legend_y - 7, margin + 460, legend_y + 7), fill=(170, 0, 0), width=2)
+    draw.text((margin + 468, legend_y - 11), "both", fill=(35, 45, 55), font=font)
     if overlay_lines:
-        text_y = y + max(panel.height for panel, _ in resized) + 22
+        text_y = legend_y + 22
         for line in overlay_lines:
             draw.text((margin, text_y), line, fill=(20, 30, 42), font=text_font)
             text_y += text_line_h
@@ -1223,6 +1289,7 @@ def _save_score_bars_matplotlib(
     channel_range: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
+    outlier_tokens: np.ndarray,
 ) -> None:
     plt, _ = _load_matplotlib()
     if plt is None:
@@ -1231,18 +1298,32 @@ def _save_score_bars_matplotlib(
 
     fig, axes = plt.subplots(4, 1, figsize=(18, 12), sharex=True, constrained_layout=True)
     series = [
-        ("Channel range proxy | max(channel) - min(channel)", channel_range, "#4D6B35", quant_removed),
+        ("Channel range proxy | max(channel) - min(channel) | top 20% outliers", channel_range, "#6B7280", outlier_tokens),
         ("GAE score | removed: lowest top-k", gae_scores, "#356A8A", gae_removed),
         (r"$C_i^{quant}$ | quant-joint removed tokens", c_quant, "#7A5C00", quant_removed),
         (r"$D_i = \lambda C_i^{quant} - C_i^{drop}$ | removed: highest top-k", joint_scores, "#8E3B46", quant_removed),
     ]
     x = np.arange(positions.size, dtype=np.int64)
     removed_color = "#C81E1E"
-    for ax, (label, values, color, removed) in zip(axes, series):
-        removed_set = set(int(item) for item in removed.tolist())
-        colors = [removed_color if int(pos) in removed_set else color for pos in positions]
-        edgecolors = ["#7F0000" if int(pos) in removed_set else color for pos in positions]
-        ax.bar(x, values, color=colors, edgecolor=edgecolors, linewidth=0.35, width=0.86, alpha=0.9)
+    outlier_color = "#18A854"
+    outlier_set = set(int(item) for item in outlier_tokens.tolist())
+    for row_idx, (ax, (label, values, color, highlighted)) in enumerate(zip(axes, series)):
+        highlighted_set = set(int(item) for item in highlighted.tolist())
+        if row_idx == 0:
+            colors = [outlier_color if int(pos) in highlighted_set else color for pos in positions]
+            edgecolors = ["#007337" if int(pos) in highlighted_set else color for pos in positions]
+            linewidths = [0.85 if int(pos) in highlighted_set else 0.35 for pos in positions]
+        else:
+            colors = [removed_color if int(pos) in highlighted_set else color for pos in positions]
+            edgecolors = [
+                "#00A651" if int(pos) in outlier_set else "#7F0000" if int(pos) in highlighted_set else color
+                for pos in positions
+            ]
+            linewidths = [
+                1.15 if int(pos) in outlier_set else 0.55 if int(pos) in highlighted_set else 0.35
+                for pos in positions
+            ]
+        ax.bar(x, values, color=colors, edgecolor=edgecolors, linewidth=linewidths, width=0.86, alpha=0.9)
         ax.axhline(0.0, color="#24292F", linewidth=0.8, alpha=0.75)
         value_min, value_max = _nice_score_limit([values])
         ax.set_ylim(value_min, value_max)
@@ -1260,9 +1341,10 @@ def _save_score_bars_matplotlib(
         handles=[
             Patch(facecolor="#356A8A", label="kept / not removed by that row's pruning rule"),
             Patch(facecolor=removed_color, edgecolor="#7F0000", label="removed token"),
+            Patch(facecolor=outlier_color, edgecolor="#007337", label="top 20% channel-range outlier"),
         ],
         loc="lower center",
-        ncol=2,
+        ncol=3,
         frameon=False,
     )
     fig.savefig(output_path, dpi=220, bbox_inches="tight")
@@ -1280,6 +1362,7 @@ def _save_score_bars_pillow(
     channel_range: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
+    outlier_tokens: np.ndarray,
 ) -> None:
     from PIL import Image, ImageDraw
 
@@ -1297,7 +1380,7 @@ def _save_score_bars_pillow(
     draw.text((margin, 24), f"Per-token pruning score statistics: {sample_id}", fill=(10, 20, 30), font=title_font)
 
     series = [
-        ("Channel range proxy | max(channel) - min(channel)", channel_range, (77, 107, 53), quant_removed),
+        ("Channel range proxy | max(channel) - min(channel) | top 20% outliers", channel_range, (107, 114, 128), outlier_tokens),
         ("GAE score | removed: lowest top-k", gae_scores, (53, 106, 138), gae_removed),
         ("C_i^quant | quant-joint removed tokens", c_quant, (122, 92, 0), quant_removed),
         ("D_i = lambda*C_i^quant - C_i^drop | removed: highest top-k", joint_scores, (142, 59, 70), quant_removed),
@@ -1305,8 +1388,11 @@ def _save_score_bars_pillow(
     x_count = max(1, positions.size)
     removed_color = (200, 30, 30)
     removed_outline = (127, 0, 0)
-    for panel_idx, (label, values, color, removed) in enumerate(series):
-        removed_set = set(int(item) for item in removed.tolist())
+    outlier_color = (24, 168, 84)
+    outlier_outline = (0, 115, 55)
+    outlier_set = set(int(item) for item in outlier_tokens.tolist())
+    for panel_idx, (label, values, color, highlighted) in enumerate(series):
+        highlighted_set = set(int(item) for item in highlighted.tolist())
         left = margin
         top = header + panel_idx * (panel_h + gutter)
         right = left + panel_w
@@ -1332,11 +1418,14 @@ def _save_score_bars_pillow(
             x1 = center_x + max(1, bar_w // 2)
             y0 = int(min(zero_y, y_value))
             y1 = int(max(zero_y, y_value))
-            is_removed = int(positions[idx]) in removed_set
+            is_highlighted = int(positions[idx]) in highlighted_set
+            is_outlier = int(positions[idx]) in outlier_set
+            fill = outlier_color if panel_idx == 0 and is_highlighted else removed_color if panel_idx > 0 and is_highlighted else color
+            outline = outlier_outline if is_outlier else removed_outline if panel_idx > 0 and is_highlighted else None
             draw.rectangle(
                 (x0, y0, x1, y1),
-                fill=removed_color if is_removed else color,
-                outline=removed_outline if is_removed else None,
+                fill=fill,
+                outline=outline,
             )
         draw.text((plot_left, bottom - 22), f"min={float(values.min()):.4g}", fill=(70, 78, 88), font=label_font)
         draw.text((plot_left + 150, bottom - 22), f"max={float(values.max()):.4g}", fill=(70, 78, 88), font=label_font)
@@ -1345,6 +1434,8 @@ def _save_score_bars_pillow(
     draw.text((margin + 32, legend_y - 10), "kept / not removed by that row's pruning rule", fill=(70, 78, 88), font=label_font)
     draw.rectangle((margin + 380, legend_y - 8, margin + 404, legend_y + 8), fill=removed_color, outline=removed_outline)
     draw.text((margin + 412, legend_y - 10), "removed token", fill=(70, 78, 88), font=label_font)
+    draw.rectangle((margin + 550, legend_y - 8, margin + 574, legend_y + 8), fill=outlier_color, outline=outlier_outline)
+    draw.text((margin + 582, legend_y - 10), "top 20% channel-range outlier", fill=(70, 78, 88), font=label_font)
     draw.text((width // 2 - 54, height - 24), "Visual token idx", fill=(70, 78, 88), font=label_font)
     image.save(output_path)
 
@@ -1360,6 +1451,7 @@ def _save_score_bars(
     channel_range: np.ndarray,
     gae_removed: np.ndarray,
     quant_removed: np.ndarray,
+    outlier_tokens: np.ndarray,
 ) -> Path | None:
     c_quant = _score_array(sample, "c_quant", positions.size, required=False)
     if c_quant is None:
@@ -1377,6 +1469,7 @@ def _save_score_bars(
             channel_range=channel_range,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
+            outlier_tokens=outlier_tokens,
         )
     except RuntimeError:
         _save_score_bars_pillow(
@@ -1389,6 +1482,7 @@ def _save_score_bars(
             channel_range=channel_range,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
+            outlier_tokens=outlier_tokens,
         )
     print(f"Wrote {output_path}")
     return output_path
@@ -1458,6 +1552,7 @@ def _render_sample(
     gae_scores = _as_numpy(sample.get(gae_key), name=gae_key).astype(np.float32).reshape(-1)
     quant_scores = _as_numpy(sample.get(quant_key), name=quant_key).astype(np.float32).reshape(-1)
     channel_range = embeds.max(axis=1) - embeds.min(axis=1)
+    outlier_tokens = _select_top_percent(channel_range, visual_positions, fraction=0.2)
 
     gae_removed = _select_removed(
         gae_scores,
@@ -1507,6 +1602,7 @@ def _render_sample(
                 output_path=overlay_path,
                 gae_removed=gae_removed,
                 quant_removed=quant_removed,
+                outlier_tokens=outlier_tokens,
             )
         if score_bars:
             _save_score_bars(
@@ -1519,6 +1615,7 @@ def _render_sample(
                 channel_range=channel_range,
                 gae_removed=gae_removed,
                 quant_removed=quant_removed,
+                outlier_tokens=outlier_tokens,
             )
         return output_path
 
@@ -1581,6 +1678,7 @@ def _render_sample(
             output_path=overlay_path,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
+            outlier_tokens=outlier_tokens,
         )
     if score_bars:
         _save_score_bars(
@@ -1593,6 +1691,7 @@ def _render_sample(
             channel_range=channel_range,
             gae_removed=gae_removed,
             quant_removed=quant_removed,
+            outlier_tokens=outlier_tokens,
         )
     return output_path
 
