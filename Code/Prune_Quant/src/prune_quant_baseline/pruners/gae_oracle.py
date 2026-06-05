@@ -149,6 +149,8 @@ class QuantJointGAEPruner(GAEOraclePruner):
             raise ValueError(
                 f"Quant difficulty count {c_quant.numel()} does not match visual score count {c_drop.numel()}."
             )
+        c_drop = normalize_relevance_scores(c_drop)
+        c_quant = normalize_relevance_scores(c_quant)
         joint = normalize_joint_scores(self.quant_lambda * c_quant - c_drop) if normalize_joint else (
             self.quant_lambda * c_quant - c_drop
         )

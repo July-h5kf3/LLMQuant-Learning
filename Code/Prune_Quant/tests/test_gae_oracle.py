@@ -74,9 +74,9 @@ def test_quant_joint_gae_uses_quantized_attention_drop_and_activation_difficulty
         quant_symmetric=True,
     )
 
-    assert torch.allclose(components["c_drop"], torch.tensor([0.5, 2.0]))
-    assert torch.allclose(components["c_quant"], torch.tensor([2.0 / 15.0, 1.0 / 3.0]))
-    assert torch.allclose(components["joint"], torch.tensor([-7.0 / 30.0, -4.0 / 3.0]))
+    assert torch.allclose(components["c_drop"], torch.tensor([0.2, 0.8]))
+    assert torch.allclose(components["c_quant"], torch.tensor([2.0 / 7.0, 5.0 / 7.0]))
+    assert torch.allclose(components["joint"], torch.tensor([13.0 / 35.0, 22.0 / 35.0]))
 
 
 def test_quant_joint_gae_normalizes_after_subtracting_components() -> None:
@@ -108,10 +108,10 @@ def test_quant_joint_gae_normalizes_after_subtracting_components() -> None:
         quant_symmetric=True,
     )
 
-    raw_joint = torch.tensor([1.0 / 6.0, -5.0 / 3.0, -17.0 / 6.0])
+    raw_joint = torch.tensor([0.5, 0.6, -0.1])
     expected = raw_joint / raw_joint.abs().sum()
-    assert torch.allclose(components["c_drop"], torch.tensor([0.0, 2.0, 3.0]))
-    assert torch.allclose(components["c_quant"], torch.tensor([1.0 / 12.0, 1.0 / 6.0, 1.0 / 12.0]))
+    assert torch.allclose(components["c_drop"], torch.tensor([0.0, 0.4, 0.6]))
+    assert torch.allclose(components["c_quant"], torch.tensor([0.25, 0.5, 0.25]))
     assert torch.allclose(components["joint"], expected)
 
 
