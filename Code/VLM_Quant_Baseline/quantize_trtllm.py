@@ -395,7 +395,8 @@ def export_w3_autoround(args):
     if args.tp_size != 1 or args.pp_size != 1 or args.cp_size != 1:
         raise ValueError("W3A16 AutoRound export is a single-checkpoint fallback; keep tp/pp/cp size at 1.")
     cmd = [
-        "auto-round-mllm",
+        "auto-round",
+        "--mllm",
         "--model", args.model_dir,
         "--scheme", "W3A16",
         "--bits", "3",
@@ -418,7 +419,7 @@ def export_w3_autoround(args):
         subprocess.run(cmd, check=True)
     except FileNotFoundError as exc:
         raise RuntimeError(
-            "auto-round-mllm was not found. Install AutoRound with `pip install auto-round`."
+            "auto-round was not found. Install AutoRound with `pip install auto-round`."
         ) from exc
 
     write_manifest(args, "autoround-w3-fallback", {
