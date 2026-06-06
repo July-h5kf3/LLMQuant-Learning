@@ -17,22 +17,27 @@ LOCAL_DATASET_TASKS = {
     "mmmu_val": {
         "repo_id": "lmms-lab/MMMU",
         "source_yaml": ("mmmu", "mmmu_val.yaml"),
+        "data_files": {"validation": ("data", "validation-*")},
     },
     "ocrbench": {
         "repo_id": "echo840/OCRBench",
         "source_yaml": ("ocrbench", "ocrbench.yaml"),
+        "data_files": {"test": ("data", "test-*")},
     },
     "vizwiz_vqa_val": {
         "repo_id": "lmms-lab/VizWiz-VQA",
         "source_yaml": ("vizwiz_vqa", "vizwiz_vqa_val.yaml"),
+        "data_files": {"val": ("data", "val-*")},
     },
     "scienceqa_img": {
         "repo_id": "lmms-lab/ScienceQA",
         "source_yaml": ("scienceqa", "scienceqa_img.yaml"),
+        "data_files": {"test": ("ScienceQA-IMG", "test-*")},
     },
     "textvqa_val": {
         "repo_id": "lmms-lab/textvqa",
         "source_yaml": ("textvqa", "textvqa_val.yaml"),
+        "data_files": {"validation": ("data", "validation-*")},
     },
 }
 
@@ -187,14 +192,20 @@ def _prepare_local_task_overlays(
         local_task = f"pq_local_{task}"
         source_yaml = task_root.joinpath(*task_config["source_yaml"])
         overlay_path = overlay_root / f"{task}.yaml"
+        data_files = task_config.get("data_files", {})
+        dataset_kwargs = ["dataset_kwargs:"]
+        if data_files:
+            dataset_kwargs.append("  data_files:")
+        for split, parts in data_files.items():
+            dataset_kwargs.append(f"    {split}: {snapshot.joinpath(*parts)}")
+        dataset_kwargs.append("  local_files_only: true")
         overlay_path.write_text(
             "\n".join(
                 [
                     f"include: {source_yaml}",
                     f"task: {local_task}",
                     f"dataset_path: {snapshot}",
-                    "dataset_kwargs:",
-                    "  local_files_only: true",
+                    *dataset_kwargs,
                     "",
                 ]
             ),
