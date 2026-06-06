@@ -12,6 +12,7 @@ MASQUANT_SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_masquant_pseudo_mme.exampl
 GAE_MASQUANT_SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_masquant_gae50_pseudo_mme.sh"
 PIPELINE_SCRIPT = REPO_ROOT / "remote" / "run_masquant_pseudo_pipeline.sh"
 VANILLA_SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_vanilla_mme_mmstar.example.sh"
+VANILLA_ALL_SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_vanilla_all_benchmarks.sh"
 
 
 def test_all_benchmarks_script_covers_requested_benchmarks() -> None:
@@ -20,6 +21,18 @@ def test_all_benchmarks_script_covers_requested_benchmarks() -> None:
     assert 'export VLMEVAL_DATASETS="${VLMEVAL_DATASETS:-MME}"' in text
     assert f'export LMMS_EVAL_TASKS="${{LMMS_EVAL_TASKS:-{LMMS_TASKS}}}"' in text
     assert "remote/run_masquant_pseudo_pipeline.sh" in text
+    assert "remote/run_lmms_eval_smart.py" in text
+
+
+def test_vanilla_all_benchmarks_script_runs_original_model_only() -> None:
+    text = VANILLA_ALL_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'export PQ_QUANT_METHOD="${PQ_QUANT_METHOD:-none}"' in text
+    assert 'export PQ_RETENTION_RATIO="${PQ_RETENTION_RATIO:-1.0}"' in text
+    assert 'export PQ_ATTN_IMPLEMENTATION="${PQ_ATTN_IMPLEMENTATION:-sdpa}"' in text
+    assert 'export VLMEVAL_DATASETS="${VLMEVAL_DATASETS:-MME}"' in text
+    assert f'export LMMS_EVAL_TASKS="${{LMMS_EVAL_TASKS:-{LMMS_TASKS}}}"' in text
+    assert "remote/run_vlmeval_smart.py" in text
     assert "remote/run_lmms_eval_smart.py" in text
 
 
