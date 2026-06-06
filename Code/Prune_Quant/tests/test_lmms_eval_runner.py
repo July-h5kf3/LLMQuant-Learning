@@ -52,3 +52,12 @@ def test_lmms_eval_explicit_model_args_win() -> None:
     args = Namespace(model_args="pretrained=/custom,retention_ratio=0.25", model_path="/ignored")
 
     assert module._build_default_model_args(args) == "pretrained=/custom,retention_ratio=0.25"
+
+
+def test_lmms_eval_env_drops_model_plugin_from_legacy_task_plugins(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.setenv("LMMS_EVAL_PLUGINS", "prune_quant_baseline.lmms_eval,other_tasks")
+
+    env = module._build_subprocess_env("/repo", "/repo/third_party/lmms-eval")
+
+    assert env["LMMS_EVAL_PLUGINS"] == "other_tasks"

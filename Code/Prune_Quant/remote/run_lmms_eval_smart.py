@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 DEFAULT_TASKS = ("ocrbench", "vizwiz_vqa_val", "scienceqa_img", "textvqa_val")
+MODEL_PLUGIN_MODULE = "prune_quant_baseline.lmms_eval"
 
 
 def _bool_env(name: str, default: str) -> bool:
@@ -67,6 +68,42 @@ def _build_default_model_args(args: argparse.Namespace) -> str:
     return ",".join(items)
 
 
+def _build_subprocess_env(project_root: str | Path, lmms_eval_root: str | Path) -> dict[str, str]:
+    env = os.environ.copy()
+    pythonpath_parts = [str(Path(project_root) / "src"), str(lmms_eval_root)]
+    if env.get("PYTHONPATH"):
+        pythonpath_parts.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+
+    # Newer lmms-eval treats LMMS_EVAL_PLUGINS as task plugins and looks for
+    # "{plugin}.tasks". Our wrapper is a model plugin registered through the
+    # package entry point, so passing it here makes lmms-eval fail before loading
+    # tasks.
+    plugins = [
+        item
+        for item in env.get("LMMS_EVAL_PLUGINS", "").split(",")
+        if item and item != MODEL_PLUGIN_MODULE
+    ]
+    if plugins:
+        env["LMMS_EVAL_PLUGINS"] = ",".join(plugins)
+    else:
+        env.pop("LMMS_EVAL_PLUGINS", None)
+
+    env.setdefault("TOKENIZERS_PARALLELISM", "false")
+    if _bool_env("LMMS_EVAL_DISABLE_OPENAI", "1"):
+        for name in (
+            "OPENAI_API_KEY",
+            "OPENAI_API_BASE",
+            "OPENAI_API_MODEL",
+            "OPENAI_API_TYPE",
+            "OPENAI_API_VERSION",
+            "AZURE_OPENAI_API_KEY",
+            "LOCAL_LLM",
+        ):
+            env.pop(name, None)
+    return env
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lmms-eval-root", default="")
@@ -114,27 +151,7 @@ def main() -> int:
     if args.log_samples:
         cmd.append("--log_samples")
 
-    env = os.environ.copy()
-    pythonpath_parts = [str(project_root / "src"), str(lmms_eval_root)]
-    if env.get("PYTHONPATH"):
-        pythonpath_parts.append(env["PYTHONPATH"])
-    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
-    plugins = [item for item in env.get("LMMS_EVAL_PLUGINS", "").split(",") if item]
-    if "prune_quant_baseline.lmms_eval" not in plugins:
-        plugins.append("prune_quant_baseline.lmms_eval")
-    env["LMMS_EVAL_PLUGINS"] = ",".join(plugins)
-    env.setdefault("TOKENIZERS_PARALLELISM", "false")
-    if _bool_env("LMMS_EVAL_DISABLE_OPENAI", "1"):
-        for name in (
-            "OPENAI_API_KEY",
-            "OPENAI_API_BASE",
-            "OPENAI_API_MODEL",
-            "OPENAI_API_TYPE",
-            "OPENAI_API_VERSION",
-            "AZURE_OPENAI_API_KEY",
-            "LOCAL_LLM",
-        ):
-            env.pop(name, None)
+    env = _build_subprocess_env(project_root, lmms_eval_root)
 
     print("[lmms-eval-smart] " + " ".join(cmd), flush=True)
     if args.dry_run:
