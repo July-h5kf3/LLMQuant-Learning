@@ -164,9 +164,10 @@ def _prepare_local_task_overlays(
     lmms_eval_root: Path,
     hf_home: Path,
     output_path: Path,
-) -> tuple[list[str], Path | None]:
+) -> tuple[list[str], Path | None, list[tuple[str, str]]]:
     overlay_root = output_path / "_local_lmms_tasks"
     rewritten_tasks: list[str] = []
+    missing_snapshots: list[tuple[str, str]] = []
     wrote_overlay = False
     task_root = lmms_eval_root / "lmms_eval" / "tasks"
 
@@ -178,6 +179,7 @@ def _prepare_local_task_overlays(
 
         snapshot = _resolve_local_hf_dataset_snapshot(hf_home, task_config["repo_id"])
         if snapshot is None:
+            missing_snapshots.append((task, task_config["repo_id"]))
             rewritten_tasks.append(task)
             continue
 
@@ -201,7 +203,14 @@ def _prepare_local_task_overlays(
         rewritten_tasks.append(local_task)
         wrote_overlay = True
 
-    return rewritten_tasks, overlay_root if wrote_overlay else None
+    return rewritten_tasks, overlay_root if wrote_overlay else None, missing_snapshots
+
+
+def _require_local_snapshots(env: dict[str, str]) -> bool:
+    allow_hub_fallback = os.environ.get("LMMS_EVAL_ALLOW_HUB_FALLBACK", "").strip().lower()
+    if allow_hub_fallback in {"1", "true", "yes", "y", "on"}:
+        return False
+    return env.get("HF_HUB_OFFLINE", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def main() -> int:
@@ -226,13 +235,22 @@ def main() -> int:
     if not lmms_eval_root.exists():
         raise FileNotFoundError(f"lmms-eval root not found: {lmms_eval_root}")
 
-    hf_home = Path(os.environ.get("LMMS_EVAL_HF_HOME", str(DEFAULT_HF_HOME))).expanduser()
-    tasks, include_path = _prepare_local_task_overlays(
+    env = _build_subprocess_env(project_root, lmms_eval_root)
+
+    hf_home = Path(env.get("HF_HOME", str(DEFAULT_HF_HOME))).expanduser()
+    tasks, include_path, missing_snapshots = _prepare_local_task_overlays(
         tasks=list(args.tasks),
         lmms_eval_root=lmms_eval_root,
         hf_home=hf_home,
         output_path=args.output_path,
     )
+    if missing_snapshots and _require_local_snapshots(env):
+        missing = ", ".join(f"{task} -> {repo_id}" for task, repo_id in missing_snapshots)
+        raise FileNotFoundError(
+            "Missing local Hugging Face dataset snapshots for offline lmms-eval: "
+            f"{missing}. Expected each repo under {hf_home / 'hub'} as datasets--ORG--NAME/snapshots/<revision>. "
+            "Upload the missing repo snapshots or set LMMS_EVAL_ALLOW_HUB_FALLBACK=1 with network access."
+        )
 
     model_args = _build_default_model_args(args)
     cmd = [
@@ -260,8 +278,6 @@ def main() -> int:
         cmd += ["--use_cache", args.cache]
     if args.log_samples:
         cmd.append("--log_samples")
-
-    env = _build_subprocess_env(project_root, lmms_eval_root)
 
     print("[lmms-eval-smart] " + " ".join(cmd), flush=True)
     print(

@@ -144,7 +144,7 @@ def test_lmms_eval_prepares_local_task_overlay_for_cached_hf_dataset(tmp_path: P
     output_path = tmp_path / "out"
     lmms_eval_root = Path(__file__).resolve().parents[1] / "third_party" / "lmms-eval"
 
-    tasks, include_path = module._prepare_local_task_overlays(
+    tasks, include_path, missing = module._prepare_local_task_overlays(
         tasks=["mmmu_val", "ocrbench"],
         lmms_eval_root=lmms_eval_root,
         hf_home=hf_home,
@@ -153,11 +153,27 @@ def test_lmms_eval_prepares_local_task_overlay_for_cached_hf_dataset(tmp_path: P
 
     assert tasks == ["pq_local_mmmu_val", "ocrbench"]
     assert include_path == output_path / "_local_lmms_tasks"
+    assert missing == [("ocrbench", "echo840/OCRBench")]
     overlay = (include_path / "mmmu_val.yaml").read_text(encoding="utf-8")
     assert f"dataset_path: {snapshot}" in overlay
     assert f"include: {lmms_eval_root / 'lmms_eval' / 'tasks' / 'mmmu' / 'mmmu_val.yaml'}" in overlay
     assert "local_files_only: true" in overlay
     assert "task: pq_local_mmmu_val" in overlay
+
+
+def test_lmms_eval_requires_local_snapshots_by_default(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.delenv("LMMS_EVAL_ALLOW_HUB_FALLBACK", raising=False)
+
+    assert module._require_local_snapshots({"HF_HUB_OFFLINE": "1"})
+    assert not module._require_local_snapshots({"HF_HUB_OFFLINE": "0"})
+
+
+def test_lmms_eval_can_allow_hub_fallback(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.setenv("LMMS_EVAL_ALLOW_HUB_FALLBACK", "1")
+
+    assert not module._require_local_snapshots({"HF_HUB_OFFLINE": "1"})
 
 
 def test_lmms_eval_model_plugin_exposes_empty_tasks_package() -> None:
