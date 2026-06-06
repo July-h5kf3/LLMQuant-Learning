@@ -12,6 +12,7 @@ from pathlib import Path
 
 DEFAULT_TASKS = ("ocrbench", "vizwiz_vqa_val", "scienceqa_img", "textvqa_val")
 MODEL_PLUGIN_MODULE = "prune_quant_baseline.lmms_eval"
+DEFAULT_HF_HOME = Path("/home/aistudio/data/datasets/387822/abcd/hf_home")
 
 
 def _bool_env(name: str, default: str) -> bool:
@@ -83,6 +84,12 @@ def _build_subprocess_env(project_root: str | Path, lmms_eval_root: str | Path) 
     if MODEL_PLUGIN_MODULE not in plugins:
         plugins.append(MODEL_PLUGIN_MODULE)
     env["LMMS_EVAL_PLUGINS"] = ",".join(plugins)
+
+    env.setdefault("HF_HOME", str(DEFAULT_HF_HOME))
+    env.setdefault("HF_DATASETS_CACHE", str(DEFAULT_HF_HOME / "datasets"))
+    env.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_HOME / "hub"))
+    env.setdefault("HF_DATASETS_OFFLINE", "1")
+    env.setdefault("HF_HUB_OFFLINE", "1")
 
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     if _bool_env("LMMS_EVAL_DISABLE_OPENAI", "1"):

@@ -4,6 +4,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_quant_joint_rtn_all_benchmarks.sh"
 LMMS_TASKS = "mmmu_val ocrbench vizwiz_vqa_val scienceqa_img textvqa_val"
+LMMS_HF_HOME = "/home/aistudio/data/datasets/387822/abcd/hf_home"
 
 
 PURE_GAE_SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_pruned_gae_mme.example.sh"
@@ -34,6 +35,14 @@ def test_vanilla_all_benchmarks_script_runs_original_model_only() -> None:
     assert f'export LMMS_EVAL_TASKS="${{LMMS_EVAL_TASKS:-{LMMS_TASKS}}}"' in text
     assert "remote/run_vlmeval_smart.py" in text
     assert "remote/run_lmms_eval_smart.py" in text
+
+
+def test_lmms_eval_runner_defaults_to_requested_local_hf_cache() -> None:
+    text = (REPO_ROOT / "remote" / "run_lmms_eval_smart.py").read_text(encoding="utf-8")
+
+    assert f'DEFAULT_HF_HOME = Path("{LMMS_HF_HOME}")' in text
+    assert 'env.setdefault("HF_DATASETS_OFFLINE", "1")' in text
+    assert 'env.setdefault("HF_HUB_OFFLINE", "1")' in text
 
 
 def test_all_benchmarks_script_caps_only_large_images_to_1500_visual_tokens() -> None:

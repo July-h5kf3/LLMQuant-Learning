@@ -63,6 +63,43 @@ def test_lmms_eval_env_adds_model_plugin_for_legacy_model_registry(monkeypatch) 
     assert env["LMMS_EVAL_PLUGINS"] == "prune_quant_baseline.lmms_eval"
 
 
+def test_lmms_eval_env_defaults_to_local_hf_dataset_cache(monkeypatch) -> None:
+    module = _load_runner_module()
+    for name in (
+        "HF_HOME",
+        "HF_DATASETS_CACHE",
+        "HF_HUB_CACHE",
+        "HF_DATASETS_OFFLINE",
+        "HF_HUB_OFFLINE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    env = module._build_subprocess_env("/repo", "/repo/third_party/lmms-eval")
+
+    assert env["HF_HOME"] == "/home/aistudio/data/datasets/387822/abcd/hf_home"
+    assert env["HF_DATASETS_CACHE"] == "/home/aistudio/data/datasets/387822/abcd/hf_home/datasets"
+    assert env["HF_HUB_CACHE"] == "/home/aistudio/data/datasets/387822/abcd/hf_home/hub"
+    assert env["HF_DATASETS_OFFLINE"] == "1"
+    assert env["HF_HUB_OFFLINE"] == "1"
+
+
+def test_lmms_eval_env_preserves_explicit_hf_cache_overrides(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.setenv("HF_HOME", "/custom/hf")
+    monkeypatch.setenv("HF_DATASETS_CACHE", "/custom/datasets")
+    monkeypatch.setenv("HF_HUB_CACHE", "/custom/hub")
+    monkeypatch.setenv("HF_DATASETS_OFFLINE", "0")
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+
+    env = module._build_subprocess_env("/repo", "/repo/third_party/lmms-eval")
+
+    assert env["HF_HOME"] == "/custom/hf"
+    assert env["HF_DATASETS_CACHE"] == "/custom/datasets"
+    assert env["HF_HUB_CACHE"] == "/custom/hub"
+    assert env["HF_DATASETS_OFFLINE"] == "0"
+    assert env["HF_HUB_OFFLINE"] == "0"
+
+
 def test_lmms_eval_model_plugin_exposes_empty_tasks_package() -> None:
     spec = importlib.util.find_spec("prune_quant_baseline.lmms_eval.tasks")
 
