@@ -357,6 +357,7 @@ def run_qig(
             if isinstance(layer_kwargs[k], tuple) or isinstance(layer_kwargs[k], list):
                 layer_kwargs[k] = [item.to(next(layer.parameters()).device) if torch.is_tensor(item) else item for item in layer_kwargs[k]]
 
+        layer_input = inps
         inps = layer(inps, **layer_kwargs)[0]
         for h in handles:
             h.remove()
@@ -392,7 +393,7 @@ def run_qig(
                 vis_mask = vision_mask
             
             if wa_quant:
-                wa_q_input = inps
+                wa_q_input = layer_input
                 if distort:
                     wa_q_input = inps_distort
                 scales_list = auto_scale_block_wa_distort(
