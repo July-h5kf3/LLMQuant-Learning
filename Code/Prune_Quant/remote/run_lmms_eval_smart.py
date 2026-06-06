@@ -207,7 +207,7 @@ def _prepare_local_task_overlays(
                 [
                     f"include: {source_yaml}",
                     f"task: {local_task}",
-                    f"dataset_path: {snapshot}",
+                    "dataset_path: parquet",
                     *dataset_kwargs,
                     "",
                 ]

@@ -155,7 +155,7 @@ def test_lmms_eval_prepares_local_task_overlay_for_cached_hf_dataset(tmp_path: P
     assert include_path == output_path / "_local_lmms_tasks"
     assert missing == [("ocrbench", "echo840/OCRBench")]
     overlay = (include_path / "mmmu_val.yaml").read_text(encoding="utf-8")
-    assert f"dataset_path: {snapshot}" in overlay
+    assert "dataset_path: parquet" in overlay
     assert f"include: {lmms_eval_root / 'lmms_eval' / 'tasks' / 'mmmu' / 'mmmu_val.yaml'}" in overlay
     assert "local_files_only: true" in overlay
     assert "dataset_kwargs:\n  data_files:" in overlay
