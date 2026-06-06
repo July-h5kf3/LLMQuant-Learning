@@ -75,19 +75,14 @@ def _build_subprocess_env(project_root: str | Path, lmms_eval_root: str | Path) 
         pythonpath_parts.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
 
-    # Newer lmms-eval treats LMMS_EVAL_PLUGINS as task plugins and looks for
-    # "{plugin}.tasks". Our wrapper is a model plugin registered through the
-    # package entry point, so passing it here makes lmms-eval fail before loading
-    # tasks.
     plugins = [
         item
         for item in env.get("LMMS_EVAL_PLUGINS", "").split(",")
-        if item and item != MODEL_PLUGIN_MODULE
+        if item
     ]
-    if plugins:
-        env["LMMS_EVAL_PLUGINS"] = ",".join(plugins)
-    else:
-        env.pop("LMMS_EVAL_PLUGINS", None)
+    if MODEL_PLUGIN_MODULE not in plugins:
+        plugins.append(MODEL_PLUGIN_MODULE)
+    env["LMMS_EVAL_PLUGINS"] = ",".join(plugins)
 
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     if _bool_env("LMMS_EVAL_DISABLE_OPENAI", "1"):

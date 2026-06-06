@@ -54,10 +54,17 @@ def test_lmms_eval_explicit_model_args_win() -> None:
     assert module._build_default_model_args(args) == "pretrained=/custom,retention_ratio=0.25"
 
 
-def test_lmms_eval_env_drops_model_plugin_from_legacy_task_plugins(monkeypatch) -> None:
+def test_lmms_eval_env_adds_model_plugin_for_legacy_model_registry(monkeypatch) -> None:
     module = _load_runner_module()
-    monkeypatch.setenv("LMMS_EVAL_PLUGINS", "prune_quant_baseline.lmms_eval,other_tasks")
+    monkeypatch.delenv("LMMS_EVAL_PLUGINS", raising=False)
 
     env = module._build_subprocess_env("/repo", "/repo/third_party/lmms-eval")
 
-    assert env["LMMS_EVAL_PLUGINS"] == "other_tasks"
+    assert env["LMMS_EVAL_PLUGINS"] == "prune_quant_baseline.lmms_eval"
+
+
+def test_lmms_eval_model_plugin_exposes_empty_tasks_package() -> None:
+    spec = importlib.util.find_spec("prune_quant_baseline.lmms_eval.tasks")
+
+    assert spec is not None
+    assert spec.submodule_search_locations is not None
