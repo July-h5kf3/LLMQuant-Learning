@@ -29,7 +29,9 @@ export WBITS=4
 export ABITS=8
 export GROUP_SIZE=0
 export EPOCHS=2
-export ATTN_IMPLEMENTATION=eager
+# Pure MASQuant does not compute GAE attention scores, so default to accelerated
+# SDPA. Set ATTN_IMPLEMENTATION=eager for debugging or attention-map workflows.
+export ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 export DTYPE=bfloat16
 export DEVICE_MAP=auto
 
@@ -41,8 +43,8 @@ export PROCESSOR_USE_FAST=
 # and MASQuant runs are comparable.
 export PROCESSOR_MIN_PIXELS=
 export PROCESSOR_MAX_PIXELS=
-export PROCESSOR_MIN_VISUAL_TOKENS=1500
-export PROCESSOR_MAX_VISUAL_TOKENS=1500
+export PROCESSOR_MIN_VISUAL_TOKENS="${PROCESSOR_MIN_VISUAL_TOKENS:-}"
+export PROCESSOR_MAX_VISUAL_TOKENS="${PROCESSOR_MAX_VISUAL_TOKENS:-1500}"
 
 # ---- Pruning behavior ----
 # 1.0 means no GAE pruning. Set to 0.5 to run prune-then-quant calibration.
@@ -65,7 +67,7 @@ export CMC_QUANT_CMC=0
 export CMC_N_CALI_SAMPLES=128
 
 # ---- VLMEvalKit ----
-export VLMEVAL_DATASETS="MME MMStar"
+export VLMEVAL_DATASETS="${VLMEVAL_DATASETS:-MME}"
 export VLMEVAL_MODEL_NAME=Qwen2VL_MASQuant_Pseudo
 export MAX_NEW_TOKENS=16
 export VLMEVAL_VERBOSE=1
@@ -75,7 +77,7 @@ export VLMEVAL_SMART_RUNNER=1
 export VLMEVAL_MODE=auto
 export VLMEVAL_REUSE=1
 export VLMEVAL_REUSE_AUX=1
-export VLMEVAL_EXACT_MATCH_DATASETS="MME MMStar"
+export VLMEVAL_EXACT_MATCH_DATASETS="${VLMEVAL_EXACT_MATCH_DATASETS:-MME}"
 # Keep OpenAI env vars out of exact-matching runs to avoid slow or failing API
 # calls during scoring.
 export VLMEVAL_DISABLE_OPENAI=1
@@ -86,6 +88,17 @@ export RUN_CALIBRATE=1
 export RUN_CMC=1
 export RUN_INSTALL_VLMEVAL=1
 export RUN_VLMEVAL=1
+export RUN_LMMS_EVAL="${RUN_LMMS_EVAL:-1}"
+
+# ---- lmms-eval ----
+export LMMS_EVAL_ROOT="${LMMS_EVAL_ROOT:-$PROJECT_ROOT/third_party/lmms-eval}"
+export LMMS_EVAL_TASKS="${LMMS_EVAL_TASKS:-mmmu_val ocrbench vizwiz_vqa_val scienceqa_img textvqa_val}"
+export LMMS_EVAL_OUTPUT_PATH="${LMMS_EVAL_OUTPUT_PATH:-$WORK_DIR/lmms_eval_masquant_pseudo}"
+export LMMS_EVAL_CACHE="${LMMS_EVAL_CACHE:-$WORK_DIR/lmms_eval_cache}"
+export LMMS_EVAL_LIMIT="${LMMS_EVAL_LIMIT:-}"
+export LMMS_EVAL_LOG_SAMPLES="${LMMS_EVAL_LOG_SAMPLES:-1}"
+export LMMS_EVAL_VERBOSITY="${LMMS_EVAL_VERBOSITY:-INFO}"
+export LMMS_EVAL_DISABLE_OPENAI="${LMMS_EVAL_DISABLE_OPENAI:-1}"
 
 # If you already have artifacts, uncomment and set them explicitly.
 # export MASQUANT_RESUME="$WORK_DIR/masquant_outputs/.../mas_parameters.pth"

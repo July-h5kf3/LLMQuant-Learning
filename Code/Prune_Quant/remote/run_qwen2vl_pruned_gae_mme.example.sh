@@ -23,8 +23,8 @@ export PQ_MAX_NEW_TOKENS=16
 # Optional image resolution controls.
 # The 1500-token setting matches the paper-style Qwen2-VL image budget used in
 # earlier reproduction notes. To use processor defaults instead, set both to empty.
-export PQ_MIN_VISUAL_TOKENS=1500
-export PQ_MAX_VISUAL_TOKENS=1500
+export PQ_MIN_VISUAL_TOKENS="${PQ_MIN_VISUAL_TOKENS:-}"
+export PQ_MAX_VISUAL_TOKENS="${PQ_MAX_VISUAL_TOKENS:-1500}"
 export PQ_MIN_PIXELS=
 export PQ_MAX_PIXELS=
 
@@ -36,14 +36,14 @@ export PQ_GAE_ANSWER_SOURCE=generated
 export PQ_GAE_PER_TOKEN=false
 
 # ---- VLMEvalKit ----
-export VLMEVAL_DATASETS="MME MMStar"
+export VLMEVAL_DATASETS="${VLMEVAL_DATASETS:-MME}"
 export VLMEVAL_MODEL_NAME=Qwen2VL_PrunedGAE
 export VLMEVAL_WORK_DIR="$WORK_DIR/vlmeval_mme_qwen2vl_pruned_gae_r${PQ_RETENTION_RATIO}"
 export VLMEVAL_VERBOSE=1
 export VLMEVAL_MODE=auto
 export VLMEVAL_REUSE=1
 export VLMEVAL_REUSE_AUX=1
-export VLMEVAL_EXACT_MATCH_DATASETS="MME MMStar"
+export VLMEVAL_EXACT_MATCH_DATASETS="${VLMEVAL_EXACT_MATCH_DATASETS:-MME}"
 
 # MME does not need GPT-as-judge. Keep OpenAI env vars out of exact-matching
 # scoring so VLMEvalKit cannot accidentally call an external judge.
@@ -52,6 +52,17 @@ export VLMEVAL_DISABLE_OPENAI=1
 # ---- Stage switches ----
 export RUN_INSTALL_VLMEVAL=1
 export RUN_VLMEVAL=1
+export RUN_LMMS_EVAL="${RUN_LMMS_EVAL:-1}"
+
+# ---- lmms-eval ----
+export LMMS_EVAL_ROOT="${LMMS_EVAL_ROOT:-$PROJECT_ROOT/third_party/lmms-eval}"
+export LMMS_EVAL_TASKS="${LMMS_EVAL_TASKS:-mmmu_val ocrbench vizwiz_vqa_val scienceqa_img textvqa_val}"
+export LMMS_EVAL_OUTPUT_PATH="${LMMS_EVAL_OUTPUT_PATH:-$WORK_DIR/lmms_eval_qwen2vl_pruned_gae_r${PQ_RETENTION_RATIO}}"
+export LMMS_EVAL_CACHE="${LMMS_EVAL_CACHE:-$WORK_DIR/lmms_eval_cache}"
+export LMMS_EVAL_LIMIT="${LMMS_EVAL_LIMIT:-}"
+export LMMS_EVAL_LOG_SAMPLES="${LMMS_EVAL_LOG_SAMPLES:-1}"
+export LMMS_EVAL_VERBOSITY="${LMMS_EVAL_VERBOSITY:-INFO}"
+export LMMS_EVAL_DISABLE_OPENAI="${LMMS_EVAL_DISABLE_OPENAI:-1}"
 
 require_path() {
   local name="$1"
@@ -82,7 +93,7 @@ require_path MODEL_PATH
 require_path VLMEVALKIT_ROOT
 mkdir -p "$WORK_DIR"
 
-export PYTHONPATH="$PROJECT_ROOT/src:${PYTHONPATH:-}"
+export PYTHONPATH="$PROJECT_ROOT/src:$LMMS_EVAL_ROOT:${PYTHONPATH:-}"
 
 if [[ "$RUN_INSTALL_VLMEVAL" == "1" ]]; then
   "$PYTHON" "$PROJECT_ROOT/remote/install_vlmeval_pruned_gae.py" --vlmeval-root "$VLMEVALKIT_ROOT"
@@ -118,4 +129,27 @@ if [[ "$RUN_VLMEVAL" == "1" ]]; then
     vlmeval_cmd+=(--no-reuse-aux)
   fi
   "${vlmeval_cmd[@]}"
+fi
+
+if [[ "$RUN_LMMS_EVAL" == "1" ]]; then
+  require_path LMMS_EVAL_ROOT
+  export PQ_MODEL_TYPE=qwen2vl
+  read -r -a lmms_eval_tasks <<< "$LMMS_EVAL_TASKS"
+  lmms_eval_cmd=(
+    "$PYTHON" "$PROJECT_ROOT/remote/run_lmms_eval_smart.py"
+    --lmms-eval-root "$LMMS_EVAL_ROOT"
+    --tasks "${lmms_eval_tasks[@]}"
+    --model prune_quant_qwen2vl
+    --model-path "$QWEN2VL_MODEL"
+    --output-path "$LMMS_EVAL_OUTPUT_PATH"
+    --cache "$LMMS_EVAL_CACHE"
+    --python "$PYTHON"
+    --batch-size 1
+    --verbosity "$LMMS_EVAL_VERBOSITY"
+  )
+  if [[ -n "$LMMS_EVAL_LIMIT" ]]; then
+    lmms_eval_cmd+=(--limit "$LMMS_EVAL_LIMIT")
+  fi
+  append_bool_flag lmms_eval_cmd --log-samples "$LMMS_EVAL_LOG_SAMPLES"
+  "${lmms_eval_cmd[@]}"
 fi

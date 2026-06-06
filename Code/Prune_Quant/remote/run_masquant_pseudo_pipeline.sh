@@ -77,7 +77,7 @@ WBITS="${WBITS:-4}"
 ABITS="${ABITS:-8}"
 GROUP_SIZE="${GROUP_SIZE:-0}"
 EPOCHS="${EPOCHS:-2}"
-ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-eager}"
+ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 DTYPE="${DTYPE:-bfloat16}"
 DEVICE_MAP="${DEVICE_MAP:-auto}"
 LOCAL_FILES_ONLY="${LOCAL_FILES_ONLY:-true}"
@@ -124,13 +124,22 @@ VLMEVAL_MODE="${VLMEVAL_MODE:-auto}"
 VLMEVAL_REUSE="${VLMEVAL_REUSE:-1}"
 VLMEVAL_REUSE_AUX="${VLMEVAL_REUSE_AUX:-1}"
 VLMEVAL_JUDGE="${VLMEVAL_JUDGE:-}"
-VLMEVAL_EXACT_MATCH_DATASETS="${VLMEVAL_EXACT_MATCH_DATASETS:-MME MMStar}"
+VLMEVAL_EXACT_MATCH_DATASETS="${VLMEVAL_EXACT_MATCH_DATASETS:-MME}"
 VLMEVAL_FORCE_EVAL="${VLMEVAL_FORCE_EVAL:-0}"
+LMMS_EVAL_ROOT="${LMMS_EVAL_ROOT:-$PROJECT_ROOT/third_party/lmms-eval}"
+LMMS_EVAL_TASKS="${LMMS_EVAL_TASKS:-}"
+LMMS_EVAL_OUTPUT_PATH="${LMMS_EVAL_OUTPUT_PATH:-$WORK_DIR/lmms_eval_masquant_pseudo}"
+LMMS_EVAL_CACHE="${LMMS_EVAL_CACHE:-$WORK_DIR/lmms_eval_cache}"
+LMMS_EVAL_LIMIT="${LMMS_EVAL_LIMIT:-}"
+LMMS_EVAL_LOG_SAMPLES="${LMMS_EVAL_LOG_SAMPLES:-1}"
+LMMS_EVAL_VERBOSITY="${LMMS_EVAL_VERBOSITY:-INFO}"
+LMMS_EVAL_DISABLE_OPENAI="${LMMS_EVAL_DISABLE_OPENAI:-1}"
 
 RUN_CALIBRATE="${RUN_CALIBRATE:-1}"
 RUN_CMC="${RUN_CMC:-1}"
 RUN_INSTALL_VLMEVAL="${RUN_INSTALL_VLMEVAL:-1}"
 RUN_VLMEVAL="${RUN_VLMEVAL:-1}"
+RUN_LMMS_EVAL="${RUN_LMMS_EVAL:-0}"
 USE_CMC="${USE_CMC:-1}"
 
 mkdir -p "$WORK_DIR"
@@ -352,6 +361,83 @@ if [[ "$RUN_VLMEVAL" == "1" ]]; then
   run_cmd "${vlmeval_cmd[@]}"
 else
   log "Skipping VLMEvalKit evaluation because RUN_VLMEVAL=$RUN_VLMEVAL"
+fi
+
+if [[ "$RUN_LMMS_EVAL" == "1" ]]; then
+  require_path LMMS_EVAL_ROOT
+  if [[ -z "$MASQUANT_RESUME" ]]; then
+    MASQUANT_RESUME="$(find "$WORK_DIR/masquant_outputs" -name mas_parameters.pth | sort | tail -n 1 || true)"
+  fi
+  if [[ -z "$MASQUANT_RESUME" ]]; then
+    echo "Could not find MASQuant resume under $WORK_DIR/masquant_outputs for lmms-eval." >&2
+    echo "Set MASQUANT_RESUME or run calibration first." >&2
+    exit 1
+  fi
+  if [[ ! -f "$MASQUANT_RESUME" ]]; then
+    echo "MASQUANT_RESUME does not exist: $MASQUANT_RESUME" >&2
+    exit 1
+  fi
+  if [[ -z "$LMMS_EVAL_TASKS" ]]; then
+    echo "RUN_LMMS_EVAL=1 requires LMMS_EVAL_TASKS." >&2
+    exit 1
+  fi
+
+  export PYTHONPATH="$PROJECT_ROOT/src:$LMMS_EVAL_ROOT:${PYTHONPATH:-}"
+  export QWEN2VL_MODEL="$MODEL_PATH"
+  export QWEN25VL_MODEL="$MODEL_PATH"
+  export MASQUANT_ROOT
+  export MASQUANT_RESUME
+  export MASQUANT_ACT_SCALES
+  export CMC_LOW_RANK
+  export CMC_WHITE
+  export PQ_MODEL_TYPE="$MODEL_TYPE"
+  export PQ_QUANT_METHOD=masquant
+  export PQ_DTYPE="$DTYPE"
+  export PQ_DEVICE_MAP="$DEVICE_MAP"
+  export PQ_ATTN_IMPLEMENTATION="$ATTN_IMPLEMENTATION"
+  export PQ_MASQUANT_WBITS="$WBITS"
+  export PQ_MASQUANT_ABITS="$ABITS"
+  export PQ_MASQUANT_GROUP_SIZE="$GROUP_SIZE"
+  export PQ_MASQUANT_INFERENCE_MODE="${PQ_MASQUANT_INFERENCE_MODE:-split_scales}"
+  export PQ_MASQUANT_BATCH_SIZE="$BATCH_SIZE"
+  export PQ_MASQUANT_SYMMETRIC="${PQ_MASQUANT_SYMMETRIC:-true}"
+  export PQ_CMC_RANK="$CMC_RANK"
+  export PQ_CMC_QUANT_CMC="$CMC_QUANT_CMC"
+  export PQ_MAX_NEW_TOKENS="$MAX_NEW_TOKENS"
+  export PQ_RETENTION_RATIO="$EVAL_RETENTION_RATIO"
+  export PQ_MIN_KEEP="$MIN_KEEP"
+  export PQ_PRUNER="$PRUNER"
+  export PQ_GAE_ANSWER_SOURCE="$GAE_ANSWER_SOURCE"
+  export PQ_GAE_PER_TOKEN="$GAE_PER_TOKEN"
+  export PQ_GAE_QUANT_LAMBDA="$GAE_QUANT_LAMBDA"
+  export PQ_GAE_QUANT_METHOD="$GAE_QUANT_METHOD"
+  export PQ_RTN_BITS="$RTN_BITS"
+  export PQ_RTN_GROUP_SIZE="$RTN_GROUP_SIZE"
+  export PQ_GAE_DISABLE_MASQUANT_FAKE_QUANT="$GAE_DISABLE_MASQUANT_FAKE_QUANT"
+  export PQ_ALLOW_VANILLA_FALLBACK="$ALLOW_VANILLA_FALLBACK"
+  export PQ_MIN_PIXELS="$PROCESSOR_MIN_PIXELS"
+  export PQ_MAX_PIXELS="$PROCESSOR_MAX_PIXELS"
+  export PQ_MIN_VISUAL_TOKENS="$PROCESSOR_MIN_VISUAL_TOKENS"
+  export PQ_MAX_VISUAL_TOKENS="$PROCESSOR_MAX_VISUAL_TOKENS"
+
+  read -r -a lmms_eval_tasks <<< "$LMMS_EVAL_TASKS"
+  lmms_eval_cmd=(
+    "$PYTHON" "$PROJECT_ROOT/remote/run_lmms_eval_smart.py"
+    --lmms-eval-root "$LMMS_EVAL_ROOT"
+    --tasks "${lmms_eval_tasks[@]}"
+    --model prune_quant_qwen2vl
+    --model-path "$QWEN2VL_MODEL"
+    --output-path "$LMMS_EVAL_OUTPUT_PATH"
+    --cache "$LMMS_EVAL_CACHE"
+    --python "$PYTHON"
+    --batch-size "$BATCH_SIZE"
+    --verbosity "$LMMS_EVAL_VERBOSITY"
+  )
+  append_if_set lmms_eval_cmd --limit "$LMMS_EVAL_LIMIT"
+  append_bool_flag lmms_eval_cmd --log-samples "$LMMS_EVAL_LOG_SAMPLES"
+  run_cmd "${lmms_eval_cmd[@]}"
+else
+  log "Skipping lmms-eval because RUN_LMMS_EVAL=$RUN_LMMS_EVAL"
 fi
 
 log "Pipeline finished."

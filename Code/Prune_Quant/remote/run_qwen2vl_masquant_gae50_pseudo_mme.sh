@@ -42,8 +42,8 @@ export PROCESSOR_USE_FAST=
 # Keep visual-token resolution fixed across vanilla, pure pruning, and MASQuant.
 export PROCESSOR_MIN_PIXELS=
 export PROCESSOR_MAX_PIXELS=
-export PROCESSOR_MIN_VISUAL_TOKENS=1500
-export PROCESSOR_MAX_VISUAL_TOKENS=1500
+export PROCESSOR_MIN_VISUAL_TOKENS="${PROCESSOR_MIN_VISUAL_TOKENS:-}"
+export PROCESSOR_MAX_VISUAL_TOKENS="${PROCESSOR_MAX_VISUAL_TOKENS:-1500}"
 
 # ---- Pruning behavior ----
 # 0.5 means keep the top 50% visual tokens during MASQuant calibration.
@@ -70,16 +70,16 @@ export CMC_QUANT_CMC=0
 export CMC_N_CALI_SAMPLES=128
 
 # ---- VLMEvalKit ----
-export VLMEVAL_DATASETS="MME MMStar"
+export VLMEVAL_DATASETS="${VLMEVAL_DATASETS:-MME}"
 export VLMEVAL_MODEL_NAME=Qwen2VL_MASQuant_Pseudo
-export VLMEVAL_WORK_DIR="$WORK_DIR/vlmeval_mme_mmstar_masquant_gae50"
+export VLMEVAL_WORK_DIR="$WORK_DIR/vlmeval_mme_masquant_gae50"
 export MAX_NEW_TOKENS=16
 export VLMEVAL_VERBOSE=1
 export VLMEVAL_SMART_RUNNER=1
 export VLMEVAL_MODE=auto
 export VLMEVAL_REUSE=1
 export VLMEVAL_REUSE_AUX=1
-export VLMEVAL_EXACT_MATCH_DATASETS="MME MMStar"
+export VLMEVAL_EXACT_MATCH_DATASETS="${VLMEVAL_EXACT_MATCH_DATASETS:-MME}"
 export VLMEVAL_DISABLE_OPENAI=1
 
 # ---- Resume / stage switches ----
@@ -129,6 +129,17 @@ fi
 
 export RUN_INSTALL_VLMEVAL="${RUN_INSTALL_VLMEVAL:-1}"
 export RUN_VLMEVAL="${RUN_VLMEVAL:-1}"
+export RUN_LMMS_EVAL="${RUN_LMMS_EVAL:-1}"
+
+# ---- lmms-eval ----
+export LMMS_EVAL_ROOT="${LMMS_EVAL_ROOT:-$PROJECT_ROOT/third_party/lmms-eval}"
+export LMMS_EVAL_TASKS="${LMMS_EVAL_TASKS:-mmmu_val ocrbench vizwiz_vqa_val scienceqa_img textvqa_val}"
+export LMMS_EVAL_OUTPUT_PATH="${LMMS_EVAL_OUTPUT_PATH:-$WORK_DIR/lmms_eval_masquant_gae50}"
+export LMMS_EVAL_CACHE="${LMMS_EVAL_CACHE:-$WORK_DIR/lmms_eval_cache}"
+export LMMS_EVAL_LIMIT="${LMMS_EVAL_LIMIT:-}"
+export LMMS_EVAL_LOG_SAMPLES="${LMMS_EVAL_LOG_SAMPLES:-1}"
+export LMMS_EVAL_VERBOSITY="${LMMS_EVAL_VERBOSITY:-INFO}"
+export LMMS_EVAL_DISABLE_OPENAI="${LMMS_EVAL_DISABLE_OPENAI:-1}"
 
 echo "[gae50] RUN_CALIBRATE=${RUN_CALIBRATE:-1} MASQUANT_RESUME=${MASQUANT_RESUME:-<auto-after-calibrate>}"
 echo "[gae50] RUN_CMC=${RUN_CMC:-1} CMC_LOW_RANK=$CMC_LOW_RANK CMC_WHITE=$CMC_WHITE"

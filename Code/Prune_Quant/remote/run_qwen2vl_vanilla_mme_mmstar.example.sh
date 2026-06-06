@@ -17,7 +17,9 @@ export PYTHON="${PYTHON:-python3}"
 
 # ---- Model ----
 export QWEN2VL_MODEL="$MODEL_PATH"
-export PQ_ATTN_IMPLEMENTATION=eager
+# Full-token evaluation does not request attention scores, so use accelerated
+# SDPA by default while still allowing callers to override it.
+export PQ_ATTN_IMPLEMENTATION="${PQ_ATTN_IMPLEMENTATION:-sdpa}"
 export PQ_MAX_NEW_TOKENS=16
 
 # Optional image resolution controls.

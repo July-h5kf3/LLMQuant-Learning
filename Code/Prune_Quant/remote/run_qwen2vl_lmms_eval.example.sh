@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Copy this file to a local run script, edit the variables below, then run it.
-# This script evaluates Qwen2-VL with lmms-eval on OCRBench, VizWiz, ScienceQA,
-# and TextVQA through the Prune_Quant wrapper.
+# This script evaluates Qwen2-VL with lmms-eval on MMMU, OCRBench, VizWiz,
+# ScienceQA, and TextVQA through the Prune_Quant wrapper.
 
 # ---- Paths ----
 export PROJECT_ROOT=/home/aistudio/LLMQuant-Learning/Code/Prune_Quant
@@ -22,8 +22,8 @@ export PQ_MAX_NEW_TOKENS=16
 
 # Optional image resolution controls. Keep this fixed across VLMEvalKit and
 # lmms-eval when comparing pruning/quantization variants.
-export PQ_MIN_VISUAL_TOKENS=1500
-export PQ_MAX_VISUAL_TOKENS=1500
+export PQ_MIN_VISUAL_TOKENS="${PQ_MIN_VISUAL_TOKENS:-}"
+export PQ_MAX_VISUAL_TOKENS="${PQ_MAX_VISUAL_TOKENS:-1500}"
 export PQ_MIN_PIXELS=
 export PQ_MAX_PIXELS=
 
@@ -35,7 +35,7 @@ export PQ_GAE_ANSWER_SOURCE=generated
 export PQ_GAE_PER_TOKEN=false
 
 # ---- lmms-eval ----
-export LMMS_EVAL_TASKS="ocrbench vizwiz_vqa_val scienceqa_img textvqa_val"
+export LMMS_EVAL_TASKS="${LMMS_EVAL_TASKS:-mmmu_val ocrbench vizwiz_vqa_val scienceqa_img textvqa_val}"
 export LMMS_EVAL_OUTPUT_PATH="$WORK_DIR/lmms_eval_qwen2vl_gae_r${PQ_RETENTION_RATIO}"
 export LMMS_EVAL_CACHE="$WORK_DIR/lmms_eval_cache"
 export LMMS_EVAL_LIMIT=
@@ -84,6 +84,7 @@ lmms_eval_cmd=(
   --cache "$LMMS_EVAL_CACHE"
   --python "$PYTHON"
   --batch-size 1
+  --verbosity "${LMMS_EVAL_VERBOSITY:-INFO}"
 )
 if [[ -n "$LMMS_EVAL_LIMIT" ]]; then
   lmms_eval_cmd+=(--limit "$LMMS_EVAL_LIMIT")
