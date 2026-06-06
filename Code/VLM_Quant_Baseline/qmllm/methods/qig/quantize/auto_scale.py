@@ -234,15 +234,23 @@ def auto_scale_block(
         def _uniform_weights(x, ans_mask, vis_mask):
             """
             Uniformly assign weights over tokens where ans_mask==1 or vis_mask==1;
-            all other tokens receive weight 0.
+            all other tokens receive weight 0. If no masks are available, use
+            all tokens so weight-only QIG can run without reweighting masks.
             """
             device = x.device
             dtype = torch.float32
             B, T, _ = x.shape
 
-            # Ensure masks are on the same device
-            ans_mask = ans_mask.to(device=device, dtype=dtype)
-            vis_mask = vis_mask.to(device=device, dtype=dtype)
+            if ans_mask is None and vis_mask is None:
+                return torch.full((B, T), 1.0 / T, device=device, dtype=dtype)
+            if ans_mask is None:
+                ans_mask = torch.zeros((B, T), device=device, dtype=dtype)
+            else:
+                ans_mask = ans_mask.to(device=device, dtype=dtype)
+            if vis_mask is None:
+                vis_mask = torch.zeros((B, T), device=device, dtype=dtype)
+            else:
+                vis_mask = vis_mask.to(device=device, dtype=dtype)
 
             # A token is valid if either mask is 1
             valid_mask = ((ans_mask > 0) | (vis_mask > 0)).float()
