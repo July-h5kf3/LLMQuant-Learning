@@ -189,6 +189,8 @@ def _prepare_local_task_overlays(
             continue
 
         overlay_root.mkdir(parents=True, exist_ok=True)
+        datasets_cache_dir = output_path / "_hf_datasets_cache"
+        datasets_cache_dir.mkdir(parents=True, exist_ok=True)
         local_task = f"pq_local_{task}"
         source_yaml = task_root.joinpath(*task_config["source_yaml"])
         overlay_path = overlay_root / f"{task}.yaml"
@@ -198,6 +200,7 @@ def _prepare_local_task_overlays(
             dataset_kwargs.append("  data_files:")
         for split, parts in data_files.items():
             dataset_kwargs.append(f"    {split}: {snapshot.joinpath(*parts)}")
+        dataset_kwargs.append(f"  cache_dir: {datasets_cache_dir}")
         dataset_kwargs.append("  local_files_only: true")
         overlay_path.write_text(
             "\n".join(

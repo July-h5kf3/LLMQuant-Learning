@@ -160,6 +160,7 @@ def test_lmms_eval_prepares_local_task_overlay_for_cached_hf_dataset(tmp_path: P
     assert "local_files_only: true" in overlay
     assert "dataset_kwargs:\n  data_files:" in overlay
     assert f"    validation: {snapshot / 'data' / 'validation-*'}" in overlay
+    assert f"  cache_dir: {output_path / '_hf_datasets_cache'}" in overlay
     assert "task: pq_local_mmmu_val" in overlay
 
 
