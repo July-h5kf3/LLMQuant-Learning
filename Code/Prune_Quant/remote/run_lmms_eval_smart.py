@@ -92,11 +92,13 @@ def _build_subprocess_env(project_root: str | Path, lmms_eval_root: str | Path) 
         env["HF_DATASETS_CACHE"] = str(hf_home / "datasets")
         env["HF_HUB_CACHE"] = str(hf_home / "hub")
         env["HF_MODULES_CACHE"] = str(hf_home / "modules")
+        env["LMMS_EVAL_DATASETS_CACHE"] = str(hf_home / "datasets")
     else:
         env.setdefault("HF_HOME", str(DEFAULT_HF_HOME))
         env.setdefault("HF_DATASETS_CACHE", str(DEFAULT_HF_HOME / "datasets"))
         env.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_HOME / "hub"))
         env.setdefault("HF_MODULES_CACHE", str(DEFAULT_HF_HOME / "modules"))
+        env.setdefault("LMMS_EVAL_DATASETS_CACHE", env["HF_DATASETS_CACHE"])
     env.setdefault("HF_DATASETS_OFFLINE", "1")
     env.setdefault("HF_HUB_OFFLINE", "1")
 
@@ -171,6 +173,7 @@ def main() -> int:
         f"HF_DATASETS_CACHE={env.get('HF_DATASETS_CACHE', '')} "
         f"HF_HUB_CACHE={env.get('HF_HUB_CACHE', '')} "
         f"HF_MODULES_CACHE={env.get('HF_MODULES_CACHE', '')} "
+        f"LMMS_EVAL_DATASETS_CACHE={env.get('LMMS_EVAL_DATASETS_CACHE', '')} "
         f"HF_DATASETS_OFFLINE={env.get('HF_DATASETS_OFFLINE', '')} "
         f"HF_HUB_OFFLINE={env.get('HF_HUB_OFFLINE', '')}",
         flush=True,

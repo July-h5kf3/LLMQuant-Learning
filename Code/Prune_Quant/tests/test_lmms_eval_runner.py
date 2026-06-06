@@ -69,6 +69,7 @@ def test_lmms_eval_env_defaults_to_local_hf_dataset_cache(monkeypatch) -> None:
         "HF_HOME",
         "HF_DATASETS_CACHE",
         "HF_HUB_CACHE",
+        "LMMS_EVAL_DATASETS_CACHE",
         "HF_DATASETS_OFFLINE",
         "HF_HUB_OFFLINE",
     ):
@@ -79,6 +80,7 @@ def test_lmms_eval_env_defaults_to_local_hf_dataset_cache(monkeypatch) -> None:
     assert env["HF_HOME"] == "/home/aistudio/data/datasets/387822/abcd/hf_home"
     assert env["HF_DATASETS_CACHE"] == "/home/aistudio/data/datasets/387822/abcd/hf_home/datasets"
     assert env["HF_HUB_CACHE"] == "/home/aistudio/data/datasets/387822/abcd/hf_home/hub"
+    assert env["LMMS_EVAL_DATASETS_CACHE"] == "/home/aistudio/data/datasets/387822/abcd/hf_home/datasets"
     assert env["HF_DATASETS_OFFLINE"] == "1"
     assert env["HF_HUB_OFFLINE"] == "1"
 
@@ -88,6 +90,7 @@ def test_lmms_eval_env_preserves_explicit_hf_cache_overrides(monkeypatch) -> Non
     monkeypatch.setenv("HF_HOME", "/custom/hf")
     monkeypatch.setenv("HF_DATASETS_CACHE", "/custom/datasets")
     monkeypatch.setenv("HF_HUB_CACHE", "/custom/hub")
+    monkeypatch.setenv("LMMS_EVAL_DATASETS_CACHE", "/custom/lmms-datasets")
     monkeypatch.setenv("HF_DATASETS_OFFLINE", "0")
     monkeypatch.setenv("HF_HUB_OFFLINE", "0")
 
@@ -96,6 +99,7 @@ def test_lmms_eval_env_preserves_explicit_hf_cache_overrides(monkeypatch) -> Non
     assert env["HF_HOME"] == "/custom/hf"
     assert env["HF_DATASETS_CACHE"] == "/custom/datasets"
     assert env["HF_HUB_CACHE"] == "/custom/hub"
+    assert env["LMMS_EVAL_DATASETS_CACHE"] == "/custom/lmms-datasets"
     assert env["HF_DATASETS_OFFLINE"] == "0"
     assert env["HF_HUB_OFFLINE"] == "0"
 
@@ -106,12 +110,14 @@ def test_lmms_eval_env_prefers_lmms_eval_hf_home_over_ambient_hf_home(monkeypatc
     monkeypatch.setenv("HF_HOME", "/wrong/hf")
     monkeypatch.setenv("HF_DATASETS_CACHE", "/wrong/datasets")
     monkeypatch.setenv("HF_HUB_CACHE", "/wrong/hub")
+    monkeypatch.setenv("LMMS_EVAL_DATASETS_CACHE", "/wrong/lmms-datasets")
 
     env = module._build_subprocess_env("/repo", "/repo/third_party/lmms-eval")
 
     assert env["HF_HOME"] == "/mounted/hf_home"
     assert env["HF_DATASETS_CACHE"] == "/mounted/hf_home/datasets"
     assert env["HF_HUB_CACHE"] == "/mounted/hf_home/hub"
+    assert env["LMMS_EVAL_DATASETS_CACHE"] == "/mounted/hf_home/datasets"
 
 
 def test_lmms_eval_model_plugin_exposes_empty_tasks_package() -> None:
