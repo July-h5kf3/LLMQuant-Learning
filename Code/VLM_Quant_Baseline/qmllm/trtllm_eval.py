@@ -95,6 +95,23 @@ def _load_trtllm_checkpoint_config(path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _select_trtllm_runtime_config(
+    pretrained: str,
+    *,
+    engine_dir: Optional[str],
+    backend: str,
+    model_type: str,
+) -> Dict[str, Any]:
+    if backend == "engine" and model_type == "qwen2_vl" and engine_dir:
+        engine_config = _load_trtllm_checkpoint_config(str(Path(engine_dir) / "llm"))
+        pretrained_config = engine_config.get("pretrained_config")
+        if isinstance(pretrained_config, dict):
+            return pretrained_config
+        if engine_config:
+            return engine_config
+    return _load_trtllm_checkpoint_config(pretrained)
+
+
 def _load_legacy_qwen2vl_normalize_backup(path: str) -> Dict[str, Any]:
     config_path = Path(path) / "config.json.bak_qwen2vl_normalize"
     if not config_path.exists():
@@ -173,7 +190,12 @@ class TRTLLMRealQuantModel(lmms):
         self.tokenizer_path = tokenizer_path or pretrained
         inferred_model_type = _load_model_type(self.tokenizer_path, model_type)
         self.model_type = _canonical_model_type(inferred_model_type)
-        self._checkpoint_config = _load_trtllm_checkpoint_config(pretrained)
+        self._checkpoint_config = _select_trtllm_runtime_config(
+            pretrained,
+            engine_dir=engine_dir,
+            backend=backend,
+            model_type=self.model_type,
+        )
         self._checkpoint_model_type = self._checkpoint_config.get("model_type")
         self._checkpoint_architectures = self._checkpoint_config.get("architectures") or []
         self._legacy_normalize_backup = _load_legacy_qwen2vl_normalize_backup(pretrained)
