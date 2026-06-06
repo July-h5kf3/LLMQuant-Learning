@@ -392,6 +392,9 @@ def run_qig(
                 vis_mask = vision_mask
             
             if wa_quant:
+                wa_q_input = inps
+                if distort:
+                    wa_q_input = inps_distort
                 scales_list = auto_scale_block_wa_distort(
                     layer,
                     layer_kwargs,
@@ -402,7 +405,7 @@ def run_qig(
                     ans_mask=ans_mask,
                     vis_mask=vis_mask,
                     reweight_ratio_dict=scale_reweight_ratio_dict,
-                    q_input=inps_distort,
+                    q_input=wa_q_input,
                     loss_mode=loss_mode
                 )
             else:
