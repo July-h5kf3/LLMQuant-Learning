@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 
-DEFAULT_TASKS = ("ocrbench", "vizwiz_vqa_val", "scienceqa_img", "textvqa_val")
+DEFAULT_TASKS = ("mmmu_val", "ocrbench", "vizwiz_vqa_val", "scienceqa_img", "textvqa_val")
 MODEL_PLUGIN_MODULE = "prune_quant_baseline.lmms_eval"
 DEFAULT_HF_HOME = Path("/home/aistudio/data/datasets/387822/abcd/hf_home")
 
@@ -85,9 +85,18 @@ def _build_subprocess_env(project_root: str | Path, lmms_eval_root: str | Path) 
         plugins.append(MODEL_PLUGIN_MODULE)
     env["LMMS_EVAL_PLUGINS"] = ",".join(plugins)
 
-    env.setdefault("HF_HOME", str(DEFAULT_HF_HOME))
-    env.setdefault("HF_DATASETS_CACHE", str(DEFAULT_HF_HOME / "datasets"))
-    env.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_HOME / "hub"))
+    lmms_eval_hf_home = env.get("LMMS_EVAL_HF_HOME", "").strip()
+    if lmms_eval_hf_home:
+        hf_home = Path(lmms_eval_hf_home)
+        env["HF_HOME"] = str(hf_home)
+        env["HF_DATASETS_CACHE"] = str(hf_home / "datasets")
+        env["HF_HUB_CACHE"] = str(hf_home / "hub")
+        env["HF_MODULES_CACHE"] = str(hf_home / "modules")
+    else:
+        env.setdefault("HF_HOME", str(DEFAULT_HF_HOME))
+        env.setdefault("HF_DATASETS_CACHE", str(DEFAULT_HF_HOME / "datasets"))
+        env.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_HOME / "hub"))
+        env.setdefault("HF_MODULES_CACHE", str(DEFAULT_HF_HOME / "modules"))
     env.setdefault("HF_DATASETS_OFFLINE", "1")
     env.setdefault("HF_HUB_OFFLINE", "1")
 
@@ -156,6 +165,16 @@ def main() -> int:
     env = _build_subprocess_env(project_root, lmms_eval_root)
 
     print("[lmms-eval-smart] " + " ".join(cmd), flush=True)
+    print(
+        "[lmms-eval-smart] "
+        f"HF_HOME={env.get('HF_HOME', '')} "
+        f"HF_DATASETS_CACHE={env.get('HF_DATASETS_CACHE', '')} "
+        f"HF_HUB_CACHE={env.get('HF_HUB_CACHE', '')} "
+        f"HF_MODULES_CACHE={env.get('HF_MODULES_CACHE', '')} "
+        f"HF_DATASETS_OFFLINE={env.get('HF_DATASETS_OFFLINE', '')} "
+        f"HF_HUB_OFFLINE={env.get('HF_HUB_OFFLINE', '')}",
+        flush=True,
+    )
     if args.dry_run:
         return 0
     return subprocess.run(cmd, cwd=lmms_eval_root, env=env, check=False).returncode

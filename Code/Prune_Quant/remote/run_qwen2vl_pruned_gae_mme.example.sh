@@ -56,6 +56,7 @@ export RUN_LMMS_EVAL="${RUN_LMMS_EVAL:-1}"
 
 # ---- lmms-eval ----
 export LMMS_EVAL_ROOT="${LMMS_EVAL_ROOT:-$PROJECT_ROOT/third_party/lmms-eval}"
+export LMMS_EVAL_HF_HOME="${LMMS_EVAL_HF_HOME:-/home/aistudio/data/datasets/387822/abcd/hf_home}"
 export LMMS_EVAL_TASKS="${LMMS_EVAL_TASKS:-mmmu_val ocrbench vizwiz_vqa_val scienceqa_img textvqa_val}"
 export LMMS_EVAL_OUTPUT_PATH="${LMMS_EVAL_OUTPUT_PATH:-$WORK_DIR/lmms_eval_qwen2vl_pruned_gae_r${PQ_RETENTION_RATIO}}"
 export LMMS_EVAL_CACHE="${LMMS_EVAL_CACHE:-$WORK_DIR/lmms_eval_cache}"

@@ -14,6 +14,15 @@ GAE_MASQUANT_SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_masquant_gae50_pseudo_
 PIPELINE_SCRIPT = REPO_ROOT / "remote" / "run_masquant_pseudo_pipeline.sh"
 VANILLA_SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_vanilla_mme_mmstar.example.sh"
 VANILLA_ALL_SCRIPT = REPO_ROOT / "remote" / "run_qwen2vl_vanilla_all_benchmarks.sh"
+ALL_LMMS_SCRIPTS = (
+    SCRIPT,
+    PURE_GAE_SCRIPT,
+    LMMS_ONLY_SCRIPT,
+    MASQUANT_SCRIPT,
+    GAE_MASQUANT_SCRIPT,
+    PIPELINE_SCRIPT,
+    VANILLA_ALL_SCRIPT,
+)
 
 
 def test_all_benchmarks_script_covers_requested_benchmarks() -> None:
@@ -41,8 +50,18 @@ def test_lmms_eval_runner_defaults_to_requested_local_hf_cache() -> None:
     text = (REPO_ROOT / "remote" / "run_lmms_eval_smart.py").read_text(encoding="utf-8")
 
     assert f'DEFAULT_HF_HOME = Path("{LMMS_HF_HOME}")' in text
+    assert 'LMMS_EVAL_HF_HOME' in text
     assert 'env.setdefault("HF_DATASETS_OFFLINE", "1")' in text
     assert 'env.setdefault("HF_HUB_OFFLINE", "1")' in text
+
+
+def test_lmms_eval_scripts_pin_aistudio_hf_cache() -> None:
+    expected = f'export LMMS_EVAL_HF_HOME="${{LMMS_EVAL_HF_HOME:-{LMMS_HF_HOME}}}"'
+
+    for script in ALL_LMMS_SCRIPTS:
+        text = script.read_text(encoding="utf-8")
+
+        assert expected in text
 
 
 def test_all_benchmarks_script_caps_only_large_images_to_1500_visual_tokens() -> None:

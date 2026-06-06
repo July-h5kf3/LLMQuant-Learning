@@ -35,6 +35,7 @@ export PQ_GAE_ANSWER_SOURCE=generated
 export PQ_GAE_PER_TOKEN=false
 
 # ---- lmms-eval ----
+export LMMS_EVAL_HF_HOME="${LMMS_EVAL_HF_HOME:-/home/aistudio/data/datasets/387822/abcd/hf_home}"
 export LMMS_EVAL_TASKS="${LMMS_EVAL_TASKS:-mmmu_val ocrbench vizwiz_vqa_val scienceqa_img textvqa_val}"
 export LMMS_EVAL_OUTPUT_PATH="$WORK_DIR/lmms_eval_qwen2vl_gae_r${PQ_RETENTION_RATIO}"
 export LMMS_EVAL_CACHE="$WORK_DIR/lmms_eval_cache"

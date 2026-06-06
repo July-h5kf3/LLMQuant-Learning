@@ -86,6 +86,7 @@ export VLMEVAL_EXACT_MATCH_DATASETS="${VLMEVAL_EXACT_MATCH_DATASETS:-MME}"
 export VLMEVAL_DISABLE_OPENAI="${VLMEVAL_DISABLE_OPENAI:-1}"
 
 # ---- lmms-eval: MMMU/OCRBench/VizWiz/ScienceQA/TextVQA ----
+export LMMS_EVAL_HF_HOME="${LMMS_EVAL_HF_HOME:-/home/aistudio/data/datasets/387822/abcd/hf_home}"
 export LMMS_EVAL_TASKS="${LMMS_EVAL_TASKS:-mmmu_val ocrbench vizwiz_vqa_val scienceqa_img textvqa_val}"
 export LMMS_EVAL_OUTPUT_PATH="${LMMS_EVAL_OUTPUT_PATH:-$WORK_DIR/lmms_eval_qwen2vl_vanilla}"
 export LMMS_EVAL_CACHE="${LMMS_EVAL_CACHE:-$WORK_DIR/lmms_eval_cache}"

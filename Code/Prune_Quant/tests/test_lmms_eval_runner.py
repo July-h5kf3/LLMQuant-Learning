@@ -18,7 +18,7 @@ def _load_runner_module():
 def test_lmms_eval_default_tasks_match_metric_plan() -> None:
     module = _load_runner_module()
 
-    assert module.DEFAULT_TASKS == ("ocrbench", "vizwiz_vqa_val", "scienceqa_img", "textvqa_val")
+    assert module.DEFAULT_TASKS == ("mmmu_val", "ocrbench", "vizwiz_vqa_val", "scienceqa_img", "textvqa_val")
 
 
 def test_lmms_eval_model_args_from_environment(monkeypatch) -> None:
@@ -98,6 +98,20 @@ def test_lmms_eval_env_preserves_explicit_hf_cache_overrides(monkeypatch) -> Non
     assert env["HF_HUB_CACHE"] == "/custom/hub"
     assert env["HF_DATASETS_OFFLINE"] == "0"
     assert env["HF_HUB_OFFLINE"] == "0"
+
+
+def test_lmms_eval_env_prefers_lmms_eval_hf_home_over_ambient_hf_home(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.setenv("LMMS_EVAL_HF_HOME", "/mounted/hf_home")
+    monkeypatch.setenv("HF_HOME", "/wrong/hf")
+    monkeypatch.setenv("HF_DATASETS_CACHE", "/wrong/datasets")
+    monkeypatch.setenv("HF_HUB_CACHE", "/wrong/hub")
+
+    env = module._build_subprocess_env("/repo", "/repo/third_party/lmms-eval")
+
+    assert env["HF_HOME"] == "/mounted/hf_home"
+    assert env["HF_DATASETS_CACHE"] == "/mounted/hf_home/datasets"
+    assert env["HF_HUB_CACHE"] == "/mounted/hf_home/hub"
 
 
 def test_lmms_eval_model_plugin_exposes_empty_tasks_package() -> None:
