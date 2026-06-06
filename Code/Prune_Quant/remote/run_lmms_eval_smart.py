@@ -13,6 +13,28 @@ from pathlib import Path
 DEFAULT_TASKS = ("mmmu_val", "ocrbench", "vizwiz_vqa_val", "scienceqa_img", "textvqa_val")
 MODEL_PLUGIN_MODULE = "prune_quant_baseline.lmms_eval"
 DEFAULT_HF_HOME = Path("/home/aistudio/data/datasets/387822/abcd/hf_home")
+LOCAL_DATASET_TASKS = {
+    "mmmu_val": {
+        "repo_id": "lmms-lab/MMMU",
+        "source_yaml": ("mmmu", "mmmu_val.yaml"),
+    },
+    "ocrbench": {
+        "repo_id": "echo840/OCRBench",
+        "source_yaml": ("ocrbench", "ocrbench.yaml"),
+    },
+    "vizwiz_vqa_val": {
+        "repo_id": "lmms-lab/VizWiz-VQA",
+        "source_yaml": ("vizwiz_vqa", "vizwiz_vqa_val.yaml"),
+    },
+    "scienceqa_img": {
+        "repo_id": "lmms-lab/ScienceQA",
+        "source_yaml": ("scienceqa", "scienceqa_img.yaml"),
+    },
+    "textvqa_val": {
+        "repo_id": "lmms-lab/textvqa",
+        "source_yaml": ("textvqa", "textvqa_val.yaml"),
+    },
+}
 
 
 def _bool_env(name: str, default: str) -> bool:
@@ -117,6 +139,71 @@ def _build_subprocess_env(project_root: str | Path, lmms_eval_root: str | Path) 
     return env
 
 
+def _hf_dataset_cache_name(repo_id: str) -> str:
+    return f"datasets--{repo_id.replace('/', '--')}"
+
+
+def _resolve_local_hf_dataset_snapshot(hf_home: Path, repo_id: str) -> Path | None:
+    repo_cache = hf_home / "hub" / _hf_dataset_cache_name(repo_id)
+    snapshots = repo_cache / "snapshots"
+    ref_main = repo_cache / "refs" / "main"
+    if ref_main.exists():
+        revision = ref_main.read_text(encoding="utf-8").strip()
+        snapshot = snapshots / revision
+        if snapshot.exists():
+            return snapshot
+    if snapshots.exists():
+        snapshot_dirs = sorted(path for path in snapshots.iterdir() if path.is_dir())
+        if snapshot_dirs:
+            return snapshot_dirs[-1]
+    return None
+
+
+def _prepare_local_task_overlays(
+    tasks: list[str],
+    lmms_eval_root: Path,
+    hf_home: Path,
+    output_path: Path,
+) -> tuple[list[str], Path | None]:
+    overlay_root = output_path / "_local_lmms_tasks"
+    rewritten_tasks: list[str] = []
+    wrote_overlay = False
+    task_root = lmms_eval_root / "lmms_eval" / "tasks"
+
+    for task in tasks:
+        task_config = LOCAL_DATASET_TASKS.get(task)
+        if task_config is None:
+            rewritten_tasks.append(task)
+            continue
+
+        snapshot = _resolve_local_hf_dataset_snapshot(hf_home, task_config["repo_id"])
+        if snapshot is None:
+            rewritten_tasks.append(task)
+            continue
+
+        overlay_root.mkdir(parents=True, exist_ok=True)
+        local_task = f"pq_local_{task}"
+        source_yaml = task_root.joinpath(*task_config["source_yaml"])
+        overlay_path = overlay_root / f"{task}.yaml"
+        overlay_path.write_text(
+            "\n".join(
+                [
+                    f"include: {source_yaml}",
+                    f"task: {local_task}",
+                    f"dataset_path: {snapshot}",
+                    "dataset_kwargs:",
+                    "  local_files_only: true",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        rewritten_tasks.append(local_task)
+        wrote_overlay = True
+
+    return rewritten_tasks, overlay_root if wrote_overlay else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lmms-eval-root", default="")
@@ -139,6 +226,14 @@ def main() -> int:
     if not lmms_eval_root.exists():
         raise FileNotFoundError(f"lmms-eval root not found: {lmms_eval_root}")
 
+    hf_home = Path(os.environ.get("LMMS_EVAL_HF_HOME", str(DEFAULT_HF_HOME))).expanduser()
+    tasks, include_path = _prepare_local_task_overlays(
+        tasks=list(args.tasks),
+        lmms_eval_root=lmms_eval_root,
+        hf_home=hf_home,
+        output_path=args.output_path,
+    )
+
     model_args = _build_default_model_args(args)
     cmd = [
         args.python,
@@ -149,7 +244,7 @@ def main() -> int:
         "--model_args",
         model_args,
         "--tasks",
-        ",".join(args.tasks),
+        ",".join(tasks),
         "--batch_size",
         args.batch_size,
         "--output_path",
@@ -157,6 +252,8 @@ def main() -> int:
         "--verbosity",
         args.verbosity,
     ]
+    if include_path is not None:
+        cmd += ["--include_path", str(include_path)]
     if args.limit:
         cmd += ["--limit", args.limit]
     if args.cache:

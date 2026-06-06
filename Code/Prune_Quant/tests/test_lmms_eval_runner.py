@@ -120,6 +120,46 @@ def test_lmms_eval_env_prefers_lmms_eval_hf_home_over_ambient_hf_home(monkeypatc
     assert env["LMMS_EVAL_DATASETS_CACHE"] == "/mounted/hf_home/datasets"
 
 
+def test_lmms_eval_resolves_local_hf_snapshot_from_ref(tmp_path: Path) -> None:
+    module = _load_runner_module()
+    repo_cache = tmp_path / "hub" / "datasets--lmms-lab--MMMU"
+    snapshot = repo_cache / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    refs = repo_cache / "refs"
+    refs.mkdir()
+    (refs / "main").write_text("abc123\n", encoding="utf-8")
+
+    assert module._resolve_local_hf_dataset_snapshot(tmp_path, "lmms-lab/MMMU") == snapshot
+
+
+def test_lmms_eval_prepares_local_task_overlay_for_cached_hf_dataset(tmp_path: Path) -> None:
+    module = _load_runner_module()
+    hf_home = tmp_path / "hf_home"
+    repo_cache = hf_home / "hub" / "datasets--lmms-lab--MMMU"
+    snapshot = repo_cache / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    refs = repo_cache / "refs"
+    refs.mkdir()
+    (refs / "main").write_text("abc123\n", encoding="utf-8")
+    output_path = tmp_path / "out"
+    lmms_eval_root = Path(__file__).resolve().parents[1] / "third_party" / "lmms-eval"
+
+    tasks, include_path = module._prepare_local_task_overlays(
+        tasks=["mmmu_val", "ocrbench"],
+        lmms_eval_root=lmms_eval_root,
+        hf_home=hf_home,
+        output_path=output_path,
+    )
+
+    assert tasks == ["pq_local_mmmu_val", "ocrbench"]
+    assert include_path == output_path / "_local_lmms_tasks"
+    overlay = (include_path / "mmmu_val.yaml").read_text(encoding="utf-8")
+    assert f"dataset_path: {snapshot}" in overlay
+    assert f"include: {lmms_eval_root / 'lmms_eval' / 'tasks' / 'mmmu' / 'mmmu_val.yaml'}" in overlay
+    assert "local_files_only: true" in overlay
+    assert "task: pq_local_mmmu_val" in overlay
+
+
 def test_lmms_eval_model_plugin_exposes_empty_tasks_package() -> None:
     spec = importlib.util.find_spec("prune_quant_baseline.lmms_eval.tasks")
 
