@@ -288,6 +288,14 @@ python remote/run_lmms_eval_smart.py \
 
 For a quick plumbing check, add `--limit 8`. Use `PQ_RETENTION_RATIO=1.0` for the no-pruning lmms-eval baseline while keeping model and image-resolution settings fixed.
 
+The lmms-eval smart runner enables response-cache resume whenever `--cache`
+or `LMMS_EVAL_CACHE` is set. It derives a stable `LMMS_CACHE_RUN_ID` from the
+model, model args, task list, batch size, limit, and output path, so rerunning
+the same command after an interruption reopens the same lmms-eval run cache and
+skips samples that already produced deterministic responses. Set
+`LMMS_CACHE_RUN_ID` yourself only when you intentionally want multiple commands
+to share one resume namespace.
+
 You can still create or download a custom evaluation JSONL for low-level script debugging:
 
 ```bash

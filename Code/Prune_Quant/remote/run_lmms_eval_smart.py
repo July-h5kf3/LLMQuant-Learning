@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +43,7 @@ LOCAL_DATASET_TASKS = {
         "data_files": {"validation": ("data", "validation-*")},
     },
 }
+_RUN_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def _bool_env(name: str, default: str) -> bool:
@@ -49,6 +53,71 @@ def _bool_env(name: str, default: str) -> bool:
 def _append_model_arg(model_args: list[str], key: str, value: str | None) -> None:
     if value is not None and value != "":
         model_args.append(f"{key}={value}")
+
+
+def _sanitize_cache_run_id(value: str) -> str:
+    sanitized = _RUN_ID_SAFE_RE.sub("-", value).strip("-._")
+    return sanitized or "run"
+
+
+def _build_cache_run_id(
+    *,
+    model: str,
+    model_args: str,
+    tasks: list[str],
+    batch_size: str,
+    limit: str,
+    output_path: Path,
+) -> str:
+    payload = {
+        "model": model,
+        "model_args": model_args,
+        "tasks": list(tasks),
+        "batch_size": batch_size,
+        "limit": limit,
+        "output_path": str(output_path.expanduser().resolve()),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    task_hint = _sanitize_cache_run_id("-".join(tasks[:3]))[:64]
+    if task_hint:
+        return f"pq-lmms-{task_hint}-{digest}"
+    return f"pq-lmms-{digest}"
+
+
+def _ensure_cache_run_id(
+    env: dict[str, str],
+    *,
+    cache_path: str,
+    model: str,
+    model_args: str,
+    tasks: list[str],
+    batch_size: str,
+    limit: str,
+    output_path: Path,
+) -> str:
+    if not cache_path:
+        return ""
+    explicit_run_id = env.get("LMMS_CACHE_RUN_ID", "").strip()
+    if explicit_run_id:
+        return explicit_run_id
+    run_id = _build_cache_run_id(
+        model=model,
+        model_args=model_args,
+        tasks=tasks,
+        batch_size=batch_size,
+        limit=limit,
+        output_path=output_path,
+    )
+    env["LMMS_CACHE_RUN_ID"] = run_id
+    return run_id
+
+
+def _ensure_cache_checkpoint_interval(env: dict[str, str], *, cache_path: str) -> None:
+    if not cache_path:
+        return
+    env.setdefault("LMMS_CACHE_CHECKPOINT_INTERVAL", "1")
 
 
 def _build_default_model_args(args: argparse.Namespace) -> str:
@@ -293,6 +362,18 @@ def main() -> int:
     if args.log_samples:
         cmd.append("--log_samples")
 
+    cache_run_id = _ensure_cache_run_id(
+        env,
+        cache_path=args.cache,
+        model=args.model,
+        model_args=model_args,
+        tasks=tasks,
+        batch_size=args.batch_size,
+        limit=args.limit,
+        output_path=args.output_path,
+    )
+    _ensure_cache_checkpoint_interval(env, cache_path=args.cache)
+
     print("[lmms-eval-smart] " + " ".join(cmd), flush=True)
     print(
         "[lmms-eval-smart] "
@@ -302,7 +383,9 @@ def main() -> int:
         f"HF_MODULES_CACHE={env.get('HF_MODULES_CACHE', '')} "
         f"LMMS_EVAL_DATASETS_CACHE={env.get('LMMS_EVAL_DATASETS_CACHE', '')} "
         f"HF_DATASETS_OFFLINE={env.get('HF_DATASETS_OFFLINE', '')} "
-        f"HF_HUB_OFFLINE={env.get('HF_HUB_OFFLINE', '')}",
+        f"HF_HUB_OFFLINE={env.get('HF_HUB_OFFLINE', '')} "
+        f"LMMS_CACHE_RUN_ID={cache_run_id} "
+        f"LMMS_CACHE_CHECKPOINT_INTERVAL={env.get('LMMS_CACHE_CHECKPOINT_INTERVAL', '')}",
         flush=True,
     )
     if args.dry_run:

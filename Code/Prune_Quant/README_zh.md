@@ -288,6 +288,8 @@ python remote/run_lmms_eval_smart.py \
 
 快速检查流程时可以加 `--limit 8`。如果要跑不剪枝的 lmms-eval baseline，保持模型和图像分辨率设置不变，只把 `PQ_RETENTION_RATIO` 设为 `1.0`。
 
+只要设置了 `--cache` 或 `LMMS_EVAL_CACHE`，lmms-eval smart runner 就会启用响应缓存续测。它会根据模型、模型参数、任务列表、batch size、limit 和输出目录派生稳定的 `LMMS_CACHE_RUN_ID`，因此同一条命令中断后重跑会重新打开同一个 lmms-eval run cache，并跳过已经生成 deterministic response 的样本。只有在你明确想让多条命令共享同一个续测命名空间时，才需要手动设置 `LMMS_CACHE_RUN_ID`。
+
 如果只是调试低层脚本，也可以创建或下载自定义评测 JSONL：
 
 ```bash

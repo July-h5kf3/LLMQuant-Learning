@@ -179,6 +179,136 @@ def test_lmms_eval_can_allow_hub_fallback(monkeypatch) -> None:
     assert not module._require_local_snapshots({"HF_HUB_OFFLINE": "1"})
 
 
+def test_lmms_eval_cache_run_id_is_stable_for_same_invocation(tmp_path: Path) -> None:
+    module = _load_runner_module()
+
+    run_id = module._build_cache_run_id(
+        model="prune_quant_qwen2vl",
+        model_args="pretrained=/models/qwen2vl,retention_ratio=0.5",
+        tasks=["pq_local_mmmu_val", "ocrbench"],
+        batch_size="1",
+        limit="8",
+        output_path=tmp_path / "out",
+    )
+    same_run_id = module._build_cache_run_id(
+        model="prune_quant_qwen2vl",
+        model_args="pretrained=/models/qwen2vl,retention_ratio=0.5",
+        tasks=["pq_local_mmmu_val", "ocrbench"],
+        batch_size="1",
+        limit="8",
+        output_path=tmp_path / "out",
+    )
+
+    assert run_id == same_run_id
+    assert run_id.startswith("pq-lmms-")
+    assert "/" not in run_id
+
+
+def test_lmms_eval_cache_run_id_changes_when_invocation_changes(tmp_path: Path) -> None:
+    module = _load_runner_module()
+
+    first = module._build_cache_run_id(
+        model="prune_quant_qwen2vl",
+        model_args="pretrained=/models/qwen2vl,retention_ratio=0.5",
+        tasks=["ocrbench"],
+        batch_size="1",
+        limit="8",
+        output_path=tmp_path / "out",
+    )
+    second = module._build_cache_run_id(
+        model="prune_quant_qwen2vl",
+        model_args="pretrained=/models/qwen2vl,retention_ratio=0.5",
+        tasks=["ocrbench"],
+        batch_size="1",
+        limit="16",
+        output_path=tmp_path / "out",
+    )
+
+    assert first != second
+
+
+def test_lmms_eval_cache_run_env_preserves_explicit_run_id(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.setenv("LMMS_CACHE_RUN_ID", "manual-run")
+
+    env = {"LMMS_CACHE_RUN_ID": "manual-run"}
+
+    assert module._ensure_cache_run_id(
+        env,
+        cache_path="/tmp/cache",
+        model="prune_quant_qwen2vl",
+        model_args="pretrained=/models/qwen2vl",
+        tasks=["ocrbench"],
+        batch_size="1",
+        limit="",
+        output_path=Path("/tmp/out"),
+    ) == "manual-run"
+    assert env["LMMS_CACHE_RUN_ID"] == "manual-run"
+
+
+def test_lmms_eval_cache_run_env_sets_stable_run_id_for_cache() -> None:
+    module = _load_runner_module()
+    env: dict[str, str] = {}
+
+    run_id = module._ensure_cache_run_id(
+        env,
+        cache_path="/tmp/cache",
+        model="prune_quant_qwen2vl",
+        model_args="pretrained=/models/qwen2vl",
+        tasks=["ocrbench"],
+        batch_size="1",
+        limit="",
+        output_path=Path("/tmp/out"),
+    )
+
+    assert env["LMMS_CACHE_RUN_ID"] == run_id
+    assert run_id.startswith("pq-lmms-")
+
+
+def test_lmms_eval_cache_run_env_skips_without_cache() -> None:
+    module = _load_runner_module()
+    env: dict[str, str] = {}
+
+    assert module._ensure_cache_run_id(
+        env,
+        cache_path="",
+        model="prune_quant_qwen2vl",
+        model_args="pretrained=/models/qwen2vl",
+        tasks=["ocrbench"],
+        batch_size="1",
+        limit="",
+        output_path=Path("/tmp/out"),
+    ) == ""
+    assert "LMMS_CACHE_RUN_ID" not in env
+
+
+def test_lmms_eval_cache_checkpoint_defaults_to_every_response() -> None:
+    module = _load_runner_module()
+    env: dict[str, str] = {}
+
+    module._ensure_cache_checkpoint_interval(env, cache_path="/tmp/cache")
+
+    assert env["LMMS_CACHE_CHECKPOINT_INTERVAL"] == "1"
+
+
+def test_lmms_eval_cache_checkpoint_preserves_explicit_value() -> None:
+    module = _load_runner_module()
+    env = {"LMMS_CACHE_CHECKPOINT_INTERVAL": "128"}
+
+    module._ensure_cache_checkpoint_interval(env, cache_path="/tmp/cache")
+
+    assert env["LMMS_CACHE_CHECKPOINT_INTERVAL"] == "128"
+
+
+def test_lmms_eval_cache_checkpoint_skips_without_cache() -> None:
+    module = _load_runner_module()
+    env: dict[str, str] = {}
+
+    module._ensure_cache_checkpoint_interval(env, cache_path="")
+
+    assert "LMMS_CACHE_CHECKPOINT_INTERVAL" not in env
+
+
 def test_lmms_eval_model_plugin_exposes_empty_tasks_package() -> None:
     spec = importlib.util.find_spec("prune_quant_baseline.lmms_eval.tasks")
 

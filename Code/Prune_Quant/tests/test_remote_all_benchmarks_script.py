@@ -55,6 +55,24 @@ def test_lmms_eval_runner_defaults_to_requested_local_hf_cache() -> None:
     assert 'env.setdefault("HF_HUB_OFFLINE", "1")' in text
 
 
+def test_lmms_eval_runner_enables_stable_resume_cache() -> None:
+    text = (REPO_ROOT / "remote" / "run_lmms_eval_smart.py").read_text(encoding="utf-8")
+
+    assert "LMMS_CACHE_RUN_ID" in text
+    assert "_build_cache_run_id" in text
+    assert 'env.setdefault("LMMS_CACHE_CHECKPOINT_INTERVAL", "1")' in text
+
+
+def test_lmms_eval_scripts_pass_cache_to_smart_runner() -> None:
+    for script in ALL_LMMS_SCRIPTS:
+        text = script.read_text(encoding="utf-8")
+        if "remote/run_lmms_eval_smart.py" not in text:
+            continue
+
+        assert 'LMMS_EVAL_CACHE="${LMMS_EVAL_CACHE:-' in text or 'export LMMS_EVAL_CACHE="$WORK_DIR/lmms_eval_cache"' in text
+        assert '--cache "$LMMS_EVAL_CACHE"' in text
+
+
 def test_lmms_eval_scripts_pin_aistudio_hf_cache() -> None:
     expected = f'export LMMS_EVAL_HF_HOME="${{LMMS_EVAL_HF_HOME:-{LMMS_HF_HOME}}}"'
 

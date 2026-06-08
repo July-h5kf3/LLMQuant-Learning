@@ -434,7 +434,7 @@ class RotaryPositionalEmbedding(nn.Module):
 
 
 
-## 参考:
+## 参考
 
 1. [Transformer升级之路：1、Sinusoidal位置编码追根溯源 - 科学空间|Scientific Spaces](https://spaces.ac.cn/archives/8231)
 2. [Transformer升级之路：2、博采众长的旋转式位置编码 - 科学空间|Scientific Spaces](https://spaces.ac.cn/archives/8265)
