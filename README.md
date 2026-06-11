@@ -13,7 +13,7 @@
 ## 仓库结构
 
 - `paper/`：论文阅读主目录。当前维护 `README.md`、`Note.md`、`Data.md`、`figure/` 和少量输出表格；PDF 原文按 `.gitignore` 规则本地保存，不作为主要同步内容。
-- `blog/`：专题化笔记，目前包括 Hessian 矩阵、Transformer 位置编码、Triton 等内容。
+- `blog/`：专题化笔记，目前包括 Hessian 矩阵、Transformer 位置编码、Triton、低精度浮点数等内容。
 - `Code/`：代码实践区，包含 LISA 量化实验、VLM 量化 baseline、视觉 token 剪枝与量化协同 baseline。
 - `Week/`：周报、阶段性汇报和临时材料，本目录按 `.gitignore` 规则作为本地资料区。
 
@@ -36,18 +36,19 @@ LISA / LISA++ 复现与量化实验工作区。当前覆盖：
 
 ### `Code/VLM_Quant_Baseline/`
 
-VLM / LVLM 量化 baseline，基于 QIG 相关开源实现整理。当前主要用于横向对比和复现实验，包含：
+VLM / LVLM 量化 baseline，基于 QIG 相关开源实现整理。当前主要用于横向对比和复现实验，**Real Quant 已搭建完成，支持在 Qwen2-VL-7B 上做真实推理加速**，包含：
 
 - `main_quant.py` 量化搜索入口、`main.py` 评测入口、`inference.py` 推理示例；
 - Qwen2-VL、Qwen2.5-VL、LLaVA-OneVision、LLaVA-1.5、InternVL2、VILA 等模型封装；
 - AWQ、GPTQ、MBQ、QIG、RTN、SmoothQuant 等方法实现或接入；
-- 校准数据处理、pseudo quant 评测、真实 W3A16 / vLLM 评测脚本。
+- 校准数据处理、pseudo quant 评测；
+- 基于 TensorRT-LLM 的 real quant 导出与推理（Qwen2-VL-7B W4A16 / W4A8），以及 real GPTQ W3A16 / vLLM 评测脚本，使用方法见 `REAL_QUANTIZATION.md`。
 
 详细说明见 [`Code/VLM_Quant_Baseline/README.md`](Code/VLM_Quant_Baseline/README.md)。
 
 ### `Code/Prune_Quant/`
 
-多模态大模型视觉 token 剪枝与量化协同 baseline。当前支持：
+多模态大模型视觉 token 剪枝与量化协同 baseline，**整体 baseline 已搭建完成**。当前支持：
 
 - GAE-guided visual token pruning；
 - GAE 剪枝后接 MASQuant 的 prune-then-quant 实验；
@@ -64,6 +65,7 @@ VLM / LVLM 量化 baseline，基于 QIG 相关开源实现整理。当前主要�
 当前重点包括：
 
 - LLM PTQ：AdaRound、GPTQ、SmoothQuant、OWQ、SpinQuant、FlatQuant、SliderQuant、OSAQ、SERQ 等；
+- 低精度浮点量化：ARCQuant 等围绕 NVFP4 / MXFP4 等 FP4 格式的工作；
 - VLM / MLLM 量化：MASQuant、MBQ、QIG、VLMQ、VEQ 等；
 - 剪枝与量化协同：QAPruner、Joint Quantization and Token Pruning、GAE 相关视觉 token 压缩方法；
 - Kernel 与工程基础：Triton、Hessian 近似、量化误差重建、推理后端适配。

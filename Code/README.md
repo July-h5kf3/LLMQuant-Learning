@@ -11,8 +11,8 @@
 | 目录 | 角色 | 当前状态 |
 | --- | --- | --- |
 | [`LISA/`](LISA/) | LISA / LISA++ 复现、训练、测试与量化实验 | 主实验工作区，已接入多种量化方法和 ReasonSeg / ReasonSeg-Inst 评测 |
-| [`VLM_Quant_Baseline/`](VLM_Quant_Baseline/) | VLM / LVLM 量化 baseline | 基于 QIG 相关实现整理，用于量化搜索、校准、评测、推理和横向对比 |
-| [`Prune_Quant/`](Prune_Quant/) | 视觉 token 剪枝与量化协同 baseline | 支持 GAE 剪枝、prune-then-MASQuant、VLMEvalKit 集成和单元测试 |
+| [`VLM_Quant_Baseline/`](VLM_Quant_Baseline/) | VLM / LVLM 量化 baseline | Real Quant 已搭建完成，支持 Qwen2-VL-7B 真实推理加速；覆盖量化搜索、校准、评测、推理和横向对比 |
+| [`Prune_Quant/`](Prune_Quant/) | 视觉 token 剪枝与量化协同 baseline | baseline 已搭建完成，支持 GAE 剪枝、prune-then-MASQuant、VLMEvalKit / lmms-eval 集成和单元测试 |
 
 ## `LISA/`
 
@@ -30,7 +30,7 @@
 
 ## `VLM_Quant_Baseline/`
 
-`VLM_Quant_Baseline/` 是 VLM / LVLM 量化 baseline，基于 QIG 相关开源实现整理而来，主要用于复现实验行为和后续横向比较。当前包含：
+`VLM_Quant_Baseline/` 是 VLM / LVLM 量化 baseline，基于 QIG 相关开源实现整理而来，主要用于复现实验行为和后续横向比较。其中 Real Quant 已搭建完成，支持在 Qwen2-VL-7B 上做真实推理加速（TensorRT-LLM W4A16 / W4A8），使用方法见 `REAL_QUANTIZATION.md`。当前包含：
 
 - `main_quant.py`：量化搜索入口；
 - `main.py`：评测入口；
@@ -45,7 +45,7 @@
 
 ## `Prune_Quant/`
 
-`Prune_Quant/` 是多模态大模型视觉 token 剪枝与量化推理 baseline，重点关注剪枝和量化的协同实验。当前包含：
+`Prune_Quant/` 是多模态大模型视觉 token 剪枝与量化推理 baseline，重点关注剪枝和量化的协同实验，整体 baseline 已搭建完成。当前包含：
 
 - GAE-guided visual token pruning；
 - GAE 剪枝后接 MASQuant 校准 / 推理的 prune-then-quant 路径；

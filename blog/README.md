@@ -14,3 +14,5 @@
 
 - [`Triton.md`](Triton.md)：记录 Triton 学习过程中的语法、编程模型、矩阵乘法和量化相关算子的实现思路，主要用于补齐后续做量化 Kernel 和推理优化时需要的工程基础。
 
+- [`浅谈低精度浮点数.md`](浅谈低精度浮点数.md)：从 IEEE 754 浮点格式出发，梳理低精度浮点数的存储与表示，以及 MXFP4、NVFP4 等 micro-scaling FP4 格式，作为在 Blackwell 设备上搭建 VLM real quant baseline 的技术背景。
+

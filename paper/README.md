@@ -52,6 +52,7 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 | 大语言模型量化, PTQ, 低比特, 新范式 | [**OSAQ**: Outlier Self-Absorption for Accurate Low-bit LLM Quantization](https://arxiv.org/pdf/2605.04738) | ICML 2026 | Yes | 新的Baseline |发现Task loss关于权重的Hessian具有低秩一致性，利用这个特性可以与现有的量化方法结合，进一步缓解激活值中的异常值效应，从而提升量化效果 |
 | 大语言模型量化, PTQ, 低比特, 低秩近似误差重建 | [**SERQ**: Saliency-Aware Low-Rank Error Reconstruction For LLM Quantization](https://arxiv.org/pdf/2603.08185) | ICLR 2026 | Yes | 低秩近似PTQ|只对误差中某些关键行做低秩近似，从而减少开销同时，提升性能 |
 | 大语言模型量化, PTQ, 低比特,Rotation Base | [**ReSpinQuant**: Efficient Layer-Wise LLM Quantization via Subspace Residual Rotation Approximation](https://arxiv.org/abs/2604.11080) | - | Yes | Rotation Base|通过子空间旋转解决了Layer-Wise 旋转矩阵方法残差流不同基的问题|
+| 大语言模型量化, PTQ, 低比特, NVFP4 | [**ARCQuant**: Boosting NVFP4 Quantization with Augmented Residual Channels for LLMs](https://arxiv.org/abs/2601.07475) | ACL 2026 | Yes | FP4 量化 Baseline|针对 NVFP4 这类细粒度浮点格式难以直接套用现有 PTQ 的问题，给激活矩阵增广量化残差通道做误差补偿，并把补偿合并进矩阵规约维度，从而在统一 NVFP4 格式下复用标准高效 GEMM kernel，开销很小，是后续做 FP4 real quant 的好参照|
 | VLM量化，PTQ，低比特，低秩近似误差重建 | [Breaking Modality Heterogeneity in Low-Bit](https://arxiv.org/pdf/2605.19929) | - | Yes | 低秩近似，PTQ |把SERQ的思想搬到VLMs上了，把不同模态激活值通道进行区别处理，从而实现低比特的突破|
 | VLM量化，PTQ，权重量化，MoE | [VEQ: Modality-Adaptive Quantization for MoE Vision-Language Models](https://arxiv.org/pdf/2602.01037) |  | Yes | MoE量化，有点像方法迁移 |把importance base 的PTQ方法迁移到了MoE VLM上。|
 
