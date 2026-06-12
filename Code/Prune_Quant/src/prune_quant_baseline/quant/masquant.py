@@ -343,6 +343,188 @@ def patch_qwen25_vl_linear_mask_compat(masquant_root: str | Path) -> Path:
     return target
 
 
+def patch_qwen25_vl_rope_default_compat(masquant_root: str | Path) -> Path:
+    """Patch MASQuant Qwen2.5-VL to support current Transformers default RoPE.
+
+    Recent Qwen2.5-VL configs expose ``rope_type="default"`` in ``rope_scaling``.
+    Upstream Transformers handles that case with an internal default RoPE helper,
+    while MASQuant's vendored model indexes ``ROPE_INIT_FUNCTIONS["default"]`` and
+    fails before training starts.
+    """
+
+    root = validate_masquant_root(masquant_root)
+    target = root / "models" / "modeling_qwen2_5_vl.py"
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: support Qwen2.5-VL default RoPE"
+    if marker in text:
+        return target
+
+    old = "        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]\n"
+    new = (
+        "        # prune_quant_baseline: support Qwen2.5-VL default RoPE.\n"
+        "        if self.rope_type == \"default\":\n"
+        "            self.rope_init_fn = _prune_quant_baseline_default_rope_parameters\n"
+        "        else:\n"
+        "            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]\n"
+    )
+    anchor = "\n\nclass Qwen2_5_VLRotaryEmbedding(nn.Module):"
+    helper = (
+        "\n\n"
+        f"# {marker}.\n"
+        "def _prune_quant_baseline_default_rope_parameters(config, device=None, seq_len=None):\n"
+        "    del seq_len\n"
+        "    rope_scaling = getattr(config, \"rope_scaling\", None) or {}\n"
+        "    base = rope_scaling.get(\"rope_theta\", getattr(config, \"rope_theta\", 10000.0))\n"
+        "    dim = getattr(config, \"head_dim\", None) or config.hidden_size // config.num_attention_heads\n"
+        "    inv_freq = 1.0 / (\n"
+        "        base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)\n"
+        "    )\n"
+        "    return inv_freq, 1.0\n"
+    )
+    if old not in text or anchor not in text:
+        raise RuntimeError(
+            f"Could not patch {target}; MASQuant source changed and the expected "
+            "Qwen2.5-VL RoPE block was not found."
+        )
+
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    patched = text.replace(anchor, helper + anchor, 1).replace(old, new, 1)
+    target.write_text(patched, encoding="utf-8")
+    return target
+
+
+def patch_qwen25_vl_config_schema_compat(masquant_root: str | Path) -> Path:
+    """Patch MASQuant Qwen2.5-VL for nested text_config fields."""
+
+    root = validate_masquant_root(masquant_root)
+    target = root / "models" / "modeling_qwen2_5_vl.py"
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: support Qwen2.5-VL nested text_config"
+    if marker in text:
+        return target
+
+    replacements = {
+        "nn.Linear(config.hidden_size, config.vocab_size, bias=False)": (
+            "nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)"
+        ),
+        "vocab_size=self.config.vocab_size": "vocab_size=self.config.text_config.vocab_size",
+    }
+    patched = text
+    for old, new in replacements.items():
+        patched = patched.replace(old, new)
+    if patched == text:
+        raise RuntimeError(
+            f"Could not patch {target}; MASQuant source changed and the expected "
+            "Qwen2.5-VL config schema references were not found."
+        )
+
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    target.write_text(f"# {marker}\n" + patched, encoding="utf-8")
+    return target
+
+
+def patch_qwen25_vl_cmc_forward_input_compat(masquant_root: str | Path) -> Path:
+    """Patch MASQuant CMC whitening to drop processor keys unsupported by model.forward."""
+
+    root = validate_masquant_root(masquant_root)
+    target = root / "quantize" / "svd_utils.py"
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: filter unsupported Qwen2.5-VL CMC inputs"
+    if marker in text:
+        return target
+
+    helper = (
+        f"# {marker}.\n"
+        "def _prune_quant_baseline_filter_forward_inputs(model, inputs):\n"
+        "    import inspect\n"
+        "    try:\n"
+        "        signature = inspect.signature(model.forward)\n"
+        "    except (TypeError, ValueError):\n"
+        "        return inputs\n"
+        "    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):\n"
+        "        return inputs\n"
+        "    accepted = set(signature.parameters)\n"
+        "    return {key: value for key, value in inputs.items() if key in accepted}\n"
+        "\n"
+    )
+    old = (
+        "        inputs = {k: v.to(device) for k, v in dataloader[i].items()}\n"
+        "        with torch.no_grad():\n"
+        "            model(**inputs)\n"
+    )
+    new = (
+        "        inputs = {k: v.to(device) for k, v in dataloader[i].items()}\n"
+        "        inputs = _prune_quant_baseline_filter_forward_inputs(model, inputs)\n"
+        "        with torch.no_grad():\n"
+        "            model(**inputs)\n"
+    )
+    if old not in text:
+        raise RuntimeError(
+            f"Could not patch {target}; expected MASQuant CMC forward input block was not found."
+        )
+
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    target.write_text(helper + text.replace(old, new, 1), encoding="utf-8")
+    return target
+
+
+def patch_qwen25_vl_prepare_inputs_generation_compat(masquant_root: str | Path) -> Path:
+    """Patch MASQuant Qwen2.5-VL generation for newer Transformers cache semantics."""
+
+    root = validate_masquant_root(masquant_root)
+    target = root / "models" / "modeling_qwen2_5_vl.py"
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: tolerate missing cache_position during generation"
+    marker_index = text.find(marker)
+    if marker_index >= 0:
+        patch_block = text[marker_index : marker_index + 500]
+        if "past_key_values is None" in patch_block:
+            return target
+    old_v1 = (
+        "        # prune_quant_baseline: tolerate missing cache_position during generation.\n"
+        "        is_first_iteration = kwargs.get(\"is_first_iteration\", None)\n"
+        "        if is_first_iteration is None:\n"
+        "            is_first_iteration = cache_position is None or (cache_position is not None and cache_position[0] == 0)\n"
+        "        if not is_first_iteration and use_cache:\n"
+        "            model_inputs[\"pixel_values\"] = None\n"
+        "            model_inputs[\"pixel_values_videos\"] = None\n"
+    )
+
+    old = (
+        "        if cache_position[0] != 0:\n"
+        "            model_inputs[\"pixel_values\"] = None\n"
+        "            model_inputs[\"pixel_values_videos\"] = None\n"
+    )
+    new = (
+        f"        # {marker}.\n"
+        "        is_first_iteration = kwargs.get(\"is_first_iteration\", None)\n"
+        "        if is_first_iteration is None:\n"
+        "            is_first_iteration = cache_position is None or (cache_position is not None and cache_position[0] == 0)\n"
+        "            is_first_iteration = past_key_values is None and is_first_iteration\n"
+        "        if not is_first_iteration and use_cache:\n"
+        "            model_inputs[\"pixel_values\"] = None\n"
+            "            model_inputs[\"pixel_values_videos\"] = None\n"
+    )
+    source = old_v1 if old_v1 in text else old
+    if source not in text:
+        raise RuntimeError(
+            f"Could not patch {target}; MASQuant source changed and the expected "
+            "Qwen2.5-VL generation cache_position block was not found."
+        )
+
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    target.write_text(text.replace(source, new, 1), encoding="utf-8")
+    return target
+
+
 def patch_lmclass_attention_implementation(masquant_root: str | Path) -> Path:
     """Patch MASQuant LMClass to honor args.attn_implementation.
 
@@ -794,6 +976,53 @@ def _patch_int_qwen_vl_layer_logger(root: Path) -> Path | None:
     patched = text
     injections: list[str] = []
 
+    qwen25_rmsnorm_import = (
+        "from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import "
+        "apply_multimodal_rotary_pos_emb, Qwen2RMSNorm"
+    )
+    if qwen25_rmsnorm_import in patched:
+        patched = patched.replace(
+            qwen25_rmsnorm_import,
+            "from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import "
+            "apply_multimodal_rotary_pos_emb, Qwen2_5_VLRMSNorm as Qwen2RMSNorm",
+            1,
+        )
+
+    text_config_marker = "prune_quant_baseline: unwrap nested Qwen2.5-VL text config"
+    if text_config_marker not in patched and "config.hidden_size" in patched:
+        injections.append(
+            f"# {text_config_marker}.\n"
+            "def _prune_quant_baseline_text_config(config):\n"
+            "    text_config = getattr(config, 'text_config', None)\n"
+            "    if text_config is not None and not hasattr(config, 'hidden_size'):\n"
+            "        return text_config\n"
+            "    return config\n"
+        )
+        attention_old = (
+            "        super().__init__()\n"
+            "        self.config = config\n"
+        )
+        attention_new = (
+            "        super().__init__()\n"
+            "        config = _prune_quant_baseline_text_config(config)\n"
+            "        self.config = config\n"
+        )
+        decoder_old = (
+            "        super().__init__()\n"
+            "        self.hidden_size = config.hidden_size\n"
+        )
+        decoder_new = (
+            "        super().__init__()\n"
+            "        config = _prune_quant_baseline_text_config(config)\n"
+            "        self.hidden_size = config.hidden_size\n"
+        )
+        if attention_old not in patched or decoder_old not in patched:
+            raise RuntimeError(
+                f"Could not patch {target}; expected Qwen-VL quant layer config initialization blocks were not found."
+            )
+        patched = patched.replace(attention_old, attention_new, 1)
+        patched = patched.replace(decoder_old, decoder_new, 1)
+
     logger_marker = "prune_quant_baseline: define int_qwen_vl_layer logger"
     if logger_marker not in patched and "logger.warning_once" in patched and not re.search(
         r"^logger\s*=", patched, flags=re.MULTILINE
@@ -1205,6 +1434,10 @@ def load_masquant_model_and_processor(
     root = validate_masquant_root(masquant_root)
     patch_lmclass_qwen2_vl_support(root)
     patch_masquant_qwen2_vl_quant_support(root)
+    if model_type == "qwen2_5_vl":
+        patch_qwen25_vl_config_schema_compat(root)
+        patch_qwen25_vl_rope_default_compat(root)
+        patch_qwen25_vl_prepare_inputs_generation_compat(root)
     if cmc_low_rank_adapters is not None:
         cmc_path = Path(cmc_low_rank_adapters).expanduser().resolve()
         if not cmc_path.exists():

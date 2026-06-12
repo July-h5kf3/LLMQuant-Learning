@@ -308,7 +308,7 @@ def _generate_vanilla(model: Any, processor: Any, inputs: dict[str, Any], max_ne
     input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else None
     generation_config = _build_greedy_generation_config(model, max_new_tokens)
     generation_kwargs = {
-        **inputs,
+        **_filter_processor_inputs_for_generate(inputs),
         "do_sample": False,
         "num_beams": 1,
         "use_cache": True,
@@ -320,6 +320,13 @@ def _generate_vanilla(model: Any, processor: Any, inputs: dict[str, Any], max_ne
     with __import__("torch").no_grad():
         generated_ids = model.generate(**generation_kwargs)
     return _decode_prediction(processor, generated_ids, input_len)
+
+
+def _filter_processor_inputs_for_generate(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Drop processor-only fields rejected by Transformers generate validation."""
+
+    unsupported_keys = {"mm_token_type_ids"}
+    return {key: value for key, value in inputs.items() if key not in unsupported_keys}
 
 
 def _generate_from_pruned_inputs(

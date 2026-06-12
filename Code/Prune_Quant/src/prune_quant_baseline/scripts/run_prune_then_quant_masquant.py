@@ -11,6 +11,7 @@ from prune_quant_baseline.core.logging_utils import configure_logging, get_logge
 from prune_quant_baseline.quant.loaders import load_model_and_processor
 from prune_quant_baseline.quant.masquant import (
     MASQuantRunConfig,
+    _patch_int_qwen_vl_layer_logger,
     build_cmc_command,
     build_train_command,
     format_command,
@@ -19,8 +20,12 @@ from prune_quant_baseline.quant.masquant import (
     patch_lmclass_attention_implementation,
     patch_lmclass_qwen2_vl_support,
     patch_custom_dataset_paths,
+    patch_qwen25_vl_config_schema_compat,
+    patch_qwen25_vl_cmc_forward_input_compat,
     patch_qwen25_vl_linear_mask_compat,
+    patch_qwen25_vl_prepare_inputs_generation_compat,
     patch_qwen25_vl_inputs_embeds_masks,
+    patch_qwen25_vl_rope_default_compat,
     run_command,
 )
 from prune_quant_baseline.quant.tensorrt import (
@@ -597,6 +602,18 @@ def run_masquant_cmc(args: argparse.Namespace, config: MASQuantRunConfig) -> Non
         patched_paths = patch_masquant_qwen2_vl_quant_support(config.root)
         LOGGER.info("Patched MASQuant Qwen2-VL CMC quant support at %s", ", ".join(map(str, patched_paths)))
     if not args.dry_run:
+        if args.model_type == "qwen2_5_vl":
+            patched = _patch_int_qwen_vl_layer_logger(config.root)
+            if patched is not None:
+                LOGGER.info("Patched MASQuant Qwen2.5-VL int layer compatibility at %s", patched)
+            patched = patch_qwen25_vl_config_schema_compat(config.root)
+            LOGGER.info("Patched MASQuant Qwen2.5-VL config schema compatibility at %s", patched)
+            patched = patch_qwen25_vl_rope_default_compat(config.root)
+            LOGGER.info("Patched MASQuant Qwen2.5-VL RoPE compatibility at %s", patched)
+            patched = patch_qwen25_vl_prepare_inputs_generation_compat(config.root)
+            LOGGER.info("Patched MASQuant Qwen2.5-VL generation compatibility at %s", patched)
+            patched = patch_qwen25_vl_cmc_forward_input_compat(config.root)
+            LOGGER.info("Patched MASQuant Qwen2.5-VL CMC forward input compatibility at %s", patched)
         patched = patch_qwen25_vl_linear_mask_compat(config.root)
         LOGGER.info("Patched MASQuant Qwen2.5-VL CMC Linear compatibility at %s", patched)
     if any([args.cmc_vision_json, args.cmc_vision_prefix, args.cmc_audio_json, args.cmc_audio_prefix]):
@@ -693,6 +710,16 @@ def main(argv: Sequence[str] | None = None) -> None:
             prepare_pruned_calibration_artifacts(args, config)
 
     if args.stage == "calibrate":
+        if args.model_type == "qwen2_5_vl" and not args.dry_run:
+            patched = _patch_int_qwen_vl_layer_logger(config.root)
+            if patched is not None:
+                LOGGER.info("Patched MASQuant Qwen2.5-VL int layer compatibility at %s", patched)
+            patched = patch_qwen25_vl_config_schema_compat(config.root)
+            LOGGER.info("Patched MASQuant Qwen2.5-VL config schema compatibility at %s", patched)
+            patched = patch_qwen25_vl_rope_default_compat(config.root)
+            LOGGER.info("Patched MASQuant Qwen2.5-VL RoPE compatibility at %s", patched)
+            patched = patch_qwen25_vl_prepare_inputs_generation_compat(config.root)
+            LOGGER.info("Patched MASQuant Qwen2.5-VL generation compatibility at %s", patched)
         if args.epochs > 0 and not args.patch_masquant_inputs_embeds_mask:
             LOGGER.warning(
                 "MASQuant epochs > 0 with a pruned inputs_embeds cache usually needs "

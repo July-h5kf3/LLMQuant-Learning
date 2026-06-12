@@ -132,8 +132,9 @@ def test_lmms_eval_resolves_local_hf_snapshot_from_ref(tmp_path: Path) -> None:
     assert module._resolve_local_hf_dataset_snapshot(tmp_path, "lmms-lab/MMMU") == snapshot
 
 
-def test_lmms_eval_prepares_local_task_overlay_for_cached_hf_dataset(tmp_path: Path) -> None:
+def test_lmms_eval_prepares_local_task_overlay_for_cached_hf_dataset(tmp_path: Path, monkeypatch) -> None:
     module = _load_runner_module()
+    monkeypatch.setenv("LMMS_EVAL_DISABLE_OPENAI", "0")
     hf_home = tmp_path / "hf_home"
     repo_cache = hf_home / "hub" / "datasets--lmms-lab--MMMU"
     snapshot = repo_cache / "snapshots" / "abc123"
@@ -162,6 +163,38 @@ def test_lmms_eval_prepares_local_task_overlay_for_cached_hf_dataset(tmp_path: P
     assert f"    validation: {snapshot / 'data' / 'validation-*'}" in overlay
     assert f"  cache_dir: {output_path / '_hf_datasets_cache'}" in overlay
     assert "task: pq_local_mmmu_val" in overlay
+
+
+def test_lmms_eval_mmmu_overlay_can_disable_eager_openai_judge(tmp_path: Path, monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.setenv("LMMS_EVAL_DISABLE_OPENAI", "1")
+    hf_home = tmp_path / "hf_home"
+    repo_cache = hf_home / "hub" / "datasets--lmms-lab--MMMU"
+    snapshot = repo_cache / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    refs = repo_cache / "refs"
+    refs.mkdir()
+    (refs / "main").write_text("abc123\n", encoding="utf-8")
+    output_path = tmp_path / "out"
+    lmms_eval_root = Path(__file__).resolve().parents[1] / "third_party" / "lmms-eval"
+
+    tasks, include_path, missing = module._prepare_local_task_overlays(
+        tasks=["mmmu_val"],
+        lmms_eval_root=lmms_eval_root,
+        hf_home=hf_home,
+        output_path=output_path,
+    )
+
+    assert tasks == ["pq_local_mmmu_val"]
+    assert missing == []
+    overlay = (include_path / "mmmu_val.yaml").read_text(encoding="utf-8")
+    assert f"include: {include_path / '_patched_mmmu_val.yaml'}" in overlay
+    patched_yaml = (include_path / "_patched_mmmu_val.yaml").read_text(encoding="utf-8")
+    assert "process_results: !function _patched_mmmu_utils.mmmu_process_results" in patched_yaml
+    patched_utils = (include_path / "_patched_mmmu_utils.py").read_text(encoding="utf-8")
+    assert "server = None" in patched_utils
+    assert "def _prune_quant_baseline_get_mmmu_judge_server" in patched_utils
+    assert (include_path / "_default_template_yaml").exists()
 
 
 def test_lmms_eval_requires_local_snapshots_by_default(monkeypatch) -> None:

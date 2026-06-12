@@ -46,6 +46,10 @@ LOCAL_DATASET_TASKS = {
 _RUN_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
+def _lmms_eval_openai_disabled() -> bool:
+    return _bool_env("LMMS_EVAL_DISABLE_OPENAI", "1")
+
+
 def _bool_env(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -245,6 +249,60 @@ def _prepare_local_task_overlays(
     wrote_overlay = False
     task_root = lmms_eval_root / "lmms_eval" / "tasks"
 
+    def ensure_patched_mmmu_source(source_yaml: Path) -> Path:
+        if not _lmms_eval_openai_disabled() or source_yaml.name != "mmmu_val.yaml":
+            return source_yaml
+        patched_utils = overlay_root / "_patched_mmmu_utils.py"
+        if not patched_utils.exists():
+            utils_source = source_yaml.parent / "utils.py"
+            template_source = source_yaml.parent / "_default_template_yaml"
+            template_target = overlay_root / "_default_template_yaml"
+            if not template_target.exists():
+                template_target.write_text(template_source.read_text(encoding="utf-8"), encoding="utf-8")
+            utils_text = utils_source.read_text(encoding="utf-8")
+            old_server_block = (
+                "# Initialize the judge server\n"
+                "server_config = ServerConfig(\n"
+                "    model_name=MODEL_VERSION,\n"
+                ")\n"
+                "server = get_server(server_name=API_TYPE, config=server_config)\n"
+            )
+            new_server_block = (
+                "# prune_quant_baseline: avoid eager OpenAI judge initialization for exact-match MMMU.\n"
+                "server = None\n"
+                "\n"
+                "def _prune_quant_baseline_get_mmmu_judge_server():\n"
+                "    global server\n"
+                "    if server is None:\n"
+                "        server_config = ServerConfig(\n"
+                "            model_name=MODEL_VERSION,\n"
+                "        )\n"
+                "        server = get_server(server_name=API_TYPE, config=server_config)\n"
+                "    return server\n"
+            )
+            if old_server_block not in utils_text:
+                raise RuntimeError(f"Could not patch MMMU utils judge initialization in {utils_source}")
+            utils_text = utils_text.replace(old_server_block, new_server_block, 1)
+            utils_text = utils_text.replace(
+                "result = server.evaluate_binary(",
+                "result = _prune_quant_baseline_get_mmmu_judge_server().evaluate_binary(",
+            )
+            patched_utils.write_text(utils_text, encoding="utf-8")
+
+        patched_yaml = overlay_root / "_patched_mmmu_val.yaml"
+        if not patched_yaml.exists():
+            yaml_text = source_yaml.read_text(encoding="utf-8")
+            yaml_text = yaml_text.replace("!function utils.", "!function _patched_mmmu_utils.")
+            include_line = "include: _default_template_yaml"
+            if include_line in yaml_text:
+                yaml_text = yaml_text.replace(
+                    include_line,
+                    f"include: {source_yaml.parent / '_default_template_yaml'}",
+                    1,
+                )
+            patched_yaml.write_text(yaml_text, encoding="utf-8")
+        return patched_yaml
+
     for task in tasks:
         task_config = LOCAL_DATASET_TASKS.get(task)
         if task_config is None:
@@ -262,6 +320,7 @@ def _prepare_local_task_overlays(
         datasets_cache_dir.mkdir(parents=True, exist_ok=True)
         local_task = f"pq_local_{task}"
         source_yaml = task_root.joinpath(*task_config["source_yaml"])
+        source_yaml = ensure_patched_mmmu_source(source_yaml)
         overlay_path = overlay_root / f"{task}.yaml"
         data_files = task_config.get("data_files", {})
         dataset_kwargs = ["dataset_kwargs:"]
