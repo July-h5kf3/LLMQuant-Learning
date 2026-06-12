@@ -395,6 +395,48 @@ def patch_qwen25_vl_rope_default_compat(masquant_root: str | Path) -> Path:
     return target
 
 
+def patch_qwen25_vl_flash_rotary_import_compat(masquant_root: str | Path) -> Path:
+    """Patch MASQuant Qwen2.5-VL flash-attn rotary imports for current Transformers.
+
+    MASQuant's vendored model guards ``apply_rotary_emb`` and
+    ``flash_attn_varlen_func`` behind ``if is_flash_attn_available():`` and imports
+    them from ``transformers.modeling_flash_attention_utils``. Recent Transformers
+    (5.x) no longer re-export those symbols there, so once flash-attn is installed
+    the guard becomes true and the import fails at module load. Both symbols are
+    available directly from the ``flash_attn`` package, so fall back to it.
+    """
+
+    root = validate_masquant_root(masquant_root)
+    target = root / "models" / "modeling_qwen2_5_vl.py"
+    text = target.read_text(encoding="utf-8")
+    marker = "prune_quant_baseline: flash-attn rotary import fallback"
+    if marker in text:
+        return target
+
+    old = (
+        "    from transformers.modeling_flash_attention_utils import apply_rotary_emb, flash_attn_varlen_func\n"
+    )
+    new = (
+        f"    # {marker}.\n"
+        "    try:\n"
+        "        from transformers.modeling_flash_attention_utils import apply_rotary_emb, flash_attn_varlen_func\n"
+        "    except ImportError:\n"
+        "        from flash_attn.layers.rotary import apply_rotary_emb\n"
+        "        from flash_attn import flash_attn_varlen_func\n"
+    )
+    if old not in text:
+        raise RuntimeError(
+            f"Could not patch {target}; expected MASQuant Qwen2.5-VL flash-attn "
+            "rotary import block was not found."
+        )
+
+    backup = target.with_suffix(target.suffix + ".prune_quant_baseline.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return target
+
+
 def patch_qwen25_vl_config_schema_compat(masquant_root: str | Path) -> Path:
     """Patch MASQuant Qwen2.5-VL for nested text_config fields."""
 
@@ -1438,6 +1480,7 @@ def load_masquant_model_and_processor(
         patch_qwen25_vl_config_schema_compat(root)
         patch_qwen25_vl_rope_default_compat(root)
         patch_qwen25_vl_prepare_inputs_generation_compat(root)
+        patch_qwen25_vl_flash_rotary_import_compat(root)
     if cmc_low_rank_adapters is not None:
         cmc_path = Path(cmc_low_rank_adapters).expanduser().resolve()
         if not cmc_path.exists():
