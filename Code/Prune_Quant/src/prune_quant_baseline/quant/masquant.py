@@ -525,8 +525,8 @@ def patch_qwen25_vl_prepare_inputs_generation_compat(masquant_root: str | Path) 
     marker = "prune_quant_baseline: tolerate missing cache_position during generation"
     marker_index = text.find(marker)
     if marker_index >= 0:
-        patch_block = text[marker_index : marker_index + 500]
-        if "past_key_values is None" in patch_block:
+        patch_block = text[marker_index : marker_index + 700]
+        if "get_seq_length" in patch_block:
             return target
     old_v1 = (
         "        # prune_quant_baseline: tolerate missing cache_position during generation.\n"
@@ -548,7 +548,14 @@ def patch_qwen25_vl_prepare_inputs_generation_compat(masquant_root: str | Path) 
         "        is_first_iteration = kwargs.get(\"is_first_iteration\", None)\n"
         "        if is_first_iteration is None:\n"
         "            is_first_iteration = cache_position is None or (cache_position is not None and cache_position[0] == 0)\n"
-        "            is_first_iteration = past_key_values is None and is_first_iteration\n"
+        "            # Detect the first step by cache length, not `past_key_values is None`:\n"
+        "            # transformers >=4.52 initialises a non-None empty cache on step 1, so the\n"
+        "            # is-None check misfires and drops pixel_values before vision is ever merged.\n"
+        "            if past_key_values is not None and getattr(past_key_values, \"get_seq_length\", None) is not None:\n"
+        "                try:\n"
+        "                    is_first_iteration = is_first_iteration and (past_key_values.get_seq_length() == 0)\n"
+        "                except Exception:\n"
+        "                    pass\n"
         "        if not is_first_iteration and use_cache:\n"
         "            model_inputs[\"pixel_values\"] = None\n"
             "            model_inputs[\"pixel_values_videos\"] = None\n"
@@ -1018,17 +1025,37 @@ def _patch_int_qwen_vl_layer_logger(root: Path) -> Path | None:
     patched = text
     injections: list[str] = []
 
-    qwen25_rmsnorm_import = (
-        "from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import "
-        "apply_multimodal_rotary_pos_emb, Qwen2RMSNorm"
-    )
-    if qwen25_rmsnorm_import in patched:
-        patched = patched.replace(
-            qwen25_rmsnorm_import,
+    # prune_quant_baseline: normalize the Qwen-VL RMSNorm import to whichever
+    # symbol the installed Transformers actually exports. Older versions expose
+    # ``Qwen2_5_VLRMSNorm``; 4.52.x only exposes ``Qwen2RMSNorm``. Forcing one
+    # name unconditionally breaks the other version, so detect at patch time.
+    try:
+        from transformers.models.qwen2_5_vl import modeling_qwen2_5_vl as _pqb_q25
+
+        _pqb_has_q25_rmsnorm = hasattr(_pqb_q25, "Qwen2_5_VLRMSNorm")
+    except Exception:
+        _pqb_has_q25_rmsnorm = False
+    if _pqb_has_q25_rmsnorm:
+        desired_rmsnorm_import = (
             "from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import "
-            "apply_multimodal_rotary_pos_emb, Qwen2_5_VLRMSNorm as Qwen2RMSNorm",
-            1,
+            "apply_multimodal_rotary_pos_emb, Qwen2_5_VLRMSNorm as Qwen2RMSNorm"
         )
+    else:
+        desired_rmsnorm_import = (
+            "from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import "
+            "apply_multimodal_rotary_pos_emb, Qwen2RMSNorm"
+        )
+    rmsnorm_import_variants = (
+        "from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import "
+        "apply_multimodal_rotary_pos_emb, Qwen2_5_VLRMSNorm as Qwen2RMSNorm",
+        "from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import "
+        "apply_multimodal_rotary_pos_emb, Qwen2RMSNorm",
+    )
+    for variant in rmsnorm_import_variants:
+        if variant in patched:
+            if variant != desired_rmsnorm_import:
+                patched = patched.replace(variant, desired_rmsnorm_import, 1)
+            break
 
     text_config_marker = "prune_quant_baseline: unwrap nested Qwen2.5-VL text config"
     if text_config_marker not in patched and "config.hidden_size" in patched:
