@@ -53,6 +53,7 @@ PDF 原文不再直接存放在仓库中，后续统一在本地管理；仓库�
 | 大语言模型量化, PTQ, 低比特, 低秩近似误差重建 | [**SERQ**: Saliency-Aware Low-Rank Error Reconstruction For LLM Quantization](https://arxiv.org/pdf/2603.08185) | ICLR 2026 | Yes | 低秩近似PTQ|只对误差中某些关键行做低秩近似，从而减少开销同时，提升性能 |
 | 大语言模型量化, PTQ, 低比特,Rotation Base | [**ReSpinQuant**: Efficient Layer-Wise LLM Quantization via Subspace Residual Rotation Approximation](https://arxiv.org/abs/2604.11080) | - | Yes | Rotation Base|通过子空间旋转解决了Layer-Wise 旋转矩阵方法残差流不同基的问题|
 | 大语言模型量化, PTQ, 低比特, NVFP4 | [**ARCQuant**: Boosting NVFP4 Quantization with Augmented Residual Channels for LLMs](https://arxiv.org/abs/2601.07475) | ACL 2026 | Yes | FP4 量化 Baseline|针对 NVFP4 这类细粒度浮点格式难以直接套用现有 PTQ 的问题，给激活矩阵增广量化残差通道做误差补偿，并把补偿合并进矩阵规约维度，从而在统一 NVFP4 格式下复用标准高效 GEMM kernel，开销很小，是后续做 FP4 real quant 的好参照|
+| 大语言模型量化, PTQ, 低比特, NVFP4 | [**SOAR**: Scale Optimization for Accurate Reconstruction in NVFP4 Quantization]() | - | Yes | NVFP4 scale 精细优化|针对 NVFP4 现有方法只用启发式或粗粒度离散搜索确定全局/块级 scale 导致次优的问题，提出闭式联合 scale 优化(CJSO)，固定量化分配后把重构误差视为关于 scale 的二次函数迭代求最优解；进一步把量化尺度与反量化尺度解耦(高精度量化尺度 + E4M3 反量化尺度)做联合搜索，缓解块级 scale 受 FP8 精度限制带来的误差，提升 NVFP4 重构精度|
 | VLM量化，PTQ，低比特，低秩近似误差重建 | [Breaking Modality Heterogeneity in Low-Bit](https://arxiv.org/pdf/2605.19929) | - | Yes | 低秩近似，PTQ |把SERQ的思想搬到VLMs上了，把不同模态激活值通道进行区别处理，从而实现低比特的突破|
 | VLM量化，PTQ，权重量化，MoE | [VEQ: Modality-Adaptive Quantization for MoE Vision-Language Models](https://arxiv.org/pdf/2602.01037) |  | Yes | MoE量化，有点像方法迁移 |把importance base 的PTQ方法迁移到了MoE VLM上。|
 
