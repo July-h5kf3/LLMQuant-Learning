@@ -281,6 +281,12 @@ def _prepare_local_task_overlays(
                 "    return server\n"
             )
             if old_server_block not in utils_text:
+                # Newer lmms-eval already guards judge init (e.g. try/except that
+                # sets `server = None`). When the file is already judge-safe there
+                # is nothing to patch for exact-match mmmu_val, so run it as-is
+                # instead of failing the whole eval.
+                if "server = None" in utils_text:
+                    return source_yaml
                 raise RuntimeError(f"Could not patch MMMU utils judge initialization in {utils_source}")
             utils_text = utils_text.replace(old_server_block, new_server_block, 1)
             utils_text = utils_text.replace(

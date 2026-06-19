@@ -69,15 +69,31 @@ def _first_visual(visuals: Any) -> Any:
     return visuals
 
 
+# Qwen2-VL/2.5-VL patch factor = patch_size(14) * merge_size(2). smart_resize
+# rejects any image with a side smaller than this, which OCRBench (e.g. 27px
+# crops) trips. Upscale tiny images so both sides clear the factor.
+_QWEN_VL_MIN_SIDE = 28
+
+
+def _ensure_min_side(image: Image.Image, min_side: int = _QWEN_VL_MIN_SIDE) -> Image.Image:
+    width, height = image.size
+    if width >= min_side and height >= min_side:
+        return image
+    scale = max(min_side / max(width, 1), min_side / max(height, 1))
+    new_width = max(min_side, int(round(width * scale)))
+    new_height = max(min_side, int(round(height * scale)))
+    return image.resize((new_width, new_height), Image.BICUBIC)
+
+
 def _as_rgb_image(visual: Any) -> Image.Image | None:
     if visual is None:
         return None
     if isinstance(visual, Image.Image):
-        return visual.convert("RGB")
+        return _ensure_min_side(visual.convert("RGB"))
     if isinstance(visual, str):
         if visual.endswith((".mp4", ".avi", ".mov", ".mkv", ".webm")):
             raise NotImplementedError("prune_quant_qwen2vl currently supports image-only lmms-eval tasks.")
-        return Image.open(visual).convert("RGB")
+        return _ensure_min_side(Image.open(visual).convert("RGB"))
     raise TypeError(f"Unsupported visual type for prune_quant_qwen2vl: {type(visual)!r}")
 
 
