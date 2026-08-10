@@ -1,3 +1,0 @@
-[submodule "Code/Prune_Quant/third_party/lmms-eval"]
-	path = Code/Prune_Quant/third_party/lmms-eval
-	url = https://github.com/EvolvingLMMs-Lab/lmms-eval.git

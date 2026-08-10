@@ -1,5 +1,0 @@
-# Install this file only inside the NVIDIA/Linux TensorRT-LLM environment.
-# Keep versions aligned with the TensorRT-LLM container or wheel you choose.
-tensorrt_llm
-auto-round
-qwen-vl-utils

@@ -1,1 +1,0 @@
-"""Learned visual relevance compressors."""
